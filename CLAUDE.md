@@ -10,6 +10,8 @@ A reusable, artifact-driven SDLC process for Claude Code plus the skills that im
 - [`CLAUDE.stack.example.md`](CLAUDE.stack.example.md) — a worked example of the stack-conventions half (NestJS/Prisma/React). Adopters replace it wholesale.
 - [`skills/`](skills/) — the phase skills (see table below).
 - [`scripts/render-status.mjs`](scripts/render-status.mjs) — derives `docs/STATUS.md` from feature-request frontmatter.
+- [`scripts/assemble-env.mjs`](scripts/assemble-env.mjs) / [`clean-env.mjs`](scripts/clean-env.mjs) — reconstruct / tear down `workspace/` for a multi-repo effort.
+- [`repos.yml`](repos.yml) / [`repos/`](repos/) — the repository catalog (multi-repo execution environment). [`repos.example.yml`](repos.example.yml) is the template.
 - [`examples/react-components/`](examples/react-components/) — optional React admin-console conventions skill.
 - [`BRAINSTORMING.md`](BRAINSTORMING.md) — larger, less-formed ideas being explored for the kit.
 - [`docs/kit-open-items.md`](docs/kit-open-items.md) — specific deferred design decisions from work already done.
