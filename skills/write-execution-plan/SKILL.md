@@ -51,6 +51,7 @@ Every task in the plan body starts as an unchecked `- [ ]`.
 - Set the feat-req `status: PLANNED`.
 - Run `scripts/render-status.mjs` (or note the `Stop` hook will).
 - Tell the user the next phase is Development. Per the Autonomy Policy `implementation_checkpoints`: `pause` → `superpowers:executing-plans` (checkpoints between phases); `run-through` → `superpowers:subagent-driven-development` or `executing-plans` with checkpoints auto-acknowledged and logged.
+- Development begins by running `node scripts/assemble-env.mjs <slug>` — this reconstructs `workspace/` and creates `feat/<slug>` across every effort repo. Work proceeds per the plan; one PR per repo is opened when that repo's plan items pass and its tests are green, and recorded in the plan's `## Pull Requests` table.
 
 ### Constraints
 
