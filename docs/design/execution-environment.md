@@ -2,6 +2,7 @@
 feat_req: docs/feat-req/execution-environment.md
 date: 2026-09-09
 status: APPROVED
+repos: [sdlskills]
 ---
 
 # Multi-repo execution environment
@@ -121,6 +122,10 @@ Every file reference in every artifact (design docs, plans, history entries, rev
 ### `render-status.mjs` changes
 
 Parses each plan's `## Pull Requests` section; shows per-effort PR progress (`3/5 merged`) in the Active sections of `docs/STATUS.md`. Does not trust it for the Implemented transition — that's `close-out`'s live `gh` check.
+
+## Repositories in Scope
+
+`sdlskills` (this repo) — **owns** every change. The kit has no downstream repos, so there are no affected consumers and no cross-repo integration contract. N=1.
 
 ## Data Model & Schema Changes
 

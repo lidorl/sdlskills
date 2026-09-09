@@ -18,6 +18,23 @@ When instructed to write, create, or update a design doc — or when moving a fe
 - Trace the code paths the change will touch. Understand how the relevant feature works today before proposing changes.
 - Note every module, table, and API surface the change affects — you must account for all of them in Step 4.
 
+### Step 2.5: Resolve the repository set
+
+Which repos this effort touches is an **output of design**, not a precondition — the set starts provisional and converges as you design. Lock it at Step 6.
+
+1. Read `repos.yml`. For each repo, compare the effort against `summary` + `responsibilities` + `keywords`:
+   - **Clear yes** → in scope. **Clear no** → out.
+   - **Ambiguous** → read `repos/<key>.md` (if `notes: true`) and re-judge.
+   - **Still ambiguous** → ask the user.
+2. For every in-scope repo, pull its `depends_on` repos in as **candidate consumers** and judge them the same way — this is how a contract change finds the repos that call it.
+3. Assemble the provisional set so you can read code while designing:
+   ```
+   node scripts/assemble-env.mjs <name> <key> <key> ...
+   ```
+4. As the design develops, add or drop repos and re-run `assemble-env.mjs`.
+
+Single-repo project (N=1): the one repo is always in scope; this step is a formality.
+
 ### Step 3: Technical brainstorm (conditional)
 
 If the solution space is non-obvious — the feat-req's Solution Direction is one of several viable approaches, or there's a real architectural fork (e.g. event sourcing vs. audit table vs. temporal columns) — diverge before locking the doc's structure. Check the Autonomy Policy in `CLAUDE.process.md`:
@@ -36,6 +53,7 @@ Create `docs/design/<name>.md` with this exact structure. Keep every heading, in
 feat_req: <path to source feat-req>
 date: YYYY-MM-DD
 status: DRAFT
+repos: [<key>, <key>]
 ---
 
 # <Title — match the feat-req title>
@@ -51,6 +69,9 @@ Every table, column, index, enum, or migration this adds or alters. `None` if th
 
 ## API Surface Changes
 Every endpoint, request/response shape, DTO, or contract this adds or alters, and which auth guard applies. `None` if there are no API changes.
+
+## Repositories in Scope
+For each repo in `repos:`: its key, whether it **owns** the change or is an **affected consumer**, what changes in it, and the integration contract with the other repos. `N/A` only for a genuine single-repo effort.
 
 ## UI/UX Changes
 Screens/flows this adds or alters, and the `docs/design/STYLE_GUIDE.md` sections they must conform to. `None` if not applicable.
@@ -88,9 +109,11 @@ Design-doc approval is a hard stop regardless of the Autonomy Policy.
 - Present the doc path and walk the user through Proposed Design, Data Model & Schema Changes, and Alternatives Considered.
 - Ask directly: approved, or revise? Record follow-up answers inline in the doc.
 - On approval: set frontmatter `status: APPROVED`, set the feat-req `status: DESIGNED`, run `scripts/render-status.mjs`, and tell the user the next phase is `/write-execution-plan <name>`.
+- The `repos:` list is **locked** at approval. Later phases (`/write-execution-plan`, `/classify-change`, `/select-next-task`) read only this list.
 
 ### Constraints
 
 - One design doc per feature request, filename-matched. Do not fold multiple feat-reqs into one.
 - Every Step 4 heading must be present. Use `None`, not deletion, for empty sections.
+- A repo discovered **after** approval → add it to `repos:` and `## Repositories in Scope` with a dated note, re-run `/classify-change` for it, and get a lightweight re-approval (the design changed). Not a full redo.
 - Do not write the execution plan here. Stop after Step 6.
