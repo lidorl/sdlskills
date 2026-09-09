@@ -15,7 +15,7 @@ A reusable, artifact-driven SDLC process for Claude Code plus the skills that im
 - [`examples/react-components/`](examples/react-components/) — optional React admin-console conventions skill.
 - [`BRAINSTORMING.md`](BRAINSTORMING.md) — larger, less-formed ideas being explored for the kit.
 - [`docs/kit-open-items.md`](docs/kit-open-items.md) — specific deferred design decisions from work already done.
-- [`site/index.html`](site/index.html) — the landing page (self-contained; not yet wired to GitHub Pages).
+- [`site/index.html`](site/index.html) — the landing page (self-contained). Deployed to GitHub Pages by [`.github/workflows/deploy-site.yml`](.github/workflows/deploy-site.yml) on push to `main` touching `site/**`. Requires repo **Settings → Pages → Source = "GitHub Actions"** (one-time).
 
 ## Working on the kit
 
