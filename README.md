@@ -35,10 +35,11 @@ flowchart TD
 
 Each phase produces a required artifact in a fixed location, so a project's history stays legible — you can tell *why* a change happened, not just *what* changed. Nothing is "done" until the Definition of Done is satisfied.
 
-Two things keep it practical:
+Three things keep it practical:
 
 - **Three tiers.** `classify-change` sorts every change into *trivial* (history one-liner + tests), *standard* (full pipeline), or *hotfix* (fast lane + mandatory follow-up). The paper trail is proportional to the risk.
 - **An autonomy policy.** `setup-sdlc` interviews you once about which gates should stop for your review and which should auto-proceed. Design approval, feature-request triage, and review findings are always hard stops; everything else is configurable.
+- **Multi-repo by default.** Work happens in a *meta-root* holding the process and the `docs/` trail; a `repos.yml` catalog maps your repositories, and `assemble-env.mjs` checks out just the ones an effort needs under `workspace/`. Design resolves the repo set, `classify-change` runs per repo, and `close-out` verifies a merged PR in each. A solo project is N=1 — same machinery, one entry.
 
 ## Layout
 

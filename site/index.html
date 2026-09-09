@@ -503,6 +503,23 @@
     </div>
   </section>
 
+  <section class="section" id="multirepo">
+    <div class="wrap">
+      <div class="shead">
+        <span class="eyebrow">Multi-repo by default</span>
+        <h2>Real work spans repositories</h2>
+      </div>
+      <p>A feature rarely lives in one repo. Your project is a <strong>meta-root</strong> — the process contract, the skills, and the <code>docs/</code> trail — with a <code>repos.yml</code> catalog describing which repo does what. Code repos are checked out under <code>workspace/</code> per effort by <code>assemble-env.mjs</code>.</p>
+      <pre class="code"><code>meta-root/
+  CLAUDE.process.md   <span class="c"># the lifecycle</span>
+  repos.yml           <span class="c"># which repo does what</span>
+  docs/               <span class="c"># the trail — feat-req, design, plans, history</span>
+  workspace/          <span class="c"># git-ignored; per-effort checkouts</span>
+    api/  web/  shared-types/</code></pre>
+      <p class="aside">Design resolves which repos an effort touches and locks the set at approval. <code>classify-change</code> runs per repo; <code>close-out</code> won't mark a feature done until every repo has a merged PR. A solo project is just N=1 — one entry, one checkout. A guided two-repo walkthrough is coming.</p>
+    </div>
+  </section>
+
   <section class="section" id="autonomy">
     <div class="wrap">
       <div class="shead">
