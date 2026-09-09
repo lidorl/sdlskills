@@ -1,0 +1,5 @@
+docs/STATUS.md
+docs/.status.json
+node_modules/
+workspace/
+.claude/
