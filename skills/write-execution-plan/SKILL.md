@@ -16,6 +16,17 @@ The Plan phase turns an approved design into an ordered, executable sequence. Th
 - Invoke `superpowers:writing-plans` with the design doc as the spec/requirements input.
 - Plans go in **`docs/plans/`** — this overrides `writing-plans`' default location. If it wrote elsewhere, move the file.
 - Filename matches the feature: `docs/plans/<name>.md` (same `<name>` as the feat-req and design doc).
+- Near the top, add a `## Repositories` section — one entry per repo in the design doc's `repos:` list: `key`, role (`owner` | `consumer`), tier (from `/classify-change`), one line on what changes.
+- At the bottom, add a `## Pull Requests` section:
+  ```markdown
+  ## Pull Requests
+  | key | branch | PR | state |
+  |---|---|---|---|
+  | <key> | feat/<slug> | — | not started |
+  ```
+  Filled in during Development. `render-status.mjs` parses this table.
+- File references in task `Files:` blocks use `<key>:<repo-relative-path>`; a bare path means the meta-root.
+- Merge order lives in the design doc's Rollout & Migration section under a `### Merge order` subheading (ordered list of repo keys + one-line reason each). Do not duplicate it in the plan.
 
 ### Step 3: Stamp frontmatter
 
@@ -27,8 +38,11 @@ feat_req: docs/feat-req/<name>.md
 design: docs/design/<name>.md
 status: PLANNED
 date: YYYY-MM-DD
+repos: [<key>, <key>]
 ---
 ```
+
+Copy `repos:` verbatim from the design doc.
 
 Every task in the plan body starts as an unchecked `- [ ]`.
 

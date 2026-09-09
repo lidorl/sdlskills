@@ -4,6 +4,7 @@ design: docs/design/execution-environment.md
 status: PLANNED
 date: 2026-09-09
 plan: 1 of 2
+repos: [sdlskills]
 ---
 
 # Multi-repo execution environment — Plan 1: Foundation
@@ -781,6 +782,10 @@ git commit -m "docs: add repository catalog + example"
 ```
 
 ---
+
+## Pull Requests
+
+N/A — single-repo effort (`sdlskills`), executed on `main` during kit bootstrap. No PR workflow yet; commits land directly. Real multi-repo efforts fill a `key | branch | PR | state` table here.
 
 ## Self-Review
 

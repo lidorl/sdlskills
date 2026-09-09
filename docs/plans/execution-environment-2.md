@@ -4,6 +4,7 @@ design: docs/design/execution-environment.md
 status: PLANNED
 date: 2026-09-09
 plan: 2 of 2
+repos: [sdlskills]
 ---
 
 # Multi-repo execution environment — Plan 2: Lifecycle integration
@@ -299,6 +300,10 @@ Expected: tests pass; `STATUS.md` shows the correct design-doc count and (once a
 - [ ] **Step 4: Commit** — `git commit -m "docs: multi-repo on the landing page and README"`
 
 ---
+
+## Pull Requests
+
+N/A — single-repo effort (`sdlskills`), executed on `main` during kit bootstrap. No PR workflow yet; commits land directly. Real multi-repo efforts fill a `key | branch | PR | state` table here.
 
 ## Self-Review
 
