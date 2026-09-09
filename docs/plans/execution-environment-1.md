@@ -746,7 +746,7 @@ git commit -m "feat: clean-env.mjs — remove workspace checkouts, protect uncom
 # repos.yml — this kit dogfoods itself. Single-repo (N=1).
 repos:
   sdlskills:
-    url: https://github.com/lidorlinder/sdlskills.git
+    url: https://github.com/lidorl/sdlskills.git
     default_branch: main
     domain: shared-lib
     summary: >
