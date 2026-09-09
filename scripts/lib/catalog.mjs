@@ -10,6 +10,9 @@ export class CatalogError extends Error {}
 
 const REQUIRED = ['url', 'default_branch', 'domain', 'summary', 'responsibilities'];
 const URL_RE = /^(https:\/\/|git@)/;
+// A repo key becomes a path segment under workspace/ and a git branch component.
+// Constrain it so it can never traverse (`..`, `/`) or be read as a git option.
+const KEY_RE = /^[a-z0-9][a-z0-9._-]*$/;
 
 export function validateCatalog(obj) {
   const problems = [];
@@ -18,6 +21,9 @@ export function validateCatalog(obj) {
   }
   const keys = Object.keys(obj.repos);
   for (const key of keys) {
+    if (!KEY_RE.test(key)) {
+      problems.push(`repos.${key}: key must match ${KEY_RE} (lowercase alphanumeric, dots, dashes, underscores)`);
+    }
     const e = obj.repos[key] || {};
     for (const f of REQUIRED) {
       if (e[f] === undefined || e[f] === null || e[f] === '') {

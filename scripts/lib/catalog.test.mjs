@@ -56,6 +56,15 @@ test('empty responsibilities is rejected', () => {
   assert.ok(problems.some((p) => p.includes('responsibilities')));
 });
 
+test('a key that could traverse or be read as a git option is rejected', () => {
+  for (const bad of ['../evil', 'a/b', '-x', 'UPPER', 'has space']) {
+    const problems = validateCatalog({
+      repos: { [bad]: { url: 'https://x.git', default_branch: 'main', domain: 'backend', summary: 's', responsibilities: ['r'] } },
+    });
+    assert.ok(problems.some((p) => p.includes('key must match')), `expected rejection for "${bad}"`);
+  }
+});
+
 test('depends_on referencing an unknown key is reported', () => {
   const problems = validateCatalog({
     repos: { api: { url: 'https://x.git', default_branch: 'main', domain: 'backend', summary: 's', responsibilities: ['r'], depends_on: ['ghost'] } },
