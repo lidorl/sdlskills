@@ -7,6 +7,10 @@ Every code change is one of three tiers. This skill decides which, states the ru
 
 Run this before touching code. If you are already mid-implementation and the change has grown, run it again (Step 5).
 
+### Multi-repo
+
+For a standard effort spanning repos, run **Steps 2–3 once per repo** in the approved design doc's `repos:` list. Output one verdict per repo. The **effort tier** is the highest across its repos. `hotfix` is decided once for the whole effort in Step 1 — it is never a per-repo tier.
+
 ### Step 1: Hotfix check
 
 Is a change that has **already shipped** causing a **live problem** right now (broken deploy, failing production behavior, bad migration)?
@@ -41,16 +45,23 @@ All hold → `tier: trivial`. Otherwise → `tier: standard`, rule: `<condition 
 
 ### Step 4: Output and proceed
 
-State, before any work:
+State, before any work. Single repo:
 
 - **Tier**
 - **Rule** — the specific carve-out or condition that decided it
 - **Justification** (trivial/hotfix) — one line for the `docs/history/` entry
 
+Multi-repo — a table:
+
+| key | tier | rule | justification |
+|---|---|---|---|
+
+plus the **effort tier** (the highest row).
+
 Then:
 
-- **trivial** → make the change, add tests if behavior-adjacent, write the history one-liner via `/write-history-entry`. No design doc, plan, review, or Open Items. Done.
-- **standard** → enter Design: `/write-design-doc`.
+- **trivial** (whole effort, or a single-repo change) → make the change, add tests if behavior-adjacent, write the history one-liner via `/write-history-entry`. No design doc, plan, review, or Open Items. Done.
+- **standard** (any repo) → the effort is in the standard pipeline. A repo whose row is `trivial` still gets its plan items, tests, and PR — but no separate design work; it is covered by the effort's one design doc.
 - **hotfix** → Hotfix flow below.
 
 ### Step 5: Re-classify if a trivial change grows
