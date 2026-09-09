@@ -666,25 +666,14 @@
       <p>The kit ships no application code — it's a process contract plus skills, meant to sit on top of whatever you're building.</p>
       <ol class="steps">
         <li>
-          <p>Install the <code>superpowers</code> plugin — it provides <code>writing-plans</code>, <code>brainstorming</code>, and the execution and review skills.</p>
-          <pre class="code"><code>/plugin marketplace add claude-plugins-official
-/plugin install superpowers@claude-plugins-official</code></pre>
+          <p>Run the installer against your repo. It vendors the skills, copies the scripts, drops in <code>CLAUDE.process.md</code>, seeds <code>CLAUDE.stack.md</code>, builds the <code>docs/</code> skeleton, and installs the <code>superpowers</code> plugin (<code>writing-plans</code>, <code>brainstorming</code>, and the execution and review skills). <code>--dry-run</code> previews first.</p>
+          <pre class="code"><code>node /path/to/sdlskills/scripts/install-sdlc.mjs &lt;target-dir&gt;</code></pre>
           <div class="copy-row">
-            <button class="copy-btn" id="copy" data-copy="/plugin marketplace add claude-plugins-official&#10;/plugin install superpowers@claude-plugins-official" type="button">Copy</button>
+            <button class="copy-btn" id="copy" data-copy="node /path/to/sdlskills/scripts/install-sdlc.mjs &lt;target-dir&gt;" type="button">Copy</button>
           </div>
         </li>
         <li>
-          <p>Copy <code>CLAUDE.process.md</code> into your repo and reference it from <code>CLAUDE.md</code>. Start your stack doc from <code>CLAUDE.stack.example.md</code>.</p>
-        </li>
-        <li>
-          <p>Symlink the skills and the status script into your project.</p>
-          <pre class="code"><code>mkdir -p .claude/skills scripts
-for s in setup-sdlc write-feature-request classify-change write-design-doc \
-         write-execution-plan write-history-entry select-next-task \
-         gather-open-items close-out; do
-  ln -s /path/to/sdlskills/skills/$s .claude/skills/$s
-done
-cp /path/to/sdlskills/scripts/render-status.mjs scripts/</code></pre>
+          <p>Reference <code>CLAUDE.process.md</code> and <code>CLAUDE.stack.md</code> from your <code>CLAUDE.md</code>, and adapt the stack doc to what you're building.</p>
         </li>
         <li>
           <p>Run <code>/setup-sdlc</code> and answer the interview. Then start the loop with <code>/write-feature-request</code>, and <code>/select-next-task</code> from there on.</p>

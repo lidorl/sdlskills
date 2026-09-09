@@ -9,6 +9,7 @@ A reusable, artifact-driven SDLC process for Claude Code plus the skills that im
 - [`CLAUDE.process.md`](CLAUDE.process.md) — the stack-neutral process contract. This is the deliverable: adopters drop it into their project.
 - [`CLAUDE.stack.example.md`](CLAUDE.stack.example.md) — a worked example of the stack-conventions half (NestJS/Prisma/React). Adopters replace it wholesale.
 - [`skills/`](skills/) — the phase skills (see table below).
+- [`scripts/install-sdlc.mjs`](scripts/install-sdlc.mjs) — scaffolds the kit into a target project (vendors skills, copies scripts, docs skeleton, plugin, `package.json` / `.gitignore` wiring). See "Adopting the kit" below.
 - [`scripts/render-status.mjs`](scripts/render-status.mjs) — derives `docs/STATUS.md` from feature-request frontmatter.
 - [`scripts/assemble-env.mjs`](scripts/assemble-env.mjs) / [`clean-env.mjs`](scripts/clean-env.mjs) — reconstruct / tear down `workspace/` for a multi-repo effort.
 - [`repos.yml`](repos.yml) / [`repos/`](repos/) — the repository catalog (multi-repo execution environment). [`repos.example.yml`](repos.example.yml) is the template.
@@ -41,23 +42,16 @@ External dependencies: `superpowers` plugin (`writing-plans`, `brainstorming`, `
 
 ## Adopting the kit in a project
 
-1. Enable the `superpowers` plugin:
-   ```
-   /plugin marketplace add claude-plugins-official
-   /plugin install superpowers@claude-plugins-official
-   ```
-2. Copy `CLAUDE.process.md` into the meta-root repo. Create a `CLAUDE.stack.md` for the actual stack (start from `CLAUDE.stack.example.md`). Reference both from the project's `CLAUDE.md`.
-3. Symlink the skills, copy the scripts, add the `yaml` dependency:
-   ```bash
-   mkdir -p .claude/skills scripts
-   for s in setup-sdlc write-feature-request classify-change write-design-doc \
-            write-execution-plan write-history-entry select-next-task \
-            gather-open-items close-out; do
-     ln -s /path/to/sdlskills/skills/$s .claude/skills/$s
-   done
-   cp /path/to/sdlskills/scripts/*.mjs scripts/ && cp -r /path/to/sdlskills/scripts/lib scripts/
-   npm install yaml
-   printf 'workspace/\nnode_modules/\n' >> .gitignore
-   ```
-4. Run `/setup-sdlc` — builds `repos.yml` and runs the autonomy interview.
-5. Start the loop: `/write-feature-request`, then `/select-next-task`.
+Run the installer against the target repo. It vendors the phase skills into `.claude/skills/`, copies the scripts, drops in `CLAUDE.process.md`, seeds `CLAUDE.stack.md` and `repos.example.yml`, wires `package.json` and `.gitignore`, builds the `docs/` skeleton, and installs the `superpowers` plugin:
+
+```bash
+node /path/to/sdlskills/scripts/install-sdlc.mjs <target-dir>
+```
+
+`--dry-run` previews the changes; `--skip-plugins` / `--skip-npm` opt out of those steps. Re-running updates the vendored skills and scripts in place and leaves your `CLAUDE.stack.md`, `package.json`, and `.gitignore` edits alone.
+
+Then, in the target:
+
+1. Reference `CLAUDE.process.md` and `CLAUDE.stack.md` from its `CLAUDE.md`, and adapt `CLAUDE.stack.md` to the real stack.
+2. Run `/setup-sdlc` — maps the repo, builds `repos.yml`, runs the autonomy interview.
+3. Start the loop: `/write-feature-request`, then `/select-next-task`.

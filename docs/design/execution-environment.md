@@ -13,7 +13,7 @@ The kit assumes one repository. Real work spans a few to many. [`docs/feat-req/e
 
 Constraints that bound the solution:
 - Must not regress the single-repo experience — N=1 is a degenerate case of the same machinery, not a second mode.
-- Skills are symlinked from the kit into `.claude/skills/`, so all per-project state (catalog, `workspace/`) lives at the meta-root, never in a skill.
+- Skills are vendored from the kit into `.claude/skills/`, so all per-project state (catalog, `workspace/`) lives at the meta-root, never in a skill.
 - v1 assumes git + GitHub + an authenticated `gh` CLI. No submodules. No meta-VCS tool.
 - Single-worker assumption from [`docs/kit-open-items.md`](../kit-open-items.md) holds — one effort in flight.
 
@@ -33,7 +33,7 @@ The adopter's project is a **meta-root** — its own private git repo:
 ├── repos.yml                   # the repository catalog (structured)
 ├── repos/                      # optional per-repo deep notes
 │   └── <key>.md
-├── .claude/skills/             # symlinked from the kit
+├── .claude/skills/             # vendored from the kit
 ├── scripts/
 │   ├── render-status.mjs
 │   ├── assemble-env.mjs        # NEW

@@ -13,7 +13,7 @@ An adopting project is a **meta-root** git repo:
 ├── CLAUDE.stack.md            the project's stack conventions (from setup-sdlc)
 ├── repos.yml                  repository catalog — which repo does what
 ├── repos/<key>.md             deeper per-repo notes (optional)
-├── .claude/skills/            phase skills, symlinked from the kit
+├── .claude/skills/            phase skills, vendored from the kit
 ├── scripts/                   render-status · assemble-env · clean-env · lib/catalog
 ├── package.json               one dependency: yaml
 ├── docs/

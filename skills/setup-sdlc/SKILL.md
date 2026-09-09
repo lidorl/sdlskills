@@ -9,7 +9,7 @@ One-time adoption. Produces: a project `CLAUDE.stack.md`, `repos.yml` (the repos
 
 - `superpowers` plugin installed (`writing-plans`, `brainstorming`, `executing-plans`, `subagent-driven-development`, `receiving-code-review`, `verification-before-completion` resolve).
 - `/code-review` and `/security-review` resolve.
-- Kit skills symlinked into `.claude/skills/`: `write-feature-request`, `classify-change`, `write-design-doc`, `write-execution-plan`, `write-history-entry`, `select-next-task`, `gather-open-items`, `close-out`.
+- Kit skills present in `.claude/skills/` (vendored by `install-sdlc.mjs`): `write-feature-request`, `classify-change`, `write-design-doc`, `write-execution-plan`, `write-history-entry`, `select-next-task`, `gather-open-items`, `close-out`.
 - `scripts/render-status.mjs`, `scripts/assemble-env.mjs`, `scripts/clean-env.mjs`, `scripts/lib/catalog.mjs` present.
 - `package.json` with `yaml` in `dependencies`; `node` and `npm` available.
 - `CLAUDE.process.md` present and referenced from `CLAUDE.md`.
