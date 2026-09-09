@@ -228,6 +228,64 @@
   .arr{color:var(--ink-faint);font-family:'IBM Plex Mono',monospace;}
   .aside{font-size:.98rem;color:var(--ink-soft);max-width:58ch;}
 
+  /* ---- multi-repo diagram ---- */
+  .mr-frame{
+    position:relative;border:1px dashed var(--line-strong);border-radius:var(--radius);
+    background:var(--surface-2);padding:30px 22px 22px;margin:28px 0;
+  }
+  .mr-frame-label{
+    position:absolute;top:-0.62em;left:16px;background:var(--bg);padding:2px 9px;line-height:1;
+    font-family:'IBM Plex Mono',monospace;font-size:.66rem;letter-spacing:.05em;white-space:nowrap;
+    text-transform:uppercase;color:var(--ink-faint);max-width:calc(100% - 32px);overflow:hidden;text-overflow:ellipsis;
+  }
+  .mr-frame-label code{background:none;padding:0;font-size:1em;color:var(--ink-soft);}
+  .mr-flow{display:flex;align-items:stretch;gap:14px;min-width:520px;overflow-x:auto;}
+  .mr-panel{
+    flex:1;background:var(--bg);border:1px solid var(--line);border-radius:var(--radius);padding:14px;
+  }
+  .mr-panel-h{
+    font-family:'Archivo',sans-serif;font-weight:700;font-size:.82rem;color:var(--ink);
+    margin-bottom:10px;display:flex;flex-wrap:wrap;gap:6px;align-items:baseline;
+  }
+  .mr-panel-h span{
+    font-family:'IBM Plex Mono',monospace;font-weight:400;font-size:.66rem;
+    letter-spacing:.04em;text-transform:uppercase;color:var(--ink-faint);
+  }
+  .mr-chip{
+    font-family:'IBM Plex Mono',monospace;font-size:.76rem;color:var(--ink-soft);
+    border:1px solid var(--line);border-radius:2px;padding:.34em .55em;margin-bottom:6px;background:var(--surface);
+  }
+  .mr-chip.sel{color:var(--accent);border-color:var(--accent);background:var(--accent-wash);}
+  .mr-repo{
+    border:1px solid var(--accent);background:var(--accent-wash);border-radius:2px;
+    padding:.5em .6em;margin-bottom:8px;display:flex;flex-direction:column;gap:2px;
+  }
+  .mr-repo b{font-family:'IBM Plex Mono',monospace;font-size:.8rem;color:var(--accent);font-weight:600;}
+  .mr-repo span{font-family:'IBM Plex Mono',monospace;font-size:.66rem;color:var(--ink-faint);}
+  .mr-note{
+    font-family:'IBM Plex Mono',monospace;font-size:.66rem;color:var(--ink-faint);
+    margin:10px 0 0;line-height:1.5;
+  }
+  .mr-arrow{
+    display:flex;flex-direction:column;align-items:center;justify-content:center;gap:7px;
+    flex:0 0 104px;text-align:center;
+  }
+  .mr-arrow-cap{
+    font-family:'IBM Plex Mono',monospace;font-size:.62rem;line-height:1.35;
+    text-transform:uppercase;letter-spacing:.05em;color:var(--ink-faint);
+  }
+  .mr-arrow-mark{font-size:1.5rem;color:var(--ink-soft);line-height:1;}
+  .mr-arrow code{font-size:.6rem;background:var(--accent-wash);color:var(--accent);padding:.2em .45em;border-radius:2px;white-space:nowrap;}
+  .nb{white-space:nowrap;}
+  @media (max-width:640px){
+    .mr-flow{flex-direction:column;min-width:0;overflow-x:visible;}
+    .mr-arrow{flex-basis:auto;flex-direction:row;flex-wrap:wrap;padding:4px 0;gap:8px;}
+    .mr-arrow-mark{transform:rotate(90deg);}
+  }
+  @media (max-width:560px){
+    .bar nav a[href^="#"]{display:none;}
+  }
+
   /* ---- code panels ---- */
   .code{
     font-family:'IBM Plex Mono',monospace;font-size:.82rem;line-height:1.7;
@@ -310,6 +368,7 @@
       sdlskills
     </a>
     <nav>
+      <a href="#multirepo">Multi-repo</a>
       <a href="#lifecycle">Lifecycle</a>
       <a href="#skills">Skills</a>
       <a href="#start">Get started</a>
@@ -327,7 +386,7 @@
     <div class="wrap">
       <span class="eyebrow">Agentic SDLC kit for Claude Code</span>
       <h1>A development lifecycle your agent actually follows.</h1>
-      <p class="lead">Six phases. Three tiers. One checklist that decides when a change is done. Drop it into a repo and Claude Code works every change the same way — from a one-line fix to a new subsystem — leaving a trail you can read six months later.</p>
+      <p class="lead">Six phases. Three tiers. One checklist that decides when a change is done — <strong>across every repository a change touches</strong>. Claude Code works each change the same way, from a one-line fix to a new subsystem, leaving a trail you can read six months later.</p>
       <div class="cta">
         <a class="btn primary" href="#start">Get started</a>
         <a class="btn" href="https://github.com/lidorl/sdlskills">View source</a>
@@ -379,6 +438,43 @@
       </div>
       <p>Most skill collections are a grab-bag of capabilities. This one inverts that: every skill exists to serve one opinionated <strong>process</strong>. A change — whether it's a typo or a payments rewrite — moves through the same phases, produces the same artifacts in the same folders, and isn't <em>done</em> until a written Definition of Done says so.</p>
       <p>Uniform ceremony on a trivial fix is how teams learn to route around process. So every change is first sorted into a <strong>tier</strong>, and the paperwork scales with the risk. And because an agent left to its own judgment drifts, the gates that matter — a design you approve, a spec you accept, review findings you rule on — <strong>always stop for a human</strong>. The rest is yours to configure.</p>
+    </div>
+  </section>
+
+  <section class="section" id="multirepo">
+    <div class="wrap">
+      <div class="shead">
+        <span class="eyebrow">Multi-repo by default</span>
+        <h2>Your project is a <span class="nb">meta-root</span>, not a repo</h2>
+      </div>
+      <p>Real work spans repositories — a feature touches the API, the web app, a shared library. So the kit doesn't sit <em>in</em> a repo. Your project is a <strong>meta-root</strong>: the process contract, the skills, the <code>docs/</code> trail, and a <code>repos.yml</code> catalog that says which repo does what. Design resolves which repos an effort needs; <code>assemble-env</code> checks out just those under <code>workspace/</code>.</p>
+
+      <div class="mr-frame">
+        <span class="mr-frame-label">meta-root — one git repo · process · <code>repos.yml</code> · <code>docs/</code> trail</span>
+        <div class="mr-flow">
+          <div class="mr-panel">
+            <div class="mr-panel-h">repos.yml <span>the catalog</span></div>
+            <div class="mr-chip sel">api</div>
+            <div class="mr-chip sel">web</div>
+            <div class="mr-chip">auth-svc</div>
+            <div class="mr-chip">billing</div>
+            <div class="mr-chip">jobs</div>
+          </div>
+          <div class="mr-arrow" aria-hidden="true">
+            <span class="mr-arrow-cap">design<br>resolves<br>the set</span>
+            <span class="mr-arrow-mark">→</span>
+            <code>assemble-env</code>
+          </div>
+          <div class="mr-panel">
+            <div class="mr-panel-h">workspace/ <span>git-ignored · this effort</span></div>
+            <div class="mr-repo"><b>api/</b><span>feat/offer-caps</span></div>
+            <div class="mr-repo"><b>web/</b><span>feat/offer-caps</span></div>
+            <p class="mr-note">auth-svc · billing · jobs stay in the catalog, untouched</p>
+          </div>
+        </div>
+      </div>
+
+      <p class="aside">The repo set is locked at design approval. <code>classify-change</code> runs per repo; <code>close-out</code> won't mark a feature done until every repo has a merged PR. A solo project is just N=1 — one catalog entry, one checkout, same machinery.</p>
     </div>
   </section>
 
@@ -500,23 +596,6 @@
         <span class="tok done">IMPLEMENTED</span>
       </div>
       <p class="aside">Plus <code>PARKED</code> and <code>REJECTED</code> off to the side. It's one key in the feature request's frontmatter — no duplicate state, no filename prefixes to keep in sync. A small script, <code>render-status.mjs</code>, derives <code>docs/STATUS.md</code> from it on every stop, so the dashboard can never disagree with reality.</p>
-    </div>
-  </section>
-
-  <section class="section" id="multirepo">
-    <div class="wrap">
-      <div class="shead">
-        <span class="eyebrow">Multi-repo by default</span>
-        <h2>Real work spans repositories</h2>
-      </div>
-      <p>A feature rarely lives in one repo. Your project is a <strong>meta-root</strong> — the process contract, the skills, and the <code>docs/</code> trail — with a <code>repos.yml</code> catalog describing which repo does what. Code repos are checked out under <code>workspace/</code> per effort by <code>assemble-env.mjs</code>.</p>
-      <pre class="code"><code>meta-root/
-  CLAUDE.process.md   <span class="c"># the lifecycle</span>
-  repos.yml           <span class="c"># which repo does what</span>
-  docs/               <span class="c"># the trail — feat-req, design, plans, history</span>
-  workspace/          <span class="c"># git-ignored; per-effort checkouts</span>
-    api/  web/  shared-types/</code></pre>
-      <p class="aside">Design resolves which repos an effort touches and locks the set at approval. <code>classify-change</code> runs per repo; <code>close-out</code> won't mark a feature done until every repo has a merged PR. A solo project is just N=1 — one entry, one checkout. A guided two-repo walkthrough is coming.</p>
     </div>
   </section>
 
