@@ -50,7 +50,7 @@ Single-repo effort — the kit itself is the only repo in play. `repos.yml` / `w
 **Interfaces:**
 - Produces: `npm test` → `node --test scripts/`; `yaml` importable as `import { parse } from 'yaml'`
 
-- [ ] **Step 1: Create `package.json`**
+- [x] **Step 1: Create `package.json`**
 
 ```json
 {
@@ -67,12 +67,12 @@ Single-repo effort — the kit itself is the only repo in play. `repos.yml` / `w
 }
 ```
 
-- [ ] **Step 2: Install**
+- [x] **Step 2: Install**
 
 Run: `npm install`
 Expected: `yaml` in `node_modules/`, `package-lock.json` created.
 
-- [ ] **Step 3: Add `node_modules/` and `workspace/` to `.gitignore`**
+- [x] **Step 3: Add `node_modules/` and `workspace/` to `.gitignore`**
 
 Append to `.gitignore`:
 
@@ -83,7 +83,7 @@ workspace/
 
 (`docs/STATUS.md` and `docs/.status.json` are already ignored.)
 
-- [ ] **Step 4: Smoke-test the runner**
+- [x] **Step 4: Smoke-test the runner**
 
 Create `scripts/lib/smoke.test.mjs`:
 
@@ -97,12 +97,12 @@ test('yaml dependency loads and parses', () => {
 });
 ```
 
-- [ ] **Step 5: Run**
+- [x] **Step 5: Run**
 
 Run: `npm test`
 Expected: 1 test, pass.
 
-- [ ] **Step 6: Delete the smoke test, commit**
+- [x] **Step 6: Delete the smoke test, commit**
 
 ```bash
 rm scripts/lib/smoke.test.mjs
@@ -127,7 +127,7 @@ git commit -m "chore: meta-root package.json + yaml dep + test runner"
   - `validateCatalog(obj) -> string[]` — returns a list of human-readable problems (empty = valid). `loadCatalog` calls this and throws if non-empty.
   - `class CatalogError extends Error`
 
-- [ ] **Step 1: Write `repos.example.yml`**
+- [x] **Step 1: Write `repos.example.yml`**
 
 ```yaml
 # repos.yml — repository catalog. One entry per repo the project works across.
@@ -172,7 +172,7 @@ repos:
     notes: false
 ```
 
-- [ ] **Step 2: Write `repos/README.md`**
+- [x] **Step 2: Write `repos/README.md`**
 
 ```markdown
 # Repository notes
@@ -187,7 +187,7 @@ Suggested sections: Architecture · Entry points (`<key>:path`) · Conventions
 · Gotchas · How to run and test.
 ```
 
-- [ ] **Step 3: Write the failing test**
+- [x] **Step 3: Write the failing test**
 
 `scripts/lib/catalog.test.mjs`:
 
@@ -258,12 +258,12 @@ test('depends_on referencing an unknown key is reported', () => {
 });
 ```
 
-- [ ] **Step 4: Run — verify it fails**
+- [x] **Step 4: Run — verify it fails**
 
 Run: `node --test scripts/lib/catalog.test.mjs`
 Expected: FAIL — `Cannot find module './catalog.mjs'`.
 
-- [ ] **Step 5: Implement `scripts/lib/catalog.mjs`**
+- [x] **Step 5: Implement `scripts/lib/catalog.mjs`**
 
 ```js
 /**
@@ -345,12 +345,12 @@ export function loadCatalog(rootDir) {
 }
 ```
 
-- [ ] **Step 6: Run — verify pass**
+- [x] **Step 6: Run — verify pass**
 
 Run: `node --test scripts/lib/catalog.test.mjs`
 Expected: 6 tests pass.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add repos.example.yml repos/README.md scripts/lib/catalog.mjs scripts/lib/catalog.test.mjs
@@ -371,7 +371,7 @@ git commit -m "feat: repos.yml catalog schema + loader/validator"
   - Resolves repo keys: from `docs/design/<effort-slug>.md` frontmatter `repos:` (a `[a, b]` list), plus any extra keys passed as args.
   - Exported for tests: `resolveRepoKeys(rootDir, slug, extraKeys) -> string[]`, `assemble({ rootDir, slug, keys, catalog }) -> { cloned: string[], fetched: string[], branch: string }`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 `scripts/assemble-env.test.mjs`:
 
@@ -479,12 +479,12 @@ test('a non-https/ssh url is refused', () => {
 });
 ```
 
-- [ ] **Step 2: Run — verify it fails**
+- [x] **Step 2: Run — verify it fails**
 
 Run: `node --test scripts/assemble-env.test.mjs`
 Expected: FAIL — module not found.
 
-- [ ] **Step 3: Implement `scripts/assemble-env.mjs`**
+- [x] **Step 3: Implement `scripts/assemble-env.mjs`**
 
 ```js
 #!/usr/bin/env node
@@ -572,12 +572,12 @@ function main() {
 if (import.meta.url === `file://${process.argv[1]}`) main();
 ```
 
-- [ ] **Step 4: Run — verify pass**
+- [x] **Step 4: Run — verify pass**
 
 Run: `node --test scripts/assemble-env.test.mjs`
 Expected: 5 tests pass.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add scripts/assemble-env.mjs scripts/assemble-env.test.mjs
@@ -597,7 +597,7 @@ git commit -m "feat: assemble-env.mjs — idempotent workspace reconstruction"
   - No keys → all checkouts. `skipped` = checkouts with un-pushed commits or a dirty tree (unless `--force`).
   - Clears `.current-effort` when `workspace/` has no repo dirs left.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 `scripts/clean-env.test.mjs`:
 
@@ -651,12 +651,12 @@ test('clean --force removes a dirty checkout', () => {
 });
 ```
 
-- [ ] **Step 2: Run — verify it fails**
+- [x] **Step 2: Run — verify it fails**
 
 Run: `node --test scripts/clean-env.test.mjs`
 Expected: FAIL — module not found.
 
-- [ ] **Step 3: Implement `scripts/clean-env.mjs`**
+- [x] **Step 3: Implement `scripts/clean-env.mjs`**
 
 ```js
 #!/usr/bin/env node
@@ -712,17 +712,17 @@ function main() {
 if (import.meta.url === `file://${process.argv[1]}`) main();
 ```
 
-- [ ] **Step 4: Run — verify pass**
+- [x] **Step 4: Run — verify pass**
 
 Run: `node --test scripts/clean-env.test.mjs`
 Expected: 3 tests pass.
 
-- [ ] **Step 5: Run the whole suite**
+- [x] **Step 5: Run the whole suite**
 
 Run: `npm test`
 Expected: all tests from Tasks 2–4 pass.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add scripts/clean-env.mjs scripts/clean-env.test.mjs
@@ -740,7 +740,7 @@ git commit -m "feat: clean-env.mjs — remove workspace checkouts, protect uncom
 
 **Interfaces:** none — documentation.
 
-- [ ] **Step 1: Create a real `repos.yml` for this repo**
+- [x] **Step 1: Create a real `repos.yml` for this repo**
 
 ```yaml
 # repos.yml — this kit dogfoods itself. Single-repo (N=1).
@@ -763,17 +763,17 @@ repos:
 
 (Note: `workspace/` is git-ignored; `assemble-env.mjs` against this repo is a no-op safety net, not a real use — the kit is edited in place.)
 
-- [ ] **Step 2: Add a line to `README.md`**
+- [x] **Step 2: Add a line to `README.md`**
 
 Under "What's in this repo", add:
 `| `repos.yml` / `repos/` | The repository catalog — which repo does what (see the execution-environment feature). |`
 
-- [ ] **Step 3: Add a line to `CLAUDE.md`**
+- [x] **Step 3: Add a line to `CLAUDE.md`**
 
 Under the repo-contents list:
 `- [`repos.yml`](repos.yml) / [`repos/`](repos/) — the repository catalog (multi-repo execution environment).`
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add repos.yml README.md CLAUDE.md
