@@ -8,7 +8,7 @@ import { resolveRepoKeys, assemble } from './assemble-env.mjs';
 
 const git = (cwd, ...args) => execFileSync('git', args, { cwd, stdio: 'pipe' });
 
-function bareRemote(dir, name) {
+function bareRemote(dir, name, { effortBranch } = {}) {
   const remote = join(dir, `${name}.git`);
   mkdirSync(remote);
   git(remote, 'init', '--bare', '-b', 'main');
@@ -18,8 +18,15 @@ function bareRemote(dir, name) {
   git(work, '-c', 'user.email=a@b.c', '-c', 'user.name=t', 'commit', '--allow-empty', '-m', 'init');
   git(work, 'remote', 'add', 'origin', remote);
   git(work, 'push', 'origin', 'main');
+  if (effortBranch) {
+    git(work, 'checkout', '-b', effortBranch);
+    git(work, '-c', 'user.email=a@b.c', '-c', 'user.name=t', 'commit', '--allow-empty', '-m', 'work from a prior session');
+    git(work, 'push', 'origin', effortBranch);
+  }
   return remote;
 }
+
+const log = (dir) => execFileSync('git', ['log', '--oneline'], { cwd: dir }).toString();
 
 // Local filesystem paths stand in for git remotes in these tests. The catalog
 // validator (catalog.mjs) rejects non-https/ssh urls, so tests pass an explicit
@@ -77,6 +84,35 @@ test('assemble warns and reassembles when .current-effort names another effort',
   const r = assemble({ rootDir: root, slug: 'thing', keys: ['api'], catalog });
   assert.equal(readFileSync(join(root, 'workspace', '.current-effort'), 'utf8').trim(), 'thing');
   assert.ok(r.warnings.some((w) => w.includes('other')));
+  rmSync(dir, { recursive: true });
+});
+
+test('resume: checks out the effort branch that a prior session pushed', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'asm-'));
+  const remote = bareRemote(dir, 'api', { effortBranch: 'feat/thing' });
+  const root = join(dir, 'root');
+  mkdirSync(root, { recursive: true });
+  const catalog = { repos: { api: entry(remote) } };
+  assemble({ rootDir: root, slug: 'thing', keys: ['api'], catalog });
+  const out = log(join(root, 'workspace', 'api'));
+  assert.match(out, /work from a prior session/);
+  rmSync(dir, { recursive: true });
+});
+
+test('a second effort in a reused workspace branches from the default branch, not the first effort', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'asm-'));
+  const remote = bareRemote(dir, 'api');
+  const root = join(dir, 'root');
+  mkdirSync(root, { recursive: true });
+  const catalog = { repos: { api: entry(remote) } };
+
+  assemble({ rootDir: root, slug: 'effort-a', keys: ['api'], catalog });
+  const wsApi = join(root, 'workspace', 'api');
+  execFileSync('git', ['-c', 'user.email=a@b.c', '-c', 'user.name=t', 'commit', '--allow-empty', '-m', 'effort-a work'], { cwd: wsApi });
+
+  assemble({ rootDir: root, slug: 'effort-b', keys: ['api'], catalog });
+  assert.equal(execFileSync('git', ['branch', '--show-current'], { cwd: wsApi }).toString().trim(), 'feat/effort-b');
+  assert.doesNotMatch(log(wsApi), /effort-a work/);
   rmSync(dir, { recursive: true });
 });
 

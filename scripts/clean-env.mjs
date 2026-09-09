@@ -2,11 +2,19 @@
 /**
  * clean-env.mjs — remove workspace/ checkouts. See execution-environment.md → "Scripts".
  */
-import { existsSync, readdirSync, rmSync, readFileSync, unlinkSync } from 'node:fs';
+import { existsSync, readdirSync, rmSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 
+/**
+ * A checkout is "protected" (skip without --force) if it has uncommitted or
+ * unpushed work. Fail safe: if `.git` is present but git commands error (lock
+ * file, git missing, transient failure), treat it as protected — never delete
+ * on uncertainty. Only a directory with no `.git` at all is unprotected
+ * (assemble-env only ever creates clones there).
+ */
 function isProtected(dir) {
+  if (!existsSync(join(dir, '.git'))) return false;
   try {
     const status = execFileSync('git', ['status', '--porcelain'], { cwd: dir, stdio: 'pipe' }).toString().trim();
     if (status) return true;
@@ -18,7 +26,7 @@ function isProtected(dir) {
       .trim();
     return Boolean(unpushed);
   } catch {
-    return false; // not a git repo → nothing to protect
+    return true; // .git present but git failed — do not delete on uncertainty
   }
 }
 

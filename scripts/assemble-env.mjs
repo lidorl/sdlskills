@@ -24,6 +24,37 @@ export function resolveRepoKeys(rootDir, slug, extraKeys = []) {
   return [...keys];
 }
 
+function tryGit(cwd, args) {
+  try {
+    return execFileSync('git', args, { cwd, stdio: ['ignore', 'pipe', 'pipe'] }).toString().trim();
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Put `dest` on the effort branch, choosing the base explicitly:
+ *   1. local `feat/<slug>` already exists → check it out
+ *   2. remote has `origin/feat/<slug>` (a prior session pushed it) → branch from there
+ *   3. otherwise → branch from `origin/<default_branch>`
+ * Never `git checkout -b` with an implicit start point (that would cut the new
+ * effort's branch from whatever the previous effort left checked out).
+ */
+function checkoutEffortBranch(dest, branch, defaultBranch) {
+  if (tryGit(dest, ['rev-parse', '--verify', '--quiet', `refs/heads/${branch}`]) !== null) {
+    git(dest, ['checkout', branch]);
+    return;
+  }
+  const remoteEffort = tryGit(dest, ['ls-remote', '--heads', 'origin', branch]);
+  if (remoteEffort) {
+    git(dest, ['fetch', 'origin', branch]);
+    git(dest, ['checkout', '-b', branch, 'FETCH_HEAD']);
+    return;
+  }
+  git(dest, ['fetch', 'origin', defaultBranch]);
+  git(dest, ['checkout', '-b', branch, 'FETCH_HEAD']);
+}
+
 export function assemble({ rootDir, slug, keys, catalog }) {
   const cat = catalog ?? loadCatalog(rootDir);
   const branch = `feat/${slug}`;
@@ -56,9 +87,7 @@ export function assemble({ rootDir, slug, keys, catalog }) {
       git(dest, ['fetch', 'origin']);
       fetched.push(key);
     }
-    const exists = git(dest, ['branch', '--list', branch]).trim();
-    if (exists) git(dest, ['checkout', branch]);
-    else git(dest, ['checkout', '-b', branch]);
+    checkoutEffortBranch(dest, branch, entry.default_branch);
   }
 
   writeFileSync(markerPath, `${slug}\n`);

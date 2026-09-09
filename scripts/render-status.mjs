@@ -51,33 +51,52 @@ function countBoxes(relPath) {
   return { done, open, total: done + open };
 }
 
+/** Split a markdown table row into trimmed cells, tolerating a missing leading/trailing pipe. */
+function tableCells(row) {
+  const cells = row.split('|').map((c) => c.trim());
+  if (cells[0] === '') cells.shift();
+  if (cells.length && cells[cells.length - 1] === '') cells.pop();
+  return cells;
+}
+
 /**
  * Parse a plan's `## Pull Requests` markdown table.
  * Returns { merged, total } over the data rows, or null if there is no table.
- * Fenced code blocks are stripped first so example tables inside task
- * descriptions don't count.
+ * Fences are tracked line-by-line so example tables inside ``` / ~~~ blocks
+ * (the kit's plans are full of them) never count.
  */
 export function parsePullRequests(text) {
-  const noFences = text.replace(/^```[\s\S]*?^```/gm, '');
-  const lines = noFences.split(/\r?\n/);
-  const start = lines.findIndex((l) => /^##\s+Pull Requests\s*$/.test(l));
+  const lines = text.split(/\r?\n/);
+  let inFence = false;
+  let start = -1;
+  for (let i = 0; i < lines.length; i += 1) {
+    if (/^\s*(```|~~~)/.test(lines[i])) {
+      inFence = !inFence;
+      continue;
+    }
+    if (!inFence && /^##\s+Pull Requests\s*$/.test(lines[i])) {
+      start = i;
+      break;
+    }
+  }
   if (start === -1) return null;
+
   const section = [];
   for (let i = start + 1; i < lines.length; i += 1) {
+    if (/^\s*(```|~~~)/.test(lines[i])) inFence = !inFence;
+    if (inFence) continue;
     if (/^#{1,6}\s/.test(lines[i])) break;
     section.push(lines[i]);
   }
   const rows = section
     .map((l) => l.trim())
-    .filter((l) => l.startsWith('|') && !/^\|[\s:|-]+\|?$/.test(l));
+    .filter((l) => l.startsWith('|') && !/^\|?[\s:|-]+\|?$/.test(l));
   const data = rows.slice(1); // drop the header row
   if (!data.length) return null;
+
   let merged = 0;
   for (const row of data) {
-    const cells = row
-      .split('|')
-      .map((c) => c.trim())
-      .filter((_, i, a) => i > 0 && i < a.length - 1);
+    const cells = tableCells(row);
     if ((cells[cells.length - 1] || '').toLowerCase() === 'merged') merged += 1;
   }
   return { merged, total: data.length };
@@ -90,16 +109,20 @@ const designs = readDir('design').filter(
 const plans = readDir('plans');
 
 const designByName = Object.fromEntries(designs.map((d) => [d.name, d]));
-const planByName = Object.fromEntries(plans.map((p) => [p.name, p]));
+
+/** Plans belonging to a feature: `<name>.md` or the split form `<name>-1.md`, `<name>-2.md`, … */
+function plansFor(name) {
+  const split = new RegExp(`^${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}-\\d+$`);
+  return plans
+    .filter((p) => p.name === name || split.test(p.name))
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
 
 const LIFECYCLE = ['ACCEPTED', 'DESIGNED', 'PLANNED', 'IN_PROGRESS', 'IMPLEMENTED'];
 const PARKED = ['PARKED', 'REJECTED'];
 
 const rows = featReqs.map((fr) => {
-  // A feature may have one plan (`<name>.md`) or several (`<name>-1.md`, …).
-  const featPlans = plans
-    .filter((p) => p.name === fr.name || p.name.startsWith(`${fr.name}-`))
-    .sort((a, b) => a.name.localeCompare(b.name));
+  const featPlans = plansFor(fr.name);
   let done = 0;
   let total = 0;
   let merged = 0;

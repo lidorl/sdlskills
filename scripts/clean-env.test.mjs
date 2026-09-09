@@ -66,6 +66,18 @@ test('clean skips a checkout with unpushed commits without --force', () => {
   rmSync(root, { recursive: true });
 });
 
+test('clean protects a non-git-looking checkout under uncertainty (git dir but no worktree state)', () => {
+  const root = mkdtempSync(join(tmpdir(), 'cln-'));
+  const dir = join(root, 'workspace', 'api');
+  mkdirSync(dir, { recursive: true });
+  // .git present but not a valid repo → git commands error → must be protected
+  writeFileSync(join(dir, '.git'), 'gitdir: /nonexistent');
+  const r = clean({ rootDir: root, keys: [], force: false });
+  assert.deepEqual(r.skipped, ['api']);
+  assert.ok(existsSync(dir));
+  rmSync(root, { recursive: true });
+});
+
 test('clean removes only the named checkout', () => {
   const root = mkdtempSync(join(tmpdir(), 'cln-'));
   wsRepo(root, 'api');
