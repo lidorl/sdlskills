@@ -115,7 +115,8 @@ A **standard**-tier task is complete only when every item holds. `/close-out` wa
 - [ ] All existing tests pass — verified via `superpowers:verification-before-completion` with recorded evidence
 - [ ] `/code-review` run, findings addressed or rationale recorded
 - [ ] If any Security Review trigger applied (auth, new external endpoint, data-access control, API-key logic): `/security-review` run and findings documented. Otherwise the design doc states "no security-relevant changes."
-- [ ] History entry in `docs/history/` (Deviations / Discoveries / Decisions / Step status / Verification)
+- [ ] History entry in `docs/history/` (Deviations / Discoveries / Decisions / Step status / Verification; `## Per-Repo Summary` for multi-repo)
+- [ ] A merged PR in every repo in the plan's `## Repositories`; links in `## Pull Requests`; merge order per the design doc's `### Merge order` — verified live via `gh` (multi-repo efforts)
 - [ ] Design doc `## Open Items` section populated; scoped open-items reconciliation run
 - [ ] `status: IMPLEMENTED` on the feature request
 

@@ -34,6 +34,18 @@ For each item in this feature's design doc `## Open Items`:
 
 Mark promoted items `[EXTRACTED TO FEAT-REQ: <path>]` in the design doc.
 
+### Step 4b: Verify cross-repo PRs (multi-repo efforts)
+
+For each repo in the plan's `## Repositories` section:
+
+```
+gh pr view <pr-url> --json state,mergedAt
+```
+
+Confirm every one is `MERGED`. Check the merge sequence matched the design doc's `### Merge order`. If any PR is not merged, **stop** — the effort is not done; report which repos are outstanding.
+
+Single-repo effort with no PR workflow (e.g. commits landed directly): note that and skip.
+
 ### Step 5: Walk the Definition of Done
 
 Go through the Definition of Done checklist in `CLAUDE.process.md` item by item. For each, state: met / not-applicable (+ why) / not-met. If any item is not-met, stop and resolve it.
@@ -49,6 +61,8 @@ Include the Security Review item explicitly: either `/security-review` was run (
 ### Step 7: Refresh status
 
 Run `scripts/render-status.mjs` (or note the `Stop` hook will). Report the final DoD walk and any feat-reqs created in Step 4.
+
+Print as the final line: `run: node scripts/clean-env.mjs` — manual workspace cleanup. Do not run it automatically; follow-up work on the same repos is common right after shipping.
 
 ### Constraints
 
