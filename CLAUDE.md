@@ -10,6 +10,8 @@ A reusable, artifact-driven SDLC process for Claude Code plus the skills that im
 - [`CLAUDE.stack.example.md`](CLAUDE.stack.example.md) — a worked example of the stack-conventions half (NestJS/Prisma/React). Adopters replace it wholesale.
 - [`skills/`](skills/) — the phase skills (see table below).
 - [`scripts/render-status.mjs`](scripts/render-status.mjs) — derives `docs/STATUS.md` from feature-request frontmatter.
+- [`scripts/assemble-env.mjs`](scripts/assemble-env.mjs) / [`clean-env.mjs`](scripts/clean-env.mjs) — reconstruct / tear down `workspace/` for a multi-repo effort.
+- [`repos.yml`](repos.yml) / [`repos/`](repos/) — the repository catalog (multi-repo execution environment). [`repos.example.yml`](repos.example.yml) is the template.
 - [`examples/react-components/`](examples/react-components/) — optional React admin-console conventions skill.
 - [`BRAINSTORMING.md`](BRAINSTORMING.md) — larger, less-formed ideas being explored for the kit.
 - [`docs/kit-open-items.md`](docs/kit-open-items.md) — specific deferred design decisions from work already done.
@@ -44,16 +46,18 @@ External dependencies: `superpowers` plugin (`writing-plans`, `brainstorming`, `
    /plugin marketplace add claude-plugins-official
    /plugin install superpowers@claude-plugins-official
    ```
-2. Copy `CLAUDE.process.md` into the target repo. Create a `CLAUDE.stack.md` for the actual stack (start from `CLAUDE.stack.example.md`). Reference both from the project's `CLAUDE.md`.
-3. Symlink the skills:
+2. Copy `CLAUDE.process.md` into the meta-root repo. Create a `CLAUDE.stack.md` for the actual stack (start from `CLAUDE.stack.example.md`). Reference both from the project's `CLAUDE.md`.
+3. Symlink the skills, copy the scripts, add the `yaml` dependency:
    ```bash
-   mkdir -p .claude/skills
+   mkdir -p .claude/skills scripts
    for s in setup-sdlc write-feature-request classify-change write-design-doc \
             write-execution-plan write-history-entry select-next-task \
             gather-open-items close-out; do
      ln -s /path/to/sdlskills/skills/$s .claude/skills/$s
    done
-   cp /path/to/sdlskills/scripts/render-status.mjs scripts/
+   cp /path/to/sdlskills/scripts/*.mjs scripts/ && cp -r /path/to/sdlskills/scripts/lib scripts/
+   npm install yaml
+   printf 'workspace/\nnode_modules/\n' >> .gitignore
    ```
-4. Run `/setup-sdlc` and follow the interview.
+4. Run `/setup-sdlc` — builds `repos.yml` and runs the autonomy interview.
 5. Start the loop: `/write-feature-request`, then `/select-next-task`.

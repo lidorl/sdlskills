@@ -17,9 +17,16 @@ date: YYYY-MM-DD
 tier: standard
 feat_req: docs/feat-req/<name>.md
 plan: docs/plans/<name>.md
+repos: [<key>, <key>]
 ---
 
 # <Description>
+
+## Per-Repo Summary
+| key | tier | branch | PR | what changed |
+|---|---|---|---|---|
+
+Single-repo effort: one row. The narrative sections below stay single across all repos.
 
 ## Deviations
 Where execution diverged from the plan and why. "Plan said X, reality needed Y because Z." `None` if the plan was followed exactly.

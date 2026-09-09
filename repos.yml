@@ -1,0 +1,16 @@
+# repos.yml — this kit dogfoods itself. Single-repo (N=1).
+repos:
+  sdlskills:
+    url: https://github.com/lidorl/sdlskills.git
+    default_branch: main
+    domain: shared-lib
+    summary: >
+      The SDLC kit itself — process contract, phase skills, and the scripts
+      that support them. No application code.
+    responsibilities:
+      - The lifecycle definition (CLAUDE.process.md)
+      - The phase skills under skills/
+      - The support scripts under scripts/
+    depends_on: []
+    keywords: [kit, skills, process, lifecycle]
+    notes: false

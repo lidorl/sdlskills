@@ -29,7 +29,17 @@ Apply in strict order:
 4. **Priority** — `High > Medium > Low`.
 5. **Age** — oldest `date` first. A document missing a `date` is treated as oldest (fix it rather than letting it jump the queue).
 
-### Step 4: Route to the phase
+### Step 4: Reconstruct the workspace
+
+If the selected item's `status` is `DESIGNED`, `PLANNED`, or `IN_PROGRESS` and its design doc has a `repos:` list, run:
+
+```
+node scripts/assemble-env.mjs <slug>
+```
+
+This checks out `workspace/` for the effort. Report any mismatch warning it prints (workspace was assembled for another effort). Skip for `ACCEPTED` — there is no design doc yet.
+
+### Step 5: Route to the phase
 
 Based on the selected item's `status`:
 
@@ -38,11 +48,11 @@ Based on the selected item's `status`:
 | `ACCEPTED` | `/classify-change` (tier decision), then `/write-design-doc <name>` for standard tier |
 | `DESIGNED` | `/write-execution-plan <name>` |
 | `PLANNED` | Set feat-req + plan `status: IN_PROGRESS`, then enter Development — `superpowers:executing-plans` or `subagent-driven-development` per Autonomy Policy `implementation_checkpoints` |
-| `IN_PROGRESS` | Resume Development from the plan's first unchecked step |
+| `IN_PROGRESS` | Resume Development from the plan's first unchecked step. Summarise cross-repo state from the plan's `## Pull Requests` table (`api merged, web open, …`). |
 
 After Development completes, run `/close-out` (standard tier).
 
-### Step 5: Present and confirm
+### Step 6: Present and confirm
 
 Output:
 

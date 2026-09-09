@@ -2,6 +2,7 @@
 feat_req: docs/feat-req/execution-environment.md
 date: 2026-09-09
 status: APPROVED
+repos: [sdlskills]
 ---
 
 # Multi-repo execution environment
@@ -122,6 +123,10 @@ Every file reference in every artifact (design docs, plans, history entries, rev
 
 Parses each plan's `## Pull Requests` section; shows per-effort PR progress (`3/5 merged`) in the Active sections of `docs/STATUS.md`. Does not trust it for the Implemented transition — that's `close-out`'s live `gh` check.
 
+## Repositories in Scope
+
+`sdlskills` (this repo) — **owns** every change. The kit has no downstream repos, so there are no affected consumers and no cross-repo integration contract. N=1.
+
 ## Data Model & Schema Changes
 
 None — no database. The one new structured artifact is `repos.yml`; its schema is defined in Proposed Design → *Repository catalog*. A `package.json` is added at the meta-root with one dependency, `yaml` (ADR 004).
@@ -178,18 +183,27 @@ Implementation order (each independently shippable):
 
 ## Security Considerations
 
-No security-relevant application changes. Notes:
-- The scripts shell out to `git` and `gh`; auth is entirely delegated to those tools' existing credentials. The kit stores and handles no secrets.
-- `assemble-env.mjs` clones URLs listed in `repos.yml` — the user controls that file; treat it like any config that names remotes. The script should refuse non-`https://`/`git@` schemes.
-- One new dependency, `yaml` (ADR 004) — a widely-used, actively-maintained parser with no transitive dependencies. Pin it in `package.json`.
-- No `/security-review` trigger applies (no auth logic, no external endpoint, no data-access control, no API-key handling).
+`/security-review` was run on the implementation (2026-09-09). No HIGH or MEDIUM findings.
+
+- The scripts use `execFileSync` with argument arrays throughout — **no shell**, so no metacharacter injection.
+- `assemble-env.mjs` clones URLs from `repos.yml`; `validateCatalog` requires a `https://` or `git@` prefix, blocking `ext::` transport, `file://`, and `-`-prefixed option injection into `git`.
+- Repo keys become `workspace/<key>/` path segments and `feat/<slug>` branch parts. `validateCatalog` now constrains keys to `^[a-z0-9][a-z0-9._-]*$` (defence against a crafted `repos.yml` traversing out of `workspace/`).
+- `clean-env.mjs` filters requested keys against the actual contents of `workspace/` before `rmSync`, so it can never delete outside it.
+- Auth is entirely delegated to `git`/`gh` existing credentials; the kit stores and handles no secrets.
+- One new dependency, `yaml` (ADR 004) — `parse()` returns plain objects, no deserialization code-execution surface.
+- No standing `/security-review` trigger applies (no auth logic, external endpoint, data-access control, or API-key handling) — the review was run because the change adds local process execution over config-file input.
 
 ## Open Items
 
-- [ ] Interaction with the parallel-agents work in `docs/kit-open-items.md` — per-effort `workspace/` dirs become necessary there; `.current-effort` is a single-worker shortcut.
-- [ ] Catalog auto-draft from a GitHub org ("option D") — follow-up feature request.
-- [ ] Repo-level documentation standard (BRAINSTORMING.md §5) — the catalog's `repos/<key>.md` should point at it once it exists rather than duplicating.
-- [ ] The 2-repo example project + end-to-end test (BRAINSTORMING.md §3).
-- [ ] Automated `setup-sdlc --migrate` for existing single-repo adopters.
-- [ ] Non-GitHub hosts (GitLab, Bitbucket) — `gh`-specific calls in `close-out` and Development would need an abstraction.
-- [ ] `git worktree` instead of separate clones for repos already present on disk — possible optimization, unevaluated.
+- [ ] Interaction with the parallel-agents work in `docs/kit-open-items.md` — per-effort `workspace/` dirs become necessary there; `.current-effort` is a single-worker shortcut. *Deferred — tracked in `kit-open-items.md`.*
+- [ ] Catalog auto-draft from a GitHub org ("option D"). *Deferred — no near-term dependency; the full-sweep will re-evaluate.*
+- [ ] Repo-level documentation standard — the catalog's `repos/<key>.md` should point at it once it exists rather than duplicating. *Deferred — tracked in `BRAINSTORMING.md` §5.*
+- [x] The end-to-end cross-repo validation + 2-repo example. `[EXTRACTED TO FEAT-REQ: docs/feat-req/execution-environment-e2e-validation.md]` (2026-09-09).
+- [ ] Automated `setup-sdlc --migrate` for existing single-repo adopters. *Deferred — no adopters to migrate yet.*
+- [ ] Non-GitHub hosts (GitLab, Bitbucket) — `gh`-specific calls in `close-out` and Development would need an abstraction. *Deferred — no near-term need.*
+- [ ] `git worktree` instead of separate clones for repos already present on disk — possible optimization, unevaluated. *Deferred.*
+
+**Resolved during implementation:**
+- `docs/design/architecture.md` created (meta-root model documented).
+- `gather-open-items` `<key>:` path prefix — covered by the path-convention notes in `write-design-doc` / `write-execution-plan`; no dedicated edit needed.
+- Code-review findings (7) — all fixed. Security review — no HIGH/MEDIUM; one hardening applied (repo-key format).

@@ -35,10 +35,11 @@ flowchart TD
 
 Each phase produces a required artifact in a fixed location, so a project's history stays legible — you can tell *why* a change happened, not just *what* changed. Nothing is "done" until the Definition of Done is satisfied.
 
-Two things keep it practical:
+Three things keep it practical:
 
 - **Three tiers.** `classify-change` sorts every change into *trivial* (history one-liner + tests), *standard* (full pipeline), or *hotfix* (fast lane + mandatory follow-up). The paper trail is proportional to the risk.
 - **An autonomy policy.** `setup-sdlc` interviews you once about which gates should stop for your review and which should auto-proceed. Design approval, feature-request triage, and review findings are always hard stops; everything else is configurable.
+- **Multi-repo by default.** Work happens in a *meta-root* holding the process and the `docs/` trail; a `repos.yml` catalog maps your repositories, and `assemble-env.mjs` checks out just the ones an effort needs under `workspace/`. Design resolves the repo set, `classify-change` runs per repo, and `close-out` verifies a merged PR in each. A solo project is N=1 — same machinery, one entry.
 
 ## Layout
 
@@ -48,6 +49,8 @@ Two things keep it practical:
 | [`CLAUDE.stack.example.md`](CLAUDE.stack.example.md) | Worked example of the stack-conventions half (NestJS/Prisma/React). Adopters replace it. |
 | [`skills/`](skills/) | The nine phase skills. |
 | [`scripts/render-status.mjs`](scripts/render-status.mjs) | Derives `docs/STATUS.md` from feature-request frontmatter. Wired to a `Stop` hook. |
+| [`scripts/assemble-env.mjs`](scripts/assemble-env.mjs) / [`clean-env.mjs`](scripts/clean-env.mjs) | Reconstruct / tear down `workspace/` for a multi-repo effort (see the execution-environment feature). |
+| [`repos.yml`](repos.yml) / [`repos/`](repos/) | The repository catalog — which repo does what. `repos.example.yml` is the annotated template. |
 | [`examples/react-components/`](examples/react-components/) | Optional React admin-console conventions skill. |
 | [`docs/design/STYLE_GUIDE.template.md`](docs/design/STYLE_GUIDE.template.md) | Starting point for a project style guide. |
 | [`docs/kit-open-items.md`](docs/kit-open-items.md) | Unresolved design questions about the kit itself. |
@@ -56,7 +59,7 @@ Two things keep it practical:
 
 | Skill | Phase |
 |---|---|
-| `setup-sdlc` | One-time adoption: map repo, adapt stack doc, autonomy interview, optional `docs/design/` bootstrap |
+| `setup-sdlc` | One-time adoption: map repo, adapt stack doc, build the repository catalog, autonomy interview, optional `docs/design/` bootstrap |
 | `write-feature-request` | Feature Request — product interview → spec → triage (accept/park/reject) |
 | `classify-change` | Tier decision (trivial / standard / hotfix) before any code |
 | `write-design-doc` | Design — fixed-structure design doc, conditional technical brainstorm, hard-stop approval |
@@ -75,8 +78,8 @@ External: `superpowers` plugin (`writing-plans`, `brainstorming`, `executing-pla
    /plugin marketplace add claude-plugins-official
    /plugin install superpowers@claude-plugins-official
    ```
-2. Copy `CLAUDE.process.md` into the target repo; reference it from the project `CLAUDE.md`. Create a `CLAUDE.stack.md` from `CLAUDE.stack.example.md`.
-3. Symlink the skills and copy the script:
+2. Copy `CLAUDE.process.md` into the **meta-root** repo; reference it from the project `CLAUDE.md`. Create a `CLAUDE.stack.md` from `CLAUDE.stack.example.md`.
+3. Symlink the skills, copy the scripts, add the one dependency:
    ```bash
    mkdir -p .claude/skills scripts
    for s in setup-sdlc write-feature-request classify-change write-design-doc \
@@ -84,9 +87,12 @@ External: `superpowers` plugin (`writing-plans`, `brainstorming`, `executing-pla
             gather-open-items close-out; do
      ln -s /path/to/sdlskills/skills/$s .claude/skills/$s
    done
-   cp /path/to/sdlskills/scripts/render-status.mjs scripts/
+   cp /path/to/sdlskills/scripts/*.mjs scripts/
+   cp -r /path/to/sdlskills/scripts/lib scripts/
+   npm init -y && npm install yaml           # or add "yaml" to an existing package.json
+   printf 'workspace/\nnode_modules/\n' >> .gitignore
    ```
-4. Run `/setup-sdlc` and follow the interview.
+4. Run `/setup-sdlc` — it builds `repos.yml` (the repository catalog) and runs the autonomy interview.
 5. Start the loop: `/write-feature-request`, then `/select-next-task`.
 
 ## Non-goals

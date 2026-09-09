@@ -51,19 +51,94 @@ function countBoxes(relPath) {
   return { done, open, total: done + open };
 }
 
+/** Split a markdown table row into trimmed cells, tolerating a missing leading/trailing pipe. */
+function tableCells(row) {
+  const cells = row.split('|').map((c) => c.trim());
+  if (cells[0] === '') cells.shift();
+  if (cells.length && cells[cells.length - 1] === '') cells.pop();
+  return cells;
+}
+
+/**
+ * Parse a plan's `## Pull Requests` markdown table.
+ * Returns { merged, total } over the data rows, or null if there is no table.
+ * Fences are tracked line-by-line so example tables inside ``` / ~~~ blocks
+ * (the kit's plans are full of them) never count.
+ */
+export function parsePullRequests(text) {
+  const lines = text.split(/\r?\n/);
+  let inFence = false;
+  let start = -1;
+  for (let i = 0; i < lines.length; i += 1) {
+    if (/^\s*(```|~~~)/.test(lines[i])) {
+      inFence = !inFence;
+      continue;
+    }
+    if (!inFence && /^##\s+Pull Requests\s*$/.test(lines[i])) {
+      start = i;
+      break;
+    }
+  }
+  if (start === -1) return null;
+
+  const section = [];
+  for (let i = start + 1; i < lines.length; i += 1) {
+    if (/^\s*(```|~~~)/.test(lines[i])) inFence = !inFence;
+    if (inFence) continue;
+    if (/^#{1,6}\s/.test(lines[i])) break;
+    section.push(lines[i]);
+  }
+  const rows = section
+    .map((l) => l.trim())
+    .filter((l) => l.startsWith('|') && !/^\|?[\s:|-]+\|?$/.test(l));
+  const data = rows.slice(1); // drop the header row
+  if (!data.length) return null;
+
+  let merged = 0;
+  for (const row of data) {
+    const cells = tableCells(row);
+    if ((cells[cells.length - 1] || '').toLowerCase() === 'merged') merged += 1;
+  }
+  return { merged, total: data.length };
+}
+
 const featReqs = readDir('feat-req');
-const designs = readDir('design').filter((d) => d.name !== 'architecture' && d.name !== 'data-model' && d.name !== 'STYLE_GUIDE');
+const designs = readDir('design').filter(
+  (d) => d.name !== 'architecture' && d.name !== 'data-model' && !d.name.startsWith('STYLE_GUIDE')
+);
 const plans = readDir('plans');
 
 const designByName = Object.fromEntries(designs.map((d) => [d.name, d]));
-const planByName = Object.fromEntries(plans.map((p) => [p.name, p]));
+
+/** Plans belonging to a feature: `<name>.md` or the split form `<name>-1.md`, `<name>-2.md`, … */
+function plansFor(name) {
+  const split = new RegExp(`^${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}-\\d+$`);
+  return plans
+    .filter((p) => p.name === name || split.test(p.name))
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
 
 const LIFECYCLE = ['ACCEPTED', 'DESIGNED', 'PLANNED', 'IN_PROGRESS', 'IMPLEMENTED'];
 const PARKED = ['PARKED', 'REJECTED'];
 
 const rows = featReqs.map((fr) => {
-  const plan = planByName[fr.name];
-  const boxes = plan ? countBoxes(plan.file) : null;
+  const featPlans = plansFor(fr.name);
+  let done = 0;
+  let total = 0;
+  let merged = 0;
+  let prTotal = 0;
+  for (const p of featPlans) {
+    const boxes = countBoxes(p.file);
+    if (boxes) {
+      done += boxes.done;
+      total += boxes.total;
+    }
+    const pr = parsePullRequests(readFileSync(join(ROOT, p.file), 'utf8'));
+    if (pr) {
+      merged += pr.merged;
+      prTotal += pr.total;
+    }
+  }
   return {
     name: fr.name,
     title: fr.title,
@@ -73,8 +148,9 @@ const rows = featReqs.map((fr) => {
     date: fr.date || '-',
     feat_req: fr.file,
     design: designByName[fr.name]?.file || null,
-    plan: plan?.file || null,
-    plan_progress: boxes ? `${boxes.done}/${boxes.total}` : null,
+    plan: featPlans.map((p) => p.file),
+    plan_progress: total ? `${done}/${total}` : null,
+    pr_progress: prTotal ? `${merged}/${prTotal} merged` : null,
   };
 });
 
@@ -87,15 +163,15 @@ const done = rows.filter((r) => r.status === 'IMPLEMENTED');
 function table(list) {
   if (!list.length) return '_none_\n';
   const head =
-    '| Feature | Status | Pri | Sev | Plan | Age |\n|---|---|---|---|---|---|\n';
+    '| Feature | Status | Pri | Sev | Plan | PRs | Age |\n|---|---|---|---|---|---|---|\n';
   return (
     head +
     list
       .map(
         (r) =>
           `| [${r.title}](${r.feat_req}) | ${r.status} | ${r.priority} | ${r.severity} | ${
-            r.plan_progress ? `${r.plan_progress}` : '-'
-          } | ${r.date} |`
+            r.plan_progress || '-'
+          } | ${r.pr_progress || '-'} | ${r.date} |`
       )
       .join('\n') +
     '\n'
