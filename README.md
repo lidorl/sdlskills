@@ -59,7 +59,7 @@ Three things keep it practical:
 
 | Skill | Phase |
 |---|---|
-| `setup-sdlc` | One-time adoption: map repo, adapt stack doc, autonomy interview, optional `docs/design/` bootstrap |
+| `setup-sdlc` | One-time adoption: map repo, adapt stack doc, build the repository catalog, autonomy interview, optional `docs/design/` bootstrap |
 | `write-feature-request` | Feature Request — product interview → spec → triage (accept/park/reject) |
 | `classify-change` | Tier decision (trivial / standard / hotfix) before any code |
 | `write-design-doc` | Design — fixed-structure design doc, conditional technical brainstorm, hard-stop approval |
@@ -78,8 +78,8 @@ External: `superpowers` plugin (`writing-plans`, `brainstorming`, `executing-pla
    /plugin marketplace add claude-plugins-official
    /plugin install superpowers@claude-plugins-official
    ```
-2. Copy `CLAUDE.process.md` into the target repo; reference it from the project `CLAUDE.md`. Create a `CLAUDE.stack.md` from `CLAUDE.stack.example.md`.
-3. Symlink the skills and copy the script:
+2. Copy `CLAUDE.process.md` into the **meta-root** repo; reference it from the project `CLAUDE.md`. Create a `CLAUDE.stack.md` from `CLAUDE.stack.example.md`.
+3. Symlink the skills, copy the scripts, add the one dependency:
    ```bash
    mkdir -p .claude/skills scripts
    for s in setup-sdlc write-feature-request classify-change write-design-doc \
@@ -87,9 +87,12 @@ External: `superpowers` plugin (`writing-plans`, `brainstorming`, `executing-pla
             gather-open-items close-out; do
      ln -s /path/to/sdlskills/skills/$s .claude/skills/$s
    done
-   cp /path/to/sdlskills/scripts/render-status.mjs scripts/
+   cp /path/to/sdlskills/scripts/*.mjs scripts/
+   cp -r /path/to/sdlskills/scripts/lib scripts/
+   npm init -y && npm install yaml           # or add "yaml" to an existing package.json
+   printf 'workspace/\nnode_modules/\n' >> .gitignore
    ```
-4. Run `/setup-sdlc` and follow the interview.
+4. Run `/setup-sdlc` — it builds `repos.yml` (the repository catalog) and runs the autonomy interview.
 5. Start the loop: `/write-feature-request`, then `/select-next-task`.
 
 ## Non-goals

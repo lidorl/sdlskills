@@ -2,7 +2,7 @@
 date: 2026-09-09
 priority: High
 severity: Medium
-status: PLANNED
+status: IMPLEMENTED
 source: Extracted from BRAINSTORMING.md §1 (brainstormed 2026-09-09)
 plans:
   - docs/plans/execution-environment-1.md
@@ -59,16 +59,16 @@ The kit assumes all work happens in one repository. Real work does not — a fea
 
 ## Acceptance Criteria
 
-- [ ] `/setup-sdlc` produces a schema-valid `repos.yml` via interview; N=1 path auto-generates the single entry from URL + README with one confirmation.
-- [ ] Design phase resolves and records the repo set; the design doc has `repos:` frontmatter and a populated `## Repositories in Scope` section; the list is fixed at approval.
-- [ ] `assemble-env <effort>` is idempotent, shallow-clones missing repos, checks out `feat/<effort>` in each, and detects a `workspace/.current-effort` mismatch and reassembles.
-- [ ] `/classify-change` emits a per-repo verdict; the plan's `## Repositories` section records each repo's role and tier.
-- [ ] The plan has anchored `## Repositories` and `## Pull Requests` sections that `render-status.mjs` can parse.
-- [ ] `/close-out` blocks `status: IMPLEMENTED` until every effort repo has a merged PR, verified live via `gh`.
-- [ ] `render-status.mjs` shows per-effort PR progress (e.g. `3/5 merged`) in `docs/STATUS.md`.
-- [ ] Path-key references (`key:path`) are used consistently across design docs, plans, and history entries.
-- [ ] The N=1 flow produces artifacts equivalent to the current single-repo flow.
-- [ ] `CLAUDE.process.md`, all affected skills, the README, and the landing page are updated; the 2-repo example (BRAINSTORMING.md §3) is referenced as the walkthrough.
+- [x] `/setup-sdlc` produces a schema-valid `repos.yml` via interview; N=1 path auto-generates the single entry from URL + README with one confirmation. *(skill Steps 5–6 + `catalog.mjs` validator; full end-to-end exercise deferred to the e2e-validation feat-req)*
+- [x] Design phase resolves and records the repo set; the design doc has `repos:` frontmatter and a populated `## Repositories in Scope` section; the list is fixed at approval. *(`write-design-doc` Step 2.5 + Step 6)*
+- [x] `assemble-env <effort>` is idempotent, shallow-clones missing repos, checks out `feat/<effort>` in each, and detects a `workspace/.current-effort` mismatch and reassembles. *(7 tests)*
+- [x] `/classify-change` emits a per-repo verdict; the plan's `## Repositories` section records each repo's role and tier.
+- [x] The plan has anchored `## Repositories` and `## Pull Requests` sections that `render-status.mjs` can parse. *(6 render-status tests)*
+- [x] `/close-out` blocks `status: IMPLEMENTED` until every effort repo has a merged PR, verified live via `gh`. *(`close-out` Step 4b)*
+- [x] `render-status.mjs` shows per-effort PR progress (e.g. `3/5 merged`) in `docs/STATUS.md`.
+- [x] Path-key references (`key:path`) are used consistently across design docs, plans, and history entries. *(convention documented in `write-design-doc` / `write-execution-plan`; N=1 artifacts use bare meta-root paths, which is correct)*
+- [x] The N=1 flow produces artifacts equivalent to the current single-repo flow. *(this feature's own lifecycle — N=1 — produced a full artifact set)*
+- [x] `CLAUDE.process.md`, all affected skills, the README, and the landing page are updated. The 2-repo example (BRAINSTORMING.md §3) is promoted to `docs/feat-req/execution-environment-e2e-validation.md`.
 
 ## Success Metrics
 
@@ -83,20 +83,7 @@ The kit assumes all work happens in one repository. Real work does not — a fea
 
 ## Open Questions
 
-Tackle during Design / Plan:
-
-- [ ] Confirm the `workspace/` name is final.
-- [ ] Exact `repos.yml` schema — field names, required vs. optional, how `depends_on` and `keywords` are used by the selection procedure.
-- [ ] `assemble-env` / `clean-env` — implementation language (`.mjs`, matching `render-status.mjs`?), location, and how they handle auth for private repos.
-- [ ] Branch naming when the feat-req name is long or collides across efforts.
-- [ ] How merge order is expressed in the Rollout & Migration section — an ordered list of repo keys?
-- [ ] N=1: does the meta-root have to be a separate repo, or may the kit files + `docs/` live inside the single code repo? (Leaning: accept the separation; revisit.)
-- [ ] History entry structure for a multi-repo change — per-repo subsections, or one narrative with repo tags?
-- [ ] What happens to `workspace/` checkouts after Close-out — auto-clean, or leave for follow-up work?
-- [ ] Guidance for editor / tooling ergonomics when working from the meta-root.
-- [ ] A repo that surfaces mid-Development but isn't in the approved `repos:` list — reopen Design, or add it with a recorded note?
-- [ ] Can a single repo be `hotfix` tier within an otherwise-standard effort?
-- [ ] Interaction with `superpowers:executing-plans` checkpoints when execution spans repos.
+All 12 intake questions were resolved during the Design phase (2026-09-09) — see `docs/design/execution-environment.md` (Context + Proposed Design). Summary: `workspace/` name final; `repos.yml` schema fixed (ADR 004 added `yaml`); scripts are `.mjs` matching `render-status.mjs`; branch is `feat/<feat-req-filename-stem>`; merge order = ordered key list under `### Merge order`; meta-root is always its own repo (ADR 002); history entry = one narrative + `## Per-Repo Summary`; `workspace/` checkouts left after close-out (manual `clean-env`); editor guidance in `CLAUDE.process.md` "Working in the meta-root"; a repo found post-approval is added with a dated note + lightweight re-approval; `hotfix` stays effort-level; `executing-plans` checkpoints stay at plan-phase boundaries.
 
 ## Solution Direction
 

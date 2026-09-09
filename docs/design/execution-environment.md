@@ -195,10 +195,15 @@ Implementation order (each independently shippable):
 
 ## Open Items
 
-- [ ] Interaction with the parallel-agents work in `docs/kit-open-items.md` — per-effort `workspace/` dirs become necessary there; `.current-effort` is a single-worker shortcut.
-- [ ] Catalog auto-draft from a GitHub org ("option D") — follow-up feature request.
-- [ ] Repo-level documentation standard (BRAINSTORMING.md §5) — the catalog's `repos/<key>.md` should point at it once it exists rather than duplicating.
-- [ ] The 2-repo example project + end-to-end test (BRAINSTORMING.md §3).
-- [ ] Automated `setup-sdlc --migrate` for existing single-repo adopters.
-- [ ] Non-GitHub hosts (GitLab, Bitbucket) — `gh`-specific calls in `close-out` and Development would need an abstraction.
-- [ ] `git worktree` instead of separate clones for repos already present on disk — possible optimization, unevaluated.
+- [ ] Interaction with the parallel-agents work in `docs/kit-open-items.md` — per-effort `workspace/` dirs become necessary there; `.current-effort` is a single-worker shortcut. *Deferred — tracked in `kit-open-items.md`.*
+- [ ] Catalog auto-draft from a GitHub org ("option D"). *Deferred — no near-term dependency; the full-sweep will re-evaluate.*
+- [ ] Repo-level documentation standard — the catalog's `repos/<key>.md` should point at it once it exists rather than duplicating. *Deferred — tracked in `BRAINSTORMING.md` §5.*
+- [x] The end-to-end cross-repo validation + 2-repo example. `[EXTRACTED TO FEAT-REQ: docs/feat-req/execution-environment-e2e-validation.md]` (2026-09-09).
+- [ ] Automated `setup-sdlc --migrate` for existing single-repo adopters. *Deferred — no adopters to migrate yet.*
+- [ ] Non-GitHub hosts (GitLab, Bitbucket) — `gh`-specific calls in `close-out` and Development would need an abstraction. *Deferred — no near-term need.*
+- [ ] `git worktree` instead of separate clones for repos already present on disk — possible optimization, unevaluated. *Deferred.*
+
+**Resolved during implementation:**
+- `docs/design/architecture.md` created (meta-root model documented).
+- `gather-open-items` `<key>:` path prefix — covered by the path-convention notes in `write-design-doc` / `write-execution-plan`; no dedicated edit needed.
+- Code-review findings (7) — all fixed. Security review — no HIGH/MEDIUM; one hardening applied (repo-key format).
