@@ -1,0 +1,40 @@
+# repos.yml — repository catalog. One entry per repo the project works across.
+# Consumed by: scripts/assemble-env.mjs, the Design phase (repo selection), select-next-task.
+repos:
+  api:
+    url: https://github.com/acme/api.git
+    default_branch: main
+    domain: backend
+    summary: >
+      The core HTTP API. Owns offers, claims, and vendor/game auth.
+      NestJS + Prisma + Postgres. All external fulfilment traffic lands here.
+    responsibilities:
+      - Offer and claim lifecycle
+      - Vendor and game API-key validation
+      - The public OpenAPI contract
+    depends_on: [shared-types]
+    keywords: [offers, claims, fulfilment, api-key, endpoint]
+    notes: false
+  web:
+    url: https://github.com/acme/web.git
+    default_branch: main
+    domain: frontend
+    summary: >
+      The admin console. Vite + React + shadcn/ui. Talks to `api` only.
+    responsibilities:
+      - Vendor, game, and offer management screens
+    depends_on: [api, shared-types]
+    keywords: [admin, console, ui, dashboard]
+    notes: true
+  shared-types:
+    url: https://github.com/acme/shared-types.git
+    default_branch: main
+    domain: shared-lib
+    summary: >
+      TypeScript types shared between `api` and `web`. Published to the
+      internal registry; both consumers pin a version.
+    responsibilities:
+      - Request/response DTO types
+    depends_on: []
+    keywords: [types, dto, contract]
+    notes: false
