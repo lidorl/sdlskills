@@ -183,11 +183,15 @@ Implementation order (each independently shippable):
 
 ## Security Considerations
 
-No security-relevant application changes. Notes:
-- The scripts shell out to `git` and `gh`; auth is entirely delegated to those tools' existing credentials. The kit stores and handles no secrets.
-- `assemble-env.mjs` clones URLs listed in `repos.yml` — the user controls that file; treat it like any config that names remotes. The script should refuse non-`https://`/`git@` schemes.
-- One new dependency, `yaml` (ADR 004) — a widely-used, actively-maintained parser with no transitive dependencies. Pin it in `package.json`.
-- No `/security-review` trigger applies (no auth logic, no external endpoint, no data-access control, no API-key handling).
+`/security-review` was run on the implementation (2026-09-09). No HIGH or MEDIUM findings.
+
+- The scripts use `execFileSync` with argument arrays throughout — **no shell**, so no metacharacter injection.
+- `assemble-env.mjs` clones URLs from `repos.yml`; `validateCatalog` requires a `https://` or `git@` prefix, blocking `ext::` transport, `file://`, and `-`-prefixed option injection into `git`.
+- Repo keys become `workspace/<key>/` path segments and `feat/<slug>` branch parts. `validateCatalog` now constrains keys to `^[a-z0-9][a-z0-9._-]*$` (defence against a crafted `repos.yml` traversing out of `workspace/`).
+- `clean-env.mjs` filters requested keys against the actual contents of `workspace/` before `rmSync`, so it can never delete outside it.
+- Auth is entirely delegated to `git`/`gh` existing credentials; the kit stores and handles no secrets.
+- One new dependency, `yaml` (ADR 004) — `parse()` returns plain objects, no deserialization code-execution surface.
+- No standing `/security-review` trigger applies (no auth logic, external endpoint, data-access control, or API-key handling) — the review was run because the change adds local process execution over config-file input.
 
 ## Open Items
 
