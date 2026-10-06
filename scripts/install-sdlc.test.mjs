@@ -114,10 +114,21 @@ test('dry-run touches nothing', () => {
   rmSync(dir, { recursive: true });
 });
 
-test('warns when the target is not a git repo', () => {
+test('recommends git init when the target is not a git repo, without blocking', () => {
   const dir = mkdtempSync(join(tmpdir(), 'inst-'));
   const r = install(opts(dir));
-  assert.ok(r.warnings.some((w) => w.includes('not a git repository')));
+  const w = r.warnings.find((x) => x.includes('not a git repository'));
+  assert.ok(w);
+  assert.match(w, /recommended/);
+  assert.ok(existsSync(join(dir, 'CLAUDE.process.md')));
+  rmSync(dir, { recursive: true });
+});
+
+test('does not warn about git when the target is a git repo', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'inst-'));
+  execFileSync('git', ['init', '-q'], { cwd: dir });
+  const r = install(opts(dir));
+  assert.ok(!r.warnings.some((x) => x.includes('not a git repository')));
   rmSync(dir, { recursive: true });
 });
 

@@ -99,7 +99,9 @@ export function install({ kitRoot, targetDir, skipPlugins = false, skipNpm = fal
   };
 
   if (!existsSync(join(targetDir, '.git'))) {
-    warnings.push('target is not a git repository — run `git init` there before committing.');
+    warnings.push(
+      'meta-root is not a git repository — recommended: `git init` so the docs trail (feature requests, designs, plans, history) is versioned.',
+    );
   }
 
   // 1. Vendor the phase skills (kit-owned — overwrite on re-run).

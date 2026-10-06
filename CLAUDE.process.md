@@ -54,7 +54,7 @@ Every change also has a **tier**, decided by `/classify-change` before any code 
 
 ## Working in the meta-root
 
-Your project is a **meta-root** git repo: this process contract, the skills, `repos.yml` (the repository catalog), and the `docs/` trail. Code repos are checked out under `workspace/<key>/` (git-ignored), assembled per effort by `scripts/assemble-env.mjs`.
+Your project has a **meta-root** (recommended: its own git repo, so the docs trail is versioned): this process contract, the skills, `repos.yml` (the repository catalog), and the `docs/` trail. Code repos are checked out under `workspace/<key>/` (git-ignored), assembled per effort by `scripts/assemble-env.mjs`.
 
 - Open your editor on `workspace/<key>/` for hands-on code work.
 - The agent `cd`s into `workspace/<key>/` for every stack command — build, test, `git`, `gh`. Never run bare `git`/test/build at the meta-root.
