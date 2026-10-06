@@ -58,6 +58,7 @@ Your project is a **meta-root** git repo: this process contract, the skills, `re
 
 - Open your editor on `workspace/<key>/` for hands-on code work.
 - The agent `cd`s into `workspace/<key>/` for every stack command — build, test, `git`, `gh`. Never run bare `git`/test/build at the meta-root.
+- A repo marked `readonly: true` in `repos.yml` is **reference**: read it, never change it. `assemble-env.mjs` checks it out detached at the default branch, with commits and pushes blocked. A change it would need goes in the design doc's Open Items as a request to its owners.
 - File references in artifacts use `<key>:<repo-relative-path>`; a bare path means the meta-root.
 - A solo project is **N=1**: one `repos.yml` entry, one repo under `workspace/`. Same machinery, no per-repo ceremony worth the name.
 

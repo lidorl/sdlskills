@@ -16,7 +16,7 @@ The Plan phase turns an approved design into an ordered, executable sequence. Th
 - Invoke `superpowers:writing-plans` with the design doc as the spec/requirements input.
 - Plans go in **`docs/plans/`** — this overrides `writing-plans`' default location. If it wrote elsewhere, move the file.
 - Filename matches the feature: `docs/plans/<name>.md` (same `<name>` as the feat-req and design doc).
-- Near the top, add a `## Repositories` section — one entry per repo in the design doc's `repos:` list: `key`, role (`owner` | `consumer`), tier (from `/classify-change`), one line on what changes.
+- Near the top, add a `## Repositories` section — one entry per repo in the design doc's `repos:` list: `key`, role (`owner` | `consumer` | `reference`), tier (from `/classify-change`), one line on what changes. A `reference` repo (`readonly: true` in `repos.yml`) has tier `n/a`, no tasks, and no row in `## Pull Requests`.
 - At the bottom, add a `## Pull Requests` section:
   ```markdown
   ## Pull Requests
@@ -51,7 +51,7 @@ Every task in the plan body starts as an unchecked `- [ ]`.
 - Set the feat-req `status: PLANNED`.
 - Run `scripts/render-status.mjs` (or note the `Stop` hook will).
 - Tell the user the next phase is Development. Per the Autonomy Policy `implementation_checkpoints`: `pause` → `superpowers:executing-plans` (checkpoints between phases); `run-through` → `superpowers:subagent-driven-development` or `executing-plans` with checkpoints auto-acknowledged and logged.
-- Development begins by running `node scripts/assemble-env.mjs <slug>` — this reconstructs `workspace/` and creates `feat/<slug>` across every effort repo. Work proceeds per the plan; one PR per repo is opened when that repo's plan items pass and its tests are green, and recorded in the plan's `## Pull Requests` table.
+- Development begins by running `node scripts/assemble-env.mjs <slug>` — this reconstructs `workspace/` and creates `feat/<slug>` across every writable effort repo (reference repos are checked out read-only). Work proceeds per the plan; one PR per repo is opened when that repo's plan items pass and its tests are green, and recorded in the plan's `## Pull Requests` table.
 
 ### Constraints
 

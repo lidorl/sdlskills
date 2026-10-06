@@ -26,6 +26,7 @@ Which repos this effort touches is an **output of design**, not a precondition �
    - **Clear yes** → in scope. **Clear no** → out.
    - **Ambiguous** → read `repos/<key>.md` (if `notes: true`) and re-judge.
    - **Still ambiguous** → ask the user.
+   - A `readonly: true` repo is in scope only as **reference** (code to read, never to change). Include it in `repos:` when the design needs to read it.
 2. For every in-scope repo, pull its `depends_on` repos in as **candidate consumers** and judge them the same way — this is how a contract change finds the repos that call it.
 3. Assemble the provisional set so you can read code while designing:
    ```
@@ -71,7 +72,7 @@ Every table, column, index, enum, or migration this adds or alters. `None` if th
 Every endpoint, request/response shape, DTO, or contract this adds or alters, and which auth guard applies. `None` if there are no API changes.
 
 ## Repositories in Scope
-For each repo in `repos:`: its key, whether it **owns** the change or is an **affected consumer**, what changes in it, and the integration contract with the other repos. `N/A` only for a genuine single-repo effort.
+For each repo in `repos:`: its key, whether it **owns** the change, is an **affected consumer**, or is **reference** (`readonly: true` — nothing changes in it; say what the design reads from it), what changes in it, and the integration contract with the other repos. `N/A` only for a genuine single-repo effort.
 
 ## UI/UX Changes
 Screens/flows this adds or alters, and the `docs/design/STYLE_GUIDE.md` sections they must conform to. `None` if not applicable.

@@ -63,6 +63,7 @@ repos:
     depends_on:     [<key>, ...]         # default []  — other repos it integrates with
     keywords:       [<term>, ...]        # default []  — match hints for repo selection
     notes:          false                # default false — true iff repos/<key>.md exists
+    readonly:       false                # default false — true = reference only: detached checkout, no effort branch, commits/pushes blocked
 ```
 
 Validation: `assemble-env.mjs` checks the schema before doing anything; `setup-sdlc` runs the same check after building the file.

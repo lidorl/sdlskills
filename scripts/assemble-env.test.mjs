@@ -31,8 +31,8 @@ const log = (dir) => execFileSync('git', ['log', '--oneline'], { cwd: dir }).toS
 // Local filesystem paths stand in for git remotes in these tests. The catalog
 // validator (catalog.mjs) rejects non-https/ssh urls, so tests pass an explicit
 // in-memory `catalog` to assemble() rather than going through loadCatalog().
-function entry(url) {
-  return { url, default_branch: 'main', domain: 'x', summary: 's', responsibilities: ['x'], depends_on: [], keywords: [], notes: false };
+function entry(url, extra = {}) {
+  return { url, default_branch: 'main', domain: 'x', summary: 's', responsibilities: ['x'], depends_on: [], keywords: [], notes: false, readonly: false, ...extra };
 }
 
 function setup() {
@@ -113,6 +113,61 @@ test('a second effort in a reused workspace branches from the default branch, no
   assemble({ rootDir: root, slug: 'effort-b', keys: ['api'], catalog });
   assert.equal(execFileSync('git', ['branch', '--show-current'], { cwd: wsApi }).toString().trim(), 'feat/effort-b');
   assert.doesNotMatch(log(wsApi), /effort-a work/);
+  rmSync(dir, { recursive: true });
+});
+
+test('a readonly repo is detached on the default branch and refuses commits and pushes', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'asm-'));
+  const remote = bareRemote(dir, 'sdk');
+  const root = join(dir, 'root');
+  mkdirSync(root, { recursive: true });
+  const catalog = { repos: { sdk: entry(remote, { readonly: true }) } };
+  const r = assemble({ rootDir: root, slug: 'thing', keys: ['sdk'], catalog });
+  const ws = join(root, 'workspace', 'sdk');
+
+  assert.deepEqual(r.readonly, ['sdk']);
+  assert.equal(execFileSync('git', ['branch', '--show-current'], { cwd: ws }).toString().trim(), '');
+  assert.equal(
+    execFileSync('git', ['rev-parse', 'HEAD'], { cwd: ws }).toString(),
+    execFileSync('git', ['rev-parse', 'main'], { cwd: remote }).toString()
+  );
+  assert.throws(() => git(ws, 'rev-parse', '--verify', '--quiet', 'refs/heads/feat/thing'));
+  assert.throws(() => git(ws, '-c', 'user.email=a@b.c', '-c', 'user.name=t', 'commit', '--allow-empty', '-m', 'nope'));
+  assert.equal(execFileSync('git', ['remote', 'get-url', '--push', 'origin'], { cwd: ws }).toString().trim(), 'no-push://readonly');
+  assert.equal(execFileSync('git', ['remote', 'get-url', 'origin'], { cwd: ws }).toString().trim(), remote);
+  rmSync(dir, { recursive: true });
+});
+
+test('re-assembling a readonly repo refreshes it to the latest default branch', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'asm-'));
+  const remote = bareRemote(dir, 'sdk');
+  const root = join(dir, 'root');
+  mkdirSync(root, { recursive: true });
+  const catalog = { repos: { sdk: entry(remote, { readonly: true }) } };
+  assemble({ rootDir: root, slug: 'thing', keys: ['sdk'], catalog });
+
+  const seed = join(dir, 'seed-sdk');
+  git(seed, '-c', 'user.email=a@b.c', '-c', 'user.name=t', 'commit', '--allow-empty', '-m', 'upstream moved');
+  git(seed, 'push', 'origin', 'main');
+
+  const r2 = assemble({ rootDir: root, slug: 'thing', keys: ['sdk'], catalog });
+  assert.deepEqual(r2.fetched, ['sdk']);
+  assert.match(log(join(root, 'workspace', 'sdk')), /upstream moved/);
+  rmSync(dir, { recursive: true });
+});
+
+test('a repo flipped from readonly back to writable loses its guards', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'asm-'));
+  const remote = bareRemote(dir, 'sdk');
+  const root = join(dir, 'root');
+  mkdirSync(root, { recursive: true });
+  assemble({ rootDir: root, slug: 'thing', keys: ['sdk'], catalog: { repos: { sdk: entry(remote, { readonly: true }) } } });
+  assemble({ rootDir: root, slug: 'thing', keys: ['sdk'], catalog: { repos: { sdk: entry(remote) } } });
+  const ws = join(root, 'workspace', 'sdk');
+
+  assert.equal(execFileSync('git', ['branch', '--show-current'], { cwd: ws }).toString().trim(), 'feat/thing');
+  git(ws, '-c', 'user.email=a@b.c', '-c', 'user.name=t', 'commit', '--allow-empty', '-m', 'now allowed');
+  assert.equal(execFileSync('git', ['remote', 'get-url', '--push', 'origin'], { cwd: ws }).toString().trim(), remote);
   rmSync(dir, { recursive: true });
 });
 

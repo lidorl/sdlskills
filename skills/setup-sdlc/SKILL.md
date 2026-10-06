@@ -45,7 +45,7 @@ Use `CLAUDE.stack.example.md` from the kit as the shape. Fill every section from
 
 The kit works across repositories. `repos.yml` at the meta-root maps them — which repo does what — so the Design phase can resolve which repos an effort touches. See `repos.example.yml` for the annotated shape.
 
-1. **List the repos.** Ask the user for every repo the project works across. For each, gather: `key` (short handle, used as the repo id everywhere), `url`, `default_branch`, `domain` (backend/frontend/infra/shared-lib/service/…), a `summary` paragraph (what it is, what lives in it), `responsibilities` (bullets — what it owns), `depends_on` (other keys it integrates with), `keywords` (match hints).
+1. **List the repos.** Ask the user for every repo the project works across. For each, gather: `key` (short handle, used as the repo id everywhere), `url`, `default_branch`, `domain` (backend/frontend/infra/shared-lib/service/…), a `summary` paragraph (what it is, what lives in it), `responsibilities` (bullets — what it owns), `depends_on` (other keys it integrates with), `keywords` (match hints), and whether it is `readonly` (reference only: the project reads it but never commits to it, e.g. another team's service or an upstream SDK).
 2. **N=1 shortcut.** If the user names only one repo, fetch its README and draft the single entry yourself; confirm once.
 3. **Write `repos.yml`.** For any repo the user wants to elaborate, create `repos/<key>.md` from the template in `repos/README.md` and set `notes: true`.
 4. **Validate.** Run:
