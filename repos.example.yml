@@ -38,16 +38,17 @@ repos:
     depends_on: []
     keywords: [types, dto, contract]
     notes: false
-  payments-sdk:
-    url: https://github.com/payco/payments-sdk.git
+  eng-handbook:
+    url: https://github.com/acme/eng-handbook.git
     default_branch: main
-    domain: shared-lib
+    domain: docs
     summary: >
-      The payment provider's client SDK. Owned by another team; read to
-      understand the API we integrate with, never changed here.
+      The org-wide engineering handbook — coding standards, API style guide,
+      review checklists. Owned by the platform team; read for conventions,
+      never changed from here.
     responsibilities:
-      - Payment provider client and webhook types
+      - Coding standards and API style guide
     depends_on: []
-    keywords: [payments, webhook, sdk]
+    keywords: [standards, style-guide, conventions]
     notes: false
     readonly: true                     # default false — reference only: checked out detached, commits and pushes blocked
