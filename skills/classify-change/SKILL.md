@@ -9,7 +9,7 @@ Run this before touching code. If you are already mid-implementation and the cha
 
 ### Multi-repo
 
-For a standard effort spanning repos, run **Steps 2–3 once per repo** in the approved design doc's `repos:` list. Output one verdict per repo. The **effort tier** is the highest across its repos. `hotfix` is decided once for the whole effort in Step 1 — it is never a per-repo tier.
+For a standard effort spanning repos, run **Steps 2–3 once per repo** in the approved design doc's `repos:` list. Skip `readonly: true` repos (reference only; they get no tier). Output one verdict per repo. The **effort tier** is the highest across its repos. `hotfix` is decided once for the whole effort in Step 1 — it is never a per-repo tier.
 
 ### Step 1: Hotfix check
 

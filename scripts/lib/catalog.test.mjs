@@ -27,6 +27,7 @@ test('loads a valid catalog and fills defaults', () => {
   assert.deepEqual(cat.repos.api.depends_on, []);
   assert.deepEqual(cat.repos.api.keywords, []);
   assert.equal(cat.repos.api.notes, false);
+  assert.equal(cat.repos.api.readonly, false);
   rmSync(dir, { recursive: true });
 });
 
@@ -70,4 +71,17 @@ test('depends_on referencing an unknown key is reported', () => {
     repos: { api: { url: 'https://x.git', default_branch: 'main', domain: 'backend', summary: 's', responsibilities: ['r'], depends_on: ['ghost'] } },
   });
   assert.ok(problems.some((p) => p.includes('ghost')));
+});
+
+test('readonly: true is carried through', () => {
+  const dir = withRoot(`${VALID}    readonly: true\n`);
+  assert.equal(loadCatalog(dir).repos.api.readonly, true);
+  rmSync(dir, { recursive: true });
+});
+
+test('non-boolean readonly is rejected', () => {
+  const problems = validateCatalog({
+    repos: { api: { url: 'https://x.git', default_branch: 'main', domain: 'backend', summary: 's', responsibilities: ['r'], readonly: 'yes' } },
+  });
+  assert.ok(problems.some((p) => p.includes('readonly')));
 });

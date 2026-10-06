@@ -38,6 +38,9 @@ export function validateCatalog(obj) {
         problems.push(`repos.${key}: \`responsibilities\` must be a non-empty list`);
       }
     }
+    if (e.readonly !== undefined && typeof e.readonly !== 'boolean') {
+      problems.push(`repos.${key}: \`readonly\` must be true or false (got "${e.readonly}")`);
+    }
     for (const dep of e.depends_on ?? []) {
       if (!keys.includes(dep)) {
         problems.push(`repos.${key}: \`depends_on\` references unknown repo "${dep}"`);
@@ -59,6 +62,7 @@ function normalise(obj) {
       depends_on: e.depends_on ?? [],
       keywords: e.keywords ?? [],
       notes: e.notes ?? false,
+      readonly: e.readonly ?? false,
     };
   }
   return { repos };

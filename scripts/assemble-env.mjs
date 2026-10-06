@@ -3,7 +3,7 @@
  * assemble-env.mjs — reconstruct workspace/ for an effort. Idempotent.
  * See docs/design/execution-environment.md → "Scripts".
  */
-import { readFileSync, existsSync, mkdirSync, writeFileSync, readdirSync } from 'node:fs';
+import { readFileSync, existsSync, mkdirSync, writeFileSync, readdirSync, chmodSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { loadCatalog } from './lib/catalog.mjs';
@@ -55,6 +55,37 @@ function checkoutEffortBranch(dest, branch, defaultBranch) {
   git(dest, ['checkout', '-b', branch, 'FETCH_HEAD']);
 }
 
+/**
+ * A readonly repo (repos.yml `readonly: true`) is reference material: detached
+ * at the latest `origin/<default_branch>`, no effort branch. Two local guards
+ * make a slip fail loudly — pushes go to an unreachable URL, and a pre-commit
+ * hook refuses commits. Both are rewritten every run (idempotent).
+ */
+const READONLY_HOOK = `#!/bin/sh
+echo "pre-commit: this repo is readonly in repos.yml — reference only, do not commit." >&2
+exit 1
+`;
+
+function checkoutReadonly(dest, defaultBranch) {
+  git(dest, ['fetch', 'origin', defaultBranch]);
+  git(dest, ['checkout', '--detach', 'FETCH_HEAD']);
+  git(dest, ['remote', 'set-url', '--push', 'origin', 'no-push://readonly']);
+  const hooksDir = join(dest, '.git', 'hooks');
+  mkdirSync(hooksDir, { recursive: true });
+  const hook = join(hooksDir, 'pre-commit');
+  writeFileSync(hook, READONLY_HOOK);
+  chmodSync(hook, 0o755);
+}
+
+/** Undo the readonly guards on a checkout whose repo is no longer readonly. */
+function liftReadonlyGuards(dest) {
+  if (tryGit(dest, ['config', '--get', 'remote.origin.pushurl']) === 'no-push://readonly') {
+    git(dest, ['config', '--unset', 'remote.origin.pushurl']);
+  }
+  const hook = join(dest, '.git', 'hooks', 'pre-commit');
+  if (existsSync(hook) && readFileSync(hook, 'utf8') === READONLY_HOOK) unlinkSync(hook);
+}
+
 export function assemble({ rootDir, slug, keys, catalog }) {
   const cat = catalog ?? loadCatalog(rootDir);
   const branch = `feat/${slug}`;
@@ -76,6 +107,7 @@ export function assemble({ rootDir, slug, keys, catalog }) {
 
   const cloned = [];
   const fetched = [];
+  const readonly = [];
   for (const key of keys) {
     const entry = cat.repos[key];
     if (!entry) throw new Error(`repos.yml has no entry for "${key}"`);
@@ -87,11 +119,17 @@ export function assemble({ rootDir, slug, keys, catalog }) {
       git(dest, ['fetch', 'origin']);
       fetched.push(key);
     }
-    checkoutEffortBranch(dest, branch, entry.default_branch);
+    if (entry.readonly) {
+      checkoutReadonly(dest, entry.default_branch);
+      readonly.push(key);
+    } else {
+      liftReadonlyGuards(dest);
+      checkoutEffortBranch(dest, branch, entry.default_branch);
+    }
   }
 
   writeFileSync(markerPath, `${slug}\n`);
-  return { cloned, fetched, branch, warnings };
+  return { cloned, fetched, readonly, branch, warnings };
 }
 
 function main() {
@@ -112,7 +150,7 @@ function main() {
   const r = assemble({ rootDir, slug, keys });
   r.warnings.forEach((w) => console.warn(`warning: ${w}`));
   console.log(
-    `assemble-env: ${slug} on ${r.branch} — cloned [${r.cloned.join(', ')}] fetched [${r.fetched.join(', ')}]`
+    `assemble-env: ${slug} on ${r.branch} — cloned [${r.cloned.join(', ')}] fetched [${r.fetched.join(', ')}] readonly [${r.readonly.join(', ')}]`
   );
 }
 

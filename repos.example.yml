@@ -38,3 +38,16 @@ repos:
     depends_on: []
     keywords: [types, dto, contract]
     notes: false
+  payments-sdk:
+    url: https://github.com/payco/payments-sdk.git
+    default_branch: main
+    domain: shared-lib
+    summary: >
+      The payment provider's client SDK. Owned by another team; read to
+      understand the API we integrate with, never changed here.
+    responsibilities:
+      - Payment provider client and webhook types
+    depends_on: []
+    keywords: [payments, webhook, sdk]
+    notes: false
+    readonly: true                     # default false — reference only: checked out detached, commits and pushes blocked
