@@ -56,6 +56,7 @@ The kit works across repositories. `repos.yml` at the meta-root maps them — wh
 
 ### Step 6: Meta-root wiring
 
+- If the meta-root is not a git repo (`git rev-parse --is-inside-work-tree` fails there), tell the user and ask whether to run `git init` and commit the kit files. Recommend yes: the meta-root holds the docs trail (feature requests, designs, plans, history), and versioning it gives that trail history and a place to review it. The user decides; on no, continue setup.
 - Run `npm install` (installs `yaml`).
 - Ensure `.gitignore` contains `workspace/` and `node_modules/`.
 - `workspace/` is created on demand by `assemble-env.mjs` — do not create it now.
