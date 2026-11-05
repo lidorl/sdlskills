@@ -13,6 +13,16 @@ const URL_RE = /^(https:\/\/|git@)/;
 // A repo key becomes a path segment under workspace/ and a git branch component.
 // Constrain it so it can never traverse (`..`, `/`) or be read as a git option.
 const KEY_RE = /^[a-z0-9][a-z0-9._-]*$/;
+// What `git check-ref-format --branch` refuses, so a bad name fails here rather
+// than mid-assembly. Covers option injection (leading `-`, e.g.
+// `--upload-pack=<cmd>`) and refspec syntax (`:`).
+const UNSAFE_BRANCH_RE = /[\x00-\x20\x7f~^:?*[\\]|\.\.|@\{|\/\/|\/\.|\.lock(\/|$)|^[-/.]|[/.]$/;
+
+/** True for a string that names a branch: not a git option, refspec, HEAD or full ref. */
+export function isSafeBranch(name) {
+  return typeof name === 'string' && name !== '' && name !== '@' && name !== 'HEAD'
+    && !name.startsWith('refs/') && !UNSAFE_BRANCH_RE.test(name);
+}
 
 export function validateCatalog(obj) {
   const problems = [];
@@ -32,6 +42,9 @@ export function validateCatalog(obj) {
     }
     if (e.url && !URL_RE.test(String(e.url))) {
       problems.push(`repos.${key}: \`url\` must start with https:// or git@ (got "${e.url}")`);
+    }
+    if (e.default_branch !== undefined && e.default_branch !== null && e.default_branch !== '' && !isSafeBranch(e.default_branch)) {
+      problems.push(`repos.${key}: \`default_branch\` must be a branch name, as a string — quote numeric-looking names (got "${e.default_branch}")`);
     }
     if (e.responsibilities !== undefined) {
       if (!Array.isArray(e.responsibilities) || e.responsibilities.length === 0) {
