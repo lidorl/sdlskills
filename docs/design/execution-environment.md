@@ -54,7 +54,7 @@ The adopter's project is a **meta-root** — its own private git repo:
 repos:
   <key>:                        # short handle, used as the effort-agnostic repo id everywhere
     url:            <clone url>          # required
-    default_branch: <branch>             # required
+    default_branch: <branch>             # required — a branch on origin, as a string: not a tag, HEAD or refs/ path; quote numeric-looking names
     domain:         backend|frontend|infra|shared-lib|service|...   # required
     summary:        >                    # required — a paragraph: what it is, what lives in it
       ...
