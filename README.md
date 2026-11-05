@@ -79,6 +79,8 @@ External: `superpowers` plugin (`writing-plans`, `brainstorming`, `executing-pla
    node /path/to/sdlskills/scripts/install-sdlc.mjs <target-dir>
    ```
    `--dry-run` previews; `--skip-plugins` / `--skip-npm` opt out. Re-run it to update the vendored skills and scripts in place.
+
+   **Using GitHub Copilot (VS Code or CLI)?** Run `scripts/install-sdlc-copilot.mjs` instead, and skip step 2: it installs to `.github/skills/` and `.github/instructions/` with references rewritten. The cloud agent isn't supported, because the process needs a user at its hard stops.
 2. Reference `CLAUDE.process.md` and `CLAUDE.stack.md` from the project `CLAUDE.md`, and adapt `CLAUDE.stack.md` to the real stack.
 3. Run `/setup-sdlc` — it builds `repos.yml` (the repository catalog) and runs the autonomy interview.
 4. Start the loop: `/write-feature-request`, then `/select-next-task`.
