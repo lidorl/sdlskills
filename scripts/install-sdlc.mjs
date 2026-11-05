@@ -14,6 +14,9 @@
  * Re-running is the update path: kit-owned files (skills, scripts) are
  * overwritten; user files (CLAUDE.stack.md, package.json, .gitignore) are
  * preserved and merged.
+ *
+ * The kit is authored for Claude Code. A layout maps it onto another harness at
+ * install time; see install-sdlc-copilot.mjs.
  */
 import {
   existsSync,
@@ -62,9 +65,38 @@ const PKG_DEFAULTS = {
   dependencies: { yaml: '^2.5.0' },
 };
 
-function claudeAvailable() {
+/**
+ * Where the kit lands in a target and how its text is adapted for the harness.
+ * This default is the kit as authored; other harnesses supply their own.
+ */
+export const CLAUDE_LAYOUT = {
+  installer: 'install-sdlc.mjs',
+  skillsDir: '.claude/skills',
+  /** Kit-relative skill directories vendored in addition to SKILLS. */
+  extraSkills: [],
+  processFile: 'CLAUDE.process.md',
+  stackFile: 'CLAUDE.stack.md',
+  /** Prepended to the process and stack docs. */
+  docHeader: '',
+  /** Rewrites the text of vendored skills and docs. */
+  adapt: (text) => text,
+  /** Target-relative path -> content. Kit-owned, rewritten every run. */
+  extraFiles: {},
+  plugin: {
+    cli: 'claude',
+    commands: [
+      ['plugin', 'marketplace', 'add', 'claude-plugins-official'],
+      ['plugin', 'install', 'superpowers@claude-plugins-official'],
+    ],
+    /** Extra manual guidance shown whether or not the plugin installed. */
+    notes: [],
+  },
+  nextSteps: ["Reference `CLAUDE.process.md` and `CLAUDE.stack.md` from the target's `CLAUDE.md`."],
+};
+
+function cliAvailable(cli) {
   try {
-    execFileSync('claude', ['--version'], { stdio: 'ignore' });
+    execFileSync(cli, ['--version'], { stdio: 'ignore' });
     return true;
   } catch {
     return false;
@@ -78,9 +110,17 @@ function claudeAvailable() {
  * @param {boolean} [opts.skipPlugins]
  * @param {boolean} [opts.skipNpm]
  * @param {boolean} [opts.dryRun]
+ * @param {typeof CLAUDE_LAYOUT} [opts.layout]
  * @returns {{ actions: string[], warnings: string[], nextSteps: string[] }}
  */
-export function install({ kitRoot, targetDir, skipPlugins = false, skipNpm = false, dryRun = false }) {
+export function install({
+  kitRoot,
+  targetDir,
+  skipPlugins = false,
+  skipNpm = false,
+  dryRun = false,
+  layout = CLAUDE_LAYOUT,
+}) {
   if (!existsSync(targetDir)) throw new Error(`target directory does not exist: ${targetDir}`);
   if (!existsSync(join(kitRoot, 'skills'))) throw new Error(`not a kit root (no skills/): ${kitRoot}`);
 
@@ -97,6 +137,22 @@ export function install({ kitRoot, targetDir, skipPlugins = false, skipNpm = fal
       cpSync(src, dst, { recursive: true });
     }
   };
+  const writeDoc = (src, dst) => {
+    if (!dryRun) {
+      mkdirSync(dirname(dst), { recursive: true });
+      writeFileSync(dst, layout.docHeader + layout.adapt(readFileSync(src, 'utf8')));
+    }
+  };
+  const adaptTree = (dir) => {
+    if (dryRun) return;
+    for (const f of readdirSync(dir, { recursive: true })) {
+      if (!f.endsWith('.md')) continue;
+      const p = join(dir, f);
+      const text = readFileSync(p, 'utf8');
+      const adapted = layout.adapt(text);
+      if (adapted !== text) writeFileSync(p, adapted);
+    }
+  };
 
   if (!existsSync(join(targetDir, '.git'))) {
     warnings.push(
@@ -105,40 +161,48 @@ export function install({ kitRoot, targetDir, skipPlugins = false, skipNpm = fal
   }
 
   // 1. Vendor the phase skills (kit-owned — overwrite on re-run).
-  const skillsDst = join(targetDir, '.claude', 'skills');
-  for (const s of SKILLS) {
-    const src = join(kitRoot, 'skills', s);
+  const skillsDst = join(targetDir, layout.skillsDir);
+  const skillSources = [...SKILLS.map((s) => join('skills', s)), ...layout.extraSkills];
+  for (const rel of skillSources) {
+    const src = join(kitRoot, rel);
+    const name = basename(rel);
     if (!existsSync(src)) {
-      warnings.push(`skill missing from kit, skipped: ${s}`);
+      warnings.push(`skill missing from kit, skipped: ${name}`);
       continue;
     }
-    copy(src, join(skillsDst, s));
+    copy(src, join(skillsDst, name));
+    adaptTree(join(skillsDst, name));
   }
-  did(`vendored ${SKILLS.length} skills into .claude/skills/`);
+  did(`vendored ${skillSources.length} skills into ${layout.skillsDir}/`);
 
-  // 2. Copy the scripts (kit-owned — overwrite on re-run). Skip this installer.
-  const self = basename(fileURLToPath(import.meta.url));
-  const selfTest = self.replace(/\.mjs$/, '.test.mjs');
+  // 2. Copy the scripts (kit-owned — overwrite on re-run). Skip the installers.
   const scriptsDst = join(targetDir, 'scripts');
   const scriptEntries = readdirSync(join(kitRoot, 'scripts')).filter(
-    (e) => e !== self && e !== selfTest,
+    (e) => !e.startsWith('install-sdlc'),
   );
   for (const e of scriptEntries) copy(join(kitRoot, 'scripts', e), join(scriptsDst, e));
   did(`copied ${scriptEntries.length} script entries into scripts/`);
 
-  // 3. Process docs. CLAUDE.process.md is kit-owned; the rest are seeds (keep if present).
-  copy(join(kitRoot, 'CLAUDE.process.md'), join(targetDir, 'CLAUDE.process.md'));
-  did('copied CLAUDE.process.md');
-  for (const [src, dst] of [
-    ['CLAUDE.stack.example.md', 'CLAUDE.stack.md'],
-    ['repos.example.yml', 'repos.example.yml'],
+  // 3. Process docs. The process doc is kit-owned; the rest are seeds (keep if present).
+  writeDoc(join(kitRoot, 'CLAUDE.process.md'), join(targetDir, layout.processFile));
+  did(`copied ${layout.processFile}`);
+  for (const [src, dst, place] of [
+    ['CLAUDE.stack.example.md', layout.stackFile, writeDoc],
+    ['repos.example.yml', 'repos.example.yml', copy],
   ]) {
     if (existsSync(join(targetDir, dst))) {
       did(`kept existing ${dst}`);
     } else {
-      copy(join(kitRoot, src), join(targetDir, dst));
+      place(join(kitRoot, src), join(targetDir, dst));
       did(`seeded ${dst} from ${src}`);
     }
+  }
+  for (const [path, content] of Object.entries(layout.extraFiles)) {
+    if (!dryRun) {
+      mkdirSync(dirname(join(targetDir, path)), { recursive: true });
+      writeFileSync(join(targetDir, path), content);
+    }
+    did(`wrote ${path}`);
   }
 
   // 4. package.json — create or merge in the fields the kit needs.
@@ -182,30 +246,24 @@ export function install({ kitRoot, targetDir, skipPlugins = false, skipNpm = fal
   did(`created docs/{${DOCS_DIRS.join(',')}}/`);
 
   // 7. superpowers plugin.
+  const { cli, commands, notes } = layout.plugin;
+  const manualInstall = commands.map((c) => `\`${cli} ${c.join(' ')}\``).join(' then ');
   if (skipPlugins) {
-    nextSteps.push(
-      'Install the superpowers plugin: `claude plugin marketplace add claude-plugins-official` then `claude plugin install superpowers@claude-plugins-official`',
-    );
+    nextSteps.push(`Install the superpowers plugin: ${manualInstall}`);
   } else if (dryRun) {
     did('[dry-run] would install superpowers plugin');
-  } else if (claudeAvailable()) {
+  } else if (cliAvailable(cli)) {
     try {
-      execFileSync('claude', ['plugin', 'marketplace', 'add', 'claude-plugins-official'], {
-        stdio: 'inherit',
-      });
-      execFileSync('claude', ['plugin', 'install', 'superpowers@claude-plugins-official'], {
-        stdio: 'inherit',
-      });
+      for (const c of commands) execFileSync(cli, c, { stdio: 'inherit' });
       did('installed superpowers plugin');
     } catch {
       warnings.push('superpowers plugin install failed — install it manually.');
     }
   } else {
-    warnings.push('`claude` not on PATH — skipped plugin install.');
-    nextSteps.push(
-      'Install the superpowers plugin once `claude` is available: `claude plugin marketplace add claude-plugins-official` then `claude plugin install superpowers@claude-plugins-official`',
-    );
+    warnings.push(`\`${cli}\` not on PATH — skipped plugin install.`);
+    nextSteps.push(`Install the superpowers plugin once \`${cli}\` is available: ${manualInstall}`);
   }
+  nextSteps.push(...notes);
 
   // 8. npm install.
   if (skipNpm) {
@@ -222,18 +280,18 @@ export function install({ kitRoot, targetDir, skipPlugins = false, skipNpm = fal
   }
 
   nextSteps.push(
-    'Reference `CLAUDE.process.md` and `CLAUDE.stack.md` from the target\'s `CLAUDE.md`.',
+    ...layout.nextSteps,
     'Run `/setup-sdlc` in the target to map the repo and run the autonomy interview.',
   );
 
   return { actions, warnings, nextSteps };
 }
 
-function main() {
+export function main(layout = CLAUDE_LAYOUT) {
   const args = process.argv.slice(2);
   const targetDir = args.find((a) => !a.startsWith('--'));
   if (!targetDir) {
-    console.error('usage: node install-sdlc.mjs <target-dir> [--skip-plugins] [--skip-npm] [--dry-run]');
+    console.error(`usage: node ${layout.installer} <target-dir> [--skip-plugins] [--skip-npm] [--dry-run]`);
     process.exit(1);
   }
   const kitRoot = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -243,9 +301,10 @@ function main() {
     skipPlugins: args.includes('--skip-plugins'),
     skipNpm: args.includes('--skip-npm'),
     dryRun: args.includes('--dry-run'),
+    layout,
   });
 
-  console.log('\ninstall-sdlc:');
+  console.log(`\n${layout.installer.replace(/\.mjs$/, '')}:`);
   for (const a of r.actions) console.log(`  ✓ ${a}`);
   if (r.warnings.length) {
     console.log('\nwarnings:');
