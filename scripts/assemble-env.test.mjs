@@ -171,6 +171,20 @@ test('a repo flipped from readonly back to writable loses its guards', () => {
   rmSync(dir, { recursive: true });
 });
 
+test('a default_branch shaped like a git option is never run as one, even with an explicit catalog', () => {
+  for (const readonly of [false, true]) {
+    const dir = mkdtempSync(join(tmpdir(), 'asm-'));
+    const remote = bareRemote(dir, 'api');
+    const root = join(dir, 'root');
+    mkdirSync(root, { recursive: true });
+    const pwned = join(dir, 'PWNED');
+    const catalog = { repos: { api: entry(remote, { readonly, default_branch: `--upload-pack=touch ${pwned} #` }) } };
+    assert.throws(() => assemble({ rootDir: root, slug: 'thing', keys: ['api'], catalog }));
+    assert.equal(existsSync(pwned), false, `upload-pack ran (readonly: ${readonly})`);
+    rmSync(dir, { recursive: true });
+  }
+});
+
 test('a non-https/ssh url in repos.yml is refused (via loadCatalog)', () => {
   const { dir, root } = setup();
   writeFileSync(join(root, 'repos.yml'), `repos:

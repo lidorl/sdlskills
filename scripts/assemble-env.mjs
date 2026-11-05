@@ -8,9 +8,10 @@ import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { loadCatalog } from './lib/catalog.mjs';
 
-// URL-scheme safety (refuse anything but https:// and git@) is enforced in
-// catalog.mjs → validateCatalog, which loadCatalog runs. Callers that pass an
-// explicit `catalog` object have taken responsibility for its contents.
+// URL-scheme safety (refuse anything but https:// and git@) and default_branch
+// shape are enforced in catalog.mjs → validateCatalog, which loadCatalog runs.
+// Callers that pass an explicit `catalog` object have taken responsibility for
+// its contents; fetchDefault still passes default_branch after `--` as a backstop.
 const git = (cwd, args) => execFileSync('git', args, { cwd, stdio: ['ignore', 'pipe', 'pipe'] }).toString();
 
 export function resolveRepoKeys(rootDir, slug, extraKeys = []) {
@@ -23,6 +24,9 @@ export function resolveRepoKeys(rootDir, slug, extraKeys = []) {
   }
   return [...keys];
 }
+
+// `--` ends option parsing, so a default_branch can never be read as a git option.
+const fetchDefault = (dest, defaultBranch) => git(dest, ['fetch', 'origin', '--', `refs/heads/${defaultBranch}`]);
 
 function tryGit(cwd, args) {
   try {
@@ -51,7 +55,7 @@ function checkoutEffortBranch(dest, branch, defaultBranch) {
     git(dest, ['checkout', '-b', branch, 'FETCH_HEAD']);
     return;
   }
-  git(dest, ['fetch', 'origin', defaultBranch]);
+  fetchDefault(dest, defaultBranch);
   git(dest, ['checkout', '-b', branch, 'FETCH_HEAD']);
 }
 
@@ -67,7 +71,7 @@ exit 1
 `;
 
 function checkoutReadonly(dest, defaultBranch) {
-  git(dest, ['fetch', 'origin', defaultBranch]);
+  fetchDefault(dest, defaultBranch);
   git(dest, ['checkout', '--detach', 'FETCH_HEAD']);
   git(dest, ['remote', 'set-url', '--push', 'origin', 'no-push://readonly']);
   const hooksDir = join(dest, '.git', 'hooks');
