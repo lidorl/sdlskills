@@ -171,6 +171,47 @@ test('a repo flipped from readonly back to writable loses its guards', () => {
   rmSync(dir, { recursive: true });
 });
 
+test('an unsafe default_branch is refused before any clone, even with an explicit catalog', () => {
+  for (const readonly of [false, true]) {
+    const dir = mkdtempSync(join(tmpdir(), 'asm-'));
+    const remote = bareRemote(dir, 'api');
+    const root = join(dir, 'root');
+    mkdirSync(root, { recursive: true });
+    const pwned = join(dir, 'PWNED');
+    for (const default_branch of [`--upload-pack=touch ${pwned} #`, 'main:refs/heads/other']) {
+      const catalog = { repos: { api: entry(remote, { readonly, default_branch }) } };
+      assert.throws(() => assemble({ rootDir: root, slug: 'thing', keys: ['api'], catalog }), /default_branch/);
+      assert.equal(existsSync(join(root, 'workspace', 'api')), false, `cloned for "${default_branch}"`);
+    }
+    assert.equal(existsSync(pwned), false, `upload-pack ran (readonly: ${readonly})`);
+    rmSync(dir, { recursive: true });
+  }
+});
+
+test('a default_branch naming a tag fails with an error that says it must be a branch', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'asm-'));
+  const remote = bareRemote(dir, 'api');
+  git(remote, 'tag', 'v1.0', 'main');
+  const root = join(dir, 'root');
+  mkdirSync(root, { recursive: true });
+  const catalog = { repos: { api: entry(remote, { readonly: true, default_branch: 'v1.0' }) } };
+  assert.throws(() => assemble({ rootDir: root, slug: 'thing', keys: ['api'], catalog }), /must be a branch/);
+  rmSync(dir, { recursive: true });
+});
+
+test('a remote branch that only ends in the effort branch name is not mistaken for it', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'asm-'));
+  const remote = bareRemote(dir, 'api', { effortBranch: 'team/feat/thing' });
+  const root = join(dir, 'root');
+  mkdirSync(root, { recursive: true });
+  const catalog = { repos: { api: entry(remote) } };
+  assemble({ rootDir: root, slug: 'thing', keys: ['api'], catalog });
+  const dest = join(root, 'workspace', 'api');
+  assert.equal(execFileSync('git', ['branch', '--show-current'], { cwd: dest }).toString().trim(), 'feat/thing');
+  assert.doesNotMatch(log(dest), /work from a prior session/);
+  rmSync(dir, { recursive: true });
+});
+
 test('a non-https/ssh url in repos.yml is refused (via loadCatalog)', () => {
   const { dir, root } = setup();
   writeFileSync(join(root, 'repos.yml'), `repos:

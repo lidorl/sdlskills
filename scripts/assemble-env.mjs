@@ -6,11 +6,12 @@
 import { readFileSync, existsSync, mkdirSync, writeFileSync, readdirSync, chmodSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { loadCatalog } from './lib/catalog.mjs';
+import { loadCatalog, isSafeBranch } from './lib/catalog.mjs';
 
 // URL-scheme safety (refuse anything but https:// and git@) is enforced in
 // catalog.mjs → validateCatalog, which loadCatalog runs. Callers that pass an
-// explicit `catalog` object have taken responsibility for its contents.
+// explicit `catalog` object have taken responsibility for its contents, except
+// default_branch: assemble re-checks that for every catalog source.
 const git = (cwd, args) => execFileSync('git', args, { cwd, stdio: ['ignore', 'pipe', 'pipe'] }).toString();
 
 export function resolveRepoKeys(rootDir, slug, extraKeys = []) {
@@ -22,6 +23,15 @@ export function resolveRepoKeys(rootDir, slug, extraKeys = []) {
     if (line) line[1].split(',').map((s) => s.trim()).filter(Boolean).forEach((k) => keys.add(k));
   }
   return [...keys];
+}
+
+// Fully qualified, so only a branch matches: a tag of the same name does not.
+function fetchDefault(dest, defaultBranch) {
+  try {
+    git(dest, ['fetch', 'origin', `refs/heads/${defaultBranch}`]);
+  } catch (err) {
+    throw new Error(`could not fetch default_branch "${defaultBranch}" — it must be a branch on origin, not a tag: ${err.message}`);
+  }
 }
 
 function tryGit(cwd, args) {
@@ -45,13 +55,15 @@ function checkoutEffortBranch(dest, branch, defaultBranch) {
     git(dest, ['checkout', branch]);
     return;
   }
-  const remoteEffort = tryGit(dest, ['ls-remote', '--heads', 'origin', branch]);
+  // Fully qualified: a bare name would also match refs/heads/<prefix>/<branch>.
+  const remoteRef = `refs/heads/${branch}`;
+  const remoteEffort = tryGit(dest, ['ls-remote', '--heads', 'origin', remoteRef]);
   if (remoteEffort) {
-    git(dest, ['fetch', 'origin', branch]);
+    git(dest, ['fetch', 'origin', remoteRef]);
     git(dest, ['checkout', '-b', branch, 'FETCH_HEAD']);
     return;
   }
-  git(dest, ['fetch', 'origin', defaultBranch]);
+  fetchDefault(dest, defaultBranch);
   git(dest, ['checkout', '-b', branch, 'FETCH_HEAD']);
 }
 
@@ -67,7 +79,7 @@ exit 1
 `;
 
 function checkoutReadonly(dest, defaultBranch) {
-  git(dest, ['fetch', 'origin', defaultBranch]);
+  fetchDefault(dest, defaultBranch);
   git(dest, ['checkout', '--detach', 'FETCH_HEAD']);
   git(dest, ['remote', 'set-url', '--push', 'origin', 'no-push://readonly']);
   const hooksDir = join(dest, '.git', 'hooks');
@@ -88,6 +100,12 @@ function liftReadonlyGuards(dest) {
 
 export function assemble({ rootDir, slug, keys, catalog }) {
   const cat = catalog ?? loadCatalog(rootDir);
+  for (const key of keys) {
+    const defaultBranch = cat.repos[key]?.default_branch;
+    if (cat.repos[key] && !isSafeBranch(defaultBranch)) {
+      throw new Error(`repos.${key}: unsafe default_branch "${defaultBranch}"`);
+    }
+  }
   const branch = `feat/${slug}`;
   const wsDir = join(rootDir, 'workspace');
   mkdirSync(wsDir, { recursive: true });

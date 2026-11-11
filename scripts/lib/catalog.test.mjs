@@ -66,6 +66,25 @@ test('a key that could traverse or be read as a git option is rejected', () => {
   }
 });
 
+test('a default_branch that is not a plain branch name is rejected', () => {
+  const options = ['--upload-pack=touch /tmp/pwned', '-x'];
+  const refusedByGit = ['a b', 'a..b', '/main', 'a:b', 'a/', 'a//b', 'a.lock', 'a.lock/b', 'a.', '.a', 'release/.x', '@', 'a@{b', 'a~b', 'a^b', 'a?b', 'a*b', 'a[b', 'a\\b'];
+  const notBranches = ['HEAD', 'refs/heads/main'];
+  const notStrings = [1.1, 0, false, ['main']];
+  for (const bad of [...options, ...refusedByGit, ...notBranches, ...notStrings]) {
+    const problems = validateCatalog({
+      repos: { api: { url: 'https://x.git', default_branch: bad, domain: 'backend', summary: 's', responsibilities: ['r'] } },
+    });
+    assert.ok(problems.some((p) => p.includes('default_branch` must be')), `expected rejection for "${bad}"`);
+  }
+  for (const ok of ['main', 'release/1.2', 'dev_branch', 'feat#1', 'feat+x', 'user@fix', '_dev', '版本']) {
+    const problems = validateCatalog({
+      repos: { api: { url: 'https://x.git', default_branch: ok, domain: 'backend', summary: 's', responsibilities: ['r'] } },
+    });
+    assert.deepEqual(problems, [], `expected "${ok}" to be accepted`);
+  }
+});
+
 test('depends_on referencing an unknown key is reported', () => {
   const problems = validateCatalog({
     repos: { api: { url: 'https://x.git', default_branch: 'main', domain: 'backend', summary: 's', responsibilities: ['r'], depends_on: ['ghost'] } },
