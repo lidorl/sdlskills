@@ -39,6 +39,10 @@ skills (markdown, agent-executed)
 - **`docs/` artifacts** are the state — feature-request `status` frontmatter is the single source of truth for lifecycle position.
 - **`scripts/`** are pure, testable Node (`node:test`), zero-judgment: catalog parsing, workspace assembly, status rendering.
 
+## Optional: pluggable doc store
+
+Git is the default and only store adopters pay for unless they opt in. `doc-store.yml` (meta-root, committed, non-secret — same role as `repos.yml`) selects `git` (default) or `jira-confluence`. When set, `scripts/lib/doc-store.mjs` provides `GitDocStore` (no-op) / `JiraConfluenceDocStore`, and skills shell out to `scripts/sync-doc.mjs push|pull <file>` at their existing read/write points — the same skill → script → external-system pattern as `render-status.mjs`. Sync state (content hash, remote `updatedAt`) lives in a git-ignored sidecar (`workspace/.sync-state/`), not in artifact frontmatter, so docs stay clean. See `docs/design/pluggable-doc-store.md` and `docs/decisions/005`.
+
 ## Multi-repo
 
 Multi-repo is the default; a solo project is N=1 (one catalog entry, one checkout). The effort's repo set is resolved during Design, locked at approval into the design doc's `repos:` frontmatter, and carried into the plan. `classify-change` runs per repo; `close-out` verifies a merged PR per repo. See `docs/decisions/001`–`004` and `docs/design/execution-environment.md`.
