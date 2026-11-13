@@ -46,7 +46,7 @@ External dependencies: `superpowers` plugin (`writing-plans`, `brainstorming`, `
 
 ## Adopting the kit in a project
 
-Run `node install-sdlc.mjs` in the kit root: it asks which tool you use, then starts a guided install (see the README's "Using it in a project"). It installs into a separate SDLC repo (the meta-root), not into a code repository. It vendors the phase skills into `.claude/skills/`, copies the scripts, drops in `CLAUDE.process.md`, seeds `CLAUDE.stack.md` and `repos.example.yml`, wires `package.json` and `.gitignore`, builds the `docs/` skeleton, and installs the `superpowers` plugin:
+Run `node install-sdlc.mjs` in the kit root: it asks which tool you use, then starts a guided install (see the README's [Getting started](README.md#getting-started)). It installs into a separate SDLC repo (the meta-root), not into a code repository. It vendors the phase skills into `.claude/skills/`, copies the scripts, drops in `CLAUDE.process.md`, seeds `CLAUDE.stack.md` and `repos.example.yml`, wires `package.json` and `.gitignore`, builds the `docs/` skeleton, and installs the `superpowers` plugin:
 
 ```bash
 node /path/to/sdlskills/scripts/install-sdlc.mjs <target-dir>
