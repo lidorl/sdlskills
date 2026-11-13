@@ -40,7 +40,7 @@ First-time adopters can't tell what the kit expects. A recent adopter lacked the
 - **No `<target-dir>` argument and stdin and stdout are TTYs:** run the guided flow.
 - **`<target-dir>` given:** today's non-interactive behavior, plus the new prerequisite notes and code-repo warning printed as warnings (never prompting, never blocking).
 - **No argument and not a TTY:** print usage and exit 1, as today.
-- A new `--yes` flag accepts the guided flow's defaults for scripted use alongside an argument... (not needed: an argument already means non-interactive.) Not added.
+- No `--yes` flag: passing a `<target-dir>` already means non-interactive.
 
 ### The guided flow
 
