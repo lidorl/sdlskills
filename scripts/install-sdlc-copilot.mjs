@@ -71,6 +71,12 @@ const STATUS_HOOK = {
 export const COPILOT_LAYOUT = {
   ...CLAUDE_LAYOUT,
   installer: 'install-sdlc-copilot.mjs',
+  toolName: 'GitHub Copilot',
+  otherInstaller: 'install-sdlc.mjs',
+  // VS Code agent mode works without the CLI; the CLI is only needed to install the plugin.
+  cliRequired: false,
+  cliInstallHint:
+    'Optional for VS Code. To install the superpowers plugin from here, install the Copilot CLI: npm install -g @github/copilot',
   skillsDir: '.github/skills',
   extraSkills: ['copilot/skills/code-review', 'copilot/skills/security-review'],
   processFile: PROCESS_FILE,

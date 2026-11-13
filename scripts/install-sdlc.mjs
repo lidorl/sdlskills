@@ -30,6 +30,7 @@ import { join, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import { isEntryPoint } from './lib/is-entry-point.mjs';
+import { commandAvailable, runCli } from './lib/prereqs.mjs';
 
 /** The phase skills, vendored into <target>/.claude/skills/. */
 export const SKILLS = [
@@ -72,6 +73,12 @@ const PKG_DEFAULTS = {
  */
 export const CLAUDE_LAYOUT = {
   installer: 'install-sdlc.mjs',
+  toolName: 'Claude Code',
+  /** The other harness's installer, named in the guided flow. */
+  otherInstaller: 'install-sdlc-copilot.mjs',
+  /** Whether a missing CLI blocks the guided install. */
+  cliRequired: true,
+  cliInstallHint: 'Install Claude Code from https://docs.claude.com/en/docs/claude-code/overview',
   skillsDir: '.claude/skills',
   /** Kit-relative skill directories vendored in addition to SKILLS. */
   extraSkills: [],
@@ -94,15 +101,6 @@ export const CLAUDE_LAYOUT = {
   },
   nextSteps: ["Reference `CLAUDE.process.md` and `CLAUDE.stack.md` from the target's `CLAUDE.md`."],
 };
-
-function cliAvailable(cli) {
-  try {
-    execFileSync(cli, ['--version'], { stdio: 'ignore' });
-    return true;
-  } catch {
-    return false;
-  }
-}
 
 /**
  * @param {object} opts
@@ -253,9 +251,9 @@ export function install({
     nextSteps.push(`Install the superpowers plugin: ${manualInstall}`);
   } else if (dryRun) {
     did('[dry-run] would install superpowers plugin');
-  } else if (cliAvailable(cli)) {
+  } else if (commandAvailable(cli)) {
     try {
-      for (const c of commands) execFileSync(cli, c, { stdio: 'inherit' });
+      for (const c of commands) runCli(cli, c, { stdio: 'inherit' });
       did('installed superpowers plugin');
     } catch {
       warnings.push('superpowers plugin install failed — install it manually.');
