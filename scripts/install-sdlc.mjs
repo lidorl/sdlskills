@@ -29,6 +29,7 @@ import {
 import { join, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
+import { isEntryPoint } from './lib/is-entry-point.mjs';
 
 /** The phase skills, vendored into <target>/.claude/skills/. */
 export const SKILLS = [
@@ -314,4 +315,4 @@ export function main(layout = CLAUDE_LAYOUT) {
   for (const n of r.nextSteps) console.log(`  → ${n}`);
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) main();
+if (isEntryPoint(import.meta.url)) main();

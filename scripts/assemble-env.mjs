@@ -7,6 +7,7 @@ import { readFileSync, existsSync, mkdirSync, writeFileSync, readdirSync, chmodS
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { loadCatalog } from './lib/catalog.mjs';
+import { isEntryPoint } from './lib/is-entry-point.mjs';
 
 // URL-scheme safety (refuse anything but https:// and git@) is enforced in
 // catalog.mjs → validateCatalog, which loadCatalog runs. Callers that pass an
@@ -154,4 +155,4 @@ function main() {
   );
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) main();
+if (isEntryPoint(import.meta.url)) main();

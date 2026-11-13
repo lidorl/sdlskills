@@ -5,6 +5,7 @@
 import { existsSync, readdirSync, rmSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
+import { isEntryPoint } from './lib/is-entry-point.mjs';
 
 /**
  * A checkout is "protected" (skip without --force) if it has uncommitted or
@@ -68,4 +69,4 @@ function main() {
   console.log(`clean-env: removed [${r.removed.join(', ')}]${skippedNote}`);
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) main();
+if (isEntryPoint(import.meta.url)) main();
