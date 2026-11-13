@@ -30,6 +30,10 @@ import { join, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import { isEntryPoint } from './lib/is-entry-point.mjs';
+import { checkPrereqs, commandAvailable, runCli } from './lib/prereqs.mjs';
+import { looksLikeCodeRepo } from './lib/code-repo.mjs';
+import { runGuide } from './lib/guide.mjs';
+import { formatReport } from './lib/report.mjs';
 
 /** The phase skills, vendored into <target>/.claude/skills/. */
 export const SKILLS = [
@@ -72,6 +76,13 @@ const PKG_DEFAULTS = {
  */
 export const CLAUDE_LAYOUT = {
   installer: 'install-sdlc.mjs',
+  toolName: 'Claude Code',
+  /** The other harness's installer, named in the guided flow. */
+  otherInstaller: 'install-sdlc-copilot.mjs',
+  /** Whether a missing CLI blocks the guided install. */
+  cliRequired: false,
+  cliInstallHint:
+    'Not needed for the VS Code extension. To install the superpowers plugin from here, install Claude Code: https://docs.claude.com/en/docs/claude-code/overview',
   skillsDir: '.claude/skills',
   /** Kit-relative skill directories vendored in addition to SKILLS. */
   extraSkills: [],
@@ -95,15 +106,6 @@ export const CLAUDE_LAYOUT = {
   nextSteps: ["Reference `CLAUDE.process.md` and `CLAUDE.stack.md` from the target's `CLAUDE.md`."],
 };
 
-function cliAvailable(cli) {
-  try {
-    execFileSync(cli, ['--version'], { stdio: 'ignore' });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 /**
  * @param {object} opts
  * @param {string} opts.kitRoot     - this repo's root (where skills/, scripts/ live)
@@ -122,7 +124,7 @@ export function install({
   dryRun = false,
   layout = CLAUDE_LAYOUT,
 }) {
-  if (!existsSync(targetDir)) throw new Error(`target directory does not exist: ${targetDir}`);
+  if (!dryRun && !existsSync(targetDir)) throw new Error(`target directory does not exist: ${targetDir}`);
   if (!existsSync(join(kitRoot, 'skills'))) throw new Error(`not a kit root (no skills/): ${kitRoot}`);
 
   const actions = [];
@@ -251,14 +253,16 @@ export function install({
   const manualInstall = commands.map((c) => `\`${cli} ${c.join(' ')}\``).join(' then ');
   if (skipPlugins) {
     nextSteps.push(`Install the superpowers plugin: ${manualInstall}`);
-  } else if (dryRun) {
-    did('[dry-run] would install superpowers plugin');
-  } else if (cliAvailable(cli)) {
-    try {
-      for (const c of commands) execFileSync(cli, c, { stdio: 'inherit' });
-      did('installed superpowers plugin');
-    } catch {
-      warnings.push('superpowers plugin install failed — install it manually.');
+  } else if (commandAvailable(cli)) {
+    if (dryRun) {
+      did('would install superpowers plugin');
+    } else {
+      try {
+        for (const c of commands) runCli(cli, c, { stdio: 'inherit' });
+        did('installed superpowers plugin');
+      } catch {
+        warnings.push('superpowers plugin install failed — install it manually.');
+      }
     }
   } else {
     warnings.push(`\`${cli}\` not on PATH — skipped plugin install.`);
@@ -270,7 +274,7 @@ export function install({
   if (skipNpm) {
     nextSteps.push('Run `npm install` in the target to pull in `yaml`.');
   } else if (dryRun) {
-    did('[dry-run] would run npm install');
+    did('would run npm install');
   } else {
     try {
       execFileSync('npm', ['install'], { cwd: targetDir, stdio: 'inherit' });
@@ -282,37 +286,65 @@ export function install({
 
   nextSteps.push(
     ...layout.nextSteps,
-    'Run `/setup-sdlc` in the target to map the repo and run the autonomy interview.',
+    `Open the target folder in ${layout.toolName} and run \`/setup-sdlc\` to map the repo and run the autonomy interview.`,
   );
 
   return { actions, warnings, nextSteps };
 }
 
-export function main(layout = CLAUDE_LAYOUT) {
+/**
+ * What an install would do, as plain action lines (no "[dry-run]" prefix), for
+ * showing a person before they confirm. Never writes anything.
+ */
+export function planActions({ kitRoot, targetDir, layout = CLAUDE_LAYOUT, skipPlugins = false, skipNpm = false }) {
+  const { actions } = install({ kitRoot, targetDir, layout, skipPlugins, skipNpm, dryRun: true });
+  return actions.map((a) => a.replace(/^\[dry-run\] /, ''));
+}
+
+export async function main(layout = CLAUDE_LAYOUT) {
   const args = process.argv.slice(2);
-  const targetDir = args.find((a) => !a.startsWith('--'));
-  if (!targetDir) {
-    console.error(`usage: node ${layout.installer} <target-dir> [--skip-plugins] [--skip-npm] [--dry-run]`);
-    process.exit(1);
-  }
   const kitRoot = dirname(dirname(fileURLToPath(import.meta.url)));
-  const r = install({
-    kitRoot,
-    targetDir,
+  const flags = {
     skipPlugins: args.includes('--skip-plugins'),
     skipNpm: args.includes('--skip-npm'),
     dryRun: args.includes('--dry-run'),
-    layout,
-  });
+  };
+  let targetDir = args.find((a) => !a.startsWith('--'));
+  const extraWarnings = [];
 
-  console.log(`\n${layout.installer.replace(/\.mjs$/, '')}:`);
-  for (const a of r.actions) console.log(`  ✓ ${a}`);
-  if (r.warnings.length) {
-    console.log('\nwarnings:');
-    for (const w of r.warnings) console.log(`  ! ${w}`);
+  if (targetDir) {
+    // Scripted use: never prompt or block; surface problems as warnings.
+    if (!existsSync(targetDir)) throw new Error(`target directory does not exist: ${targetDir}`);
+    for (const p of checkPrereqs({ layout })) {
+      if (!p.ok && (p.id !== 'tool-cli' || flags.skipPlugins)) extraWarnings.push(`${p.label} not found. ${p.fix}`);
+    }
+    const code = existsSync(targetDir) ? looksLikeCodeRepo(targetDir) : { isCode: false };
+    if (code.isCode) {
+      extraWarnings.push(
+        `${targetDir} looks like a code repository (${code.reason}). The kit belongs in a separate SDLC repo (the meta-root), not inside your code.`,
+      );
+    }
+  } else if (process.stdin.isTTY && process.stdout.isTTY) {
+    targetDir = await runGuide({
+      layout,
+      cwd: process.cwd(),
+      input: process.stdin,
+      output: process.stdout,
+      dryRun: flags.dryRun,
+      preview: (t) => planActions({ kitRoot, targetDir: t, layout, ...flags }),
+    });
+    if (!targetDir) {
+      process.exitCode = 1;
+      return;
+    }
+  } else {
+    console.error(`usage: node ${layout.installer} <target-dir> [--skip-plugins] [--skip-npm] [--dry-run]`);
+    process.exit(1);
   }
-  console.log('\nnext steps:');
-  for (const n of r.nextSteps) console.log(`  → ${n}`);
+
+  const r = install({ kitRoot, targetDir, ...flags, layout });
+  r.warnings.unshift(...extraWarnings);
+  console.log(formatReport({ title: layout.installer.replace(/\.mjs$/, ''), ...r }));
 }
 
-if (isEntryPoint(import.meta.url)) main();
+if (isEntryPoint(import.meta.url)) await main();
