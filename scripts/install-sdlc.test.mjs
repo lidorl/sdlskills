@@ -5,7 +5,8 @@ import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { install, SKILLS, DOCS_DIRS } from './install-sdlc.mjs';
+import { install, SKILLS, DOCS_DIRS, CLAUDE_LAYOUT } from './install-sdlc.mjs';
+import { COPILOT_LAYOUT } from './install-sdlc-copilot.mjs';
 
 const kitRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const opts = (targetDir, extra = {}) => ({
@@ -163,4 +164,13 @@ test('installer-only files are not copied, and stale copies from earlier version
   assert.ok(existsSync(join(dir, 'scripts/lib/catalog.mjs')));
   assert.ok(existsSync(join(dir, 'scripts/lib/is-entry-point.mjs')));
   rmSync(dir, { recursive: true });
+});
+
+test('every `marketplace add` uses a source (owner/repo, URL or path), never a bare marketplace name', () => {
+  const SOURCE = /^([\w.-]+\/[\w.-]+|https?:\/\/\S+|\.{0,2}\/\S*)$/;
+  for (const layout of [CLAUDE_LAYOUT, COPILOT_LAYOUT]) {
+    const adds = layout.plugin.commands.filter((c) => c[0] === 'plugin' && c[1] === 'marketplace' && c[2] === 'add');
+    assert.ok(adds.length > 0, layout.toolName);
+    for (const c of adds) assert.match(c[3], SOURCE, `${layout.toolName}: ${c.join(' ')}`);
+  }
 });

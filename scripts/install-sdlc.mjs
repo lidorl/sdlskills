@@ -115,7 +115,7 @@ export const CLAUDE_LAYOUT = {
   plugin: {
     cli: 'claude',
     commands: [
-      ['plugin', 'marketplace', 'add', 'claude-plugins-official'],
+      ['plugin', 'marketplace', 'add', 'anthropics/claude-plugins-official'],
       ['plugin', 'install', 'superpowers@claude-plugins-official'],
     ],
     /** Extra manual guidance shown whether or not the plugin installed. */
