@@ -1,48 +1,9 @@
-import { createInterface } from 'node:readline';
 import { existsSync, mkdirSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { checkPrereqs } from './prereqs.mjs';
 import { looksLikeCodeRepo } from './code-repo.mjs';
-
-/**
- * Line-at-a-time prompts that survive piped input. readline's own question()
- * drops lines that arrive before it is called and never settles when input
- * ends, so lines are queued and a closed input answers `null`.
- */
-function makePrompter(input, output) {
-  const rl = createInterface({ input, output, terminal: Boolean(input.isTTY) });
-  const queue = [];
-  let waiter = null;
-  let closed = false;
-  rl.on('line', (line) => {
-    if (waiter) {
-      const w = waiter;
-      waiter = null;
-      w(line);
-    } else queue.push(line);
-  });
-  rl.on('close', () => {
-    closed = true;
-    if (waiter) {
-      const w = waiter;
-      waiter = null;
-      w(null);
-    }
-  });
-  const ask = (question) =>
-    new Promise((resolveAnswer) => {
-      if (queue.length) {
-        output.write(question);
-        return resolveAnswer(queue.shift());
-      }
-      if (closed) return resolveAnswer(null);
-      waiter = resolveAnswer;
-      rl.setPrompt(question);
-      rl.prompt();
-    });
-  return { ask, close: () => rl.close() };
-}
+import { makePrompter } from './prompter.mjs';
 
 const expandHome = (p) => (p === '~' || p.startsWith('~/') || p.startsWith('~\\') ? join(homedir(), p.slice(1)) : p);
 

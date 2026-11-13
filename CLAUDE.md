@@ -9,6 +9,7 @@ A reusable, artifact-driven SDLC process for Claude Code plus the skills that im
 - [`CLAUDE.process.md`](CLAUDE.process.md) — the stack-neutral process contract. This is the deliverable: adopters drop it into their project.
 - [`CLAUDE.stack.example.md`](CLAUDE.stack.example.md) — a worked example of the stack-conventions half (NestJS/Prisma/React). Adopters replace it wholesale.
 - [`skills/`](skills/) — the phase skills (see table below).
+- [`install-sdlc.mjs`](install-sdlc.mjs) — the entry point: asks which tool the adopter uses (Claude Code or Copilot), then runs the matching installer below.
 - [`scripts/install-sdlc.mjs`](scripts/install-sdlc.mjs) — scaffolds the kit into a target project (vendors skills, copies scripts, docs skeleton, plugin, `package.json` / `.gitignore` wiring). See "Adopting the kit" below.
 - [`scripts/install-sdlc-copilot.mjs`](scripts/install-sdlc-copilot.mjs) — same installer for GitHub Copilot (VS Code, CLI): renames paths and rewrites references as files land in the target. [`copilot/skills/`](copilot/skills/) holds the review skills only that target gets.
 - [`scripts/render-status.mjs`](scripts/render-status.mjs) — derives `docs/STATUS.md` from feature-request frontmatter.
@@ -45,7 +46,7 @@ External dependencies: `superpowers` plugin (`writing-plans`, `brainstorming`, `
 
 ## Adopting the kit in a project
 
-Run the installer; with no arguments it starts a guided install (see the README's "Using it in a project"). It installs into a separate SDLC repo (the meta-root), not into a code repository. It vendors the phase skills into `.claude/skills/`, copies the scripts, drops in `CLAUDE.process.md`, seeds `CLAUDE.stack.md` and `repos.example.yml`, wires `package.json` and `.gitignore`, builds the `docs/` skeleton, and installs the `superpowers` plugin:
+Run `node install-sdlc.mjs` in the kit root: it asks which tool you use, then starts a guided install (see the README's "Using it in a project"). It installs into a separate SDLC repo (the meta-root), not into a code repository. It vendors the phase skills into `.claude/skills/`, copies the scripts, drops in `CLAUDE.process.md`, seeds `CLAUDE.stack.md` and `repos.example.yml`, wires `package.json` and `.gitignore`, builds the `docs/` skeleton, and installs the `superpowers` plugin:
 
 ```bash
 node /path/to/sdlskills/scripts/install-sdlc.mjs <target-dir>

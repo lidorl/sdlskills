@@ -666,10 +666,10 @@
       <p>The kit ships no application code — it's a process contract plus skills, meant to sit on top of whatever you're building.</p>
       <ol class="steps">
         <li>
-          <p>Run the installer with no arguments for a guided install. It installs into a separate folder, your SDLC repo (the <strong>meta-root</strong>), <em>not</em> into your code repository. It checks the prerequisites, then vendors the skills, copies the scripts, drops in <code>CLAUDE.process.md</code>, seeds <code>CLAUDE.stack.md</code>, builds the <code>docs/</code> skeleton, and installs the <code>superpowers</code> plugin (<code>writing-plans</code>, <code>brainstorming</code>, and the execution and review skills). <code>--dry-run</code> previews first.</p>
-          <pre class="code"><code>node /path/to/sdlskills/scripts/install-sdlc.mjs</code></pre>
+          <p>Run the installer: it asks which tool you use (Claude Code or Copilot), then guides you. It installs into a separate folder, your SDLC repo (the <strong>meta-root</strong>), <em>not</em> into your code repository. It checks the prerequisites, then vendors the skills, copies the scripts, drops in <code>CLAUDE.process.md</code>, seeds <code>CLAUDE.stack.md</code>, builds the <code>docs/</code> skeleton, and installs the <code>superpowers</code> plugin (<code>writing-plans</code>, <code>brainstorming</code>, and the execution and review skills). <code>--dry-run</code> previews first.</p>
+          <pre class="code"><code>node /path/to/sdlskills/install-sdlc.mjs</code></pre>
           <div class="copy-row">
-            <button class="copy-btn" id="copy" data-copy="node /path/to/sdlskills/scripts/install-sdlc.mjs" type="button">Copy</button>
+            <button class="copy-btn" id="copy" data-copy="node /path/to/sdlskills/install-sdlc.mjs" type="button">Copy</button>
           </div>
         </li>
         <li>

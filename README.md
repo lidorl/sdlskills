@@ -48,7 +48,8 @@ Three things keep it practical:
 | [`CLAUDE.process.md`](CLAUDE.process.md) | The stack-neutral process contract — lifecycle, tiers, state model, Definition of Done, ADR format, autonomy policy. **This is the deliverable.** |
 | [`CLAUDE.stack.example.md`](CLAUDE.stack.example.md) | Worked example of the stack-conventions half (NestJS/Prisma/React). Adopters replace it. |
 | [`skills/`](skills/) | The nine phase skills. |
-| [`scripts/install-sdlc.mjs`](scripts/install-sdlc.mjs) | Scaffolds the kit into a target project — see "Using it in a project". |
+| [`install-sdlc.mjs`](install-sdlc.mjs) | **Start here.** Asks which tool you use, then runs the matching installer — see "Using it in a project". |
+| [`scripts/install-sdlc.mjs`](scripts/install-sdlc.mjs) | The Claude Code installer: scaffolds the kit into a target project. `scripts/install-sdlc-copilot.mjs` is the Copilot one. |
 | [`scripts/render-status.mjs`](scripts/render-status.mjs) | Derives `docs/STATUS.md` from feature-request frontmatter. Wired to a `Stop` hook. |
 | [`scripts/assemble-env.mjs`](scripts/assemble-env.mjs) / [`clean-env.mjs`](scripts/clean-env.mjs) | Reconstruct / tear down `workspace/` for a multi-repo effort (see the execution-environment feature). |
 | [`repos.yml`](repos.yml) / [`repos/`](repos/) | The repository catalog — which repo does what. `repos.example.yml` is the annotated template. |
@@ -107,17 +108,18 @@ A solo project has the same shape with one repo. Note that `workspace/` inside t
 
 ### Install
 
-From a terminal in the `sdlskills` folder, run the installer for your tool. With no arguments it starts a **guided install**: it explains the meta-root, checks the prerequisites, asks where to install (type a folder path; it is created if needed), warns if the folder looks like a code repository, shows what it will do, and asks before it does anything.
+From a terminal in the `sdlskills` folder, run:
 
 ```bash
 cd /path/to/sdlskills
-node scripts/install-sdlc.mjs            # Claude Code
-node scripts/install-sdlc-copilot.mjs    # GitHub Copilot (VS Code or CLI)
+node install-sdlc.mjs
 ```
+
+It asks which tool you use (Claude Code or GitHub Copilot, VS Code or CLI), then starts a **guided install**: it explains the meta-root, checks the prerequisites, asks where to install (type a folder path; it is created if needed), warns if the folder looks like a code repository, shows what it will do, and asks before it does anything.
 
 You can also run it from any other folder using the full path to the script. In that case it suggests a new `<current-folder>-workspace` folder next to where you are.
 
-For scripts and CI, pass the folder: `... install-sdlc.mjs <target-dir>` never prompts. Other flags: `--dry-run` shows the plan and changes nothing, `--skip-plugins` and `--skip-npm` opt out of those steps. Re-run it to update the vendored skills and scripts in place; your `CLAUDE.stack.md`, `package.json` and `.gitignore` edits are left alone.
+For scripts and CI, skip the question and run an installer directly with the folder: `node scripts/install-sdlc.mjs <target-dir>` (Claude Code) or `node scripts/install-sdlc-copilot.mjs <target-dir>` (Copilot). These never prompt. Other flags: `--dry-run` shows the plan and changes nothing, `--skip-plugins` and `--skip-npm` opt out of those steps. Re-run it to update the vendored skills and scripts in place; your `CLAUDE.stack.md`, `package.json` and `.gitignore` edits are left alone.
 
 The Copilot cloud agent isn't supported, because the process needs a person at its hard stops.
 
