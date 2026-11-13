@@ -1,48 +1,9 @@
-import { createInterface } from 'node:readline';
 import { existsSync, mkdirSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { checkPrereqs } from './prereqs.mjs';
 import { looksLikeCodeRepo } from './code-repo.mjs';
-
-/**
- * Line-at-a-time prompts that survive piped input. readline's own question()
- * drops lines that arrive before it is called and never settles when input
- * ends, so lines are queued and a closed input answers `null`.
- */
-function makePrompter(input, output) {
-  const rl = createInterface({ input, output, terminal: Boolean(input.isTTY) });
-  const queue = [];
-  let waiter = null;
-  let closed = false;
-  rl.on('line', (line) => {
-    if (waiter) {
-      const w = waiter;
-      waiter = null;
-      w(line);
-    } else queue.push(line);
-  });
-  rl.on('close', () => {
-    closed = true;
-    if (waiter) {
-      const w = waiter;
-      waiter = null;
-      w(null);
-    }
-  });
-  const ask = (question) =>
-    new Promise((resolveAnswer) => {
-      if (queue.length) {
-        output.write(question);
-        return resolveAnswer(queue.shift());
-      }
-      if (closed) return resolveAnswer(null);
-      waiter = resolveAnswer;
-      rl.setPrompt(question);
-      rl.prompt();
-    });
-  return { ask, close: () => rl.close() };
-}
+import { makePrompter } from './prompter.mjs';
 
 const expandHome = (p) => (p === '~' || p.startsWith('~/') || p.startsWith('~\\') ? join(homedir(), p.slice(1)) : p);
 
@@ -53,7 +14,7 @@ const expandHome = (p) => (p === '~' || p.startsWith('~/') || p.startsWith('~\\'
  * @returns the absolute target directory to install into, or null if the user
  *          quit, a required prerequisite is missing, or input closed.
  */
-export async function runGuide({ layout, cwd, input, output, available, nodeVersion, dryRun = false, preview }) {
+export async function runGuide({ layout, cwd, kitRoot, input, output, available, nodeVersion, dryRun = false, preview }) {
   const say = (text = '') => output.write(text + '\n');
   const prompter = makePrompter(input, output);
   const { ask } = prompter;
@@ -63,8 +24,11 @@ export async function runGuide({ layout, cwd, input, output, available, nodeVers
   };
 
   try {
-    const name = basename(cwd);
-    const defaultTarget = join(dirname(cwd), `${name}-workspace`);
+    // Started from the kit repo itself: there is no "your project" to name a default after.
+    const inKit = Boolean(kitRoot) && resolve(kitRoot) === resolve(cwd);
+    const name = inKit ? 'your-code-repo' : basename(cwd);
+    const sdlcName = inKit ? 'your-sdlc-repo' : `${name}-workspace`;
+    const defaultTarget = inKit ? null : join(dirname(cwd), sdlcName);
 
     say(`This installs the SDLC kit for ${layout.toolName} into your SDLC repo (the *meta-root*).`);
     say('');
@@ -73,7 +37,7 @@ export async function runGuide({ layout, cwd, input, output, available, nodeVers
     say('checked out under workspace/ when you start work.');
     say('');
     const tree = [
-      [`${name}-workspace/`, '<- install here (your SDLC repo)'],
+      [`${sdlcName}/`, '<- install here (your SDLC repo)'],
       ['├── docs/', 'feature requests, designs, plans, history'],
       [`├── ${layout.skillsDir}/`, "the kit's skills"],
       [`└── workspace/${name}/`, 'checkouts of your code repos, created later'],
@@ -98,9 +62,18 @@ export async function runGuide({ layout, cwd, input, output, available, nodeVers
     /** Asks for a location until it is usable. Returns the path, or null after stop(). */
     const choosePath = async () => {
       for (;;) {
-        const answer = await ask(`Where should the SDLC repo go? [${defaultTarget}] `);
+        const answer = await ask(
+          defaultTarget
+            ? `Where should the SDLC repo go? [${defaultTarget}] `
+            : 'Where should the SDLC repo go? Type a folder path (created if needed; not your code repo): ',
+        );
         if (answer === null) return stop('Input closed.');
-        const target = resolve(cwd, expandHome(answer.trim() || defaultTarget));
+        const chosen = answer.trim() || defaultTarget;
+        if (!chosen) {
+          say('Please enter a folder path.');
+          continue;
+        }
+        const target = resolve(cwd, expandHome(chosen));
 
         if (existsSync(target) && !statSync(target).isDirectory()) {
           say(`${target} is a file, not a folder. Pick another path.`);

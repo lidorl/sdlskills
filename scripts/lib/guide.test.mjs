@@ -144,3 +144,30 @@ test('a folder that cannot be created is reported and the path is asked again', 
   rmSync(base, { recursive: true });
   rmSync(base0, { recursive: true });
 });
+
+test('run from the kit repo itself: no default, asks until given a path, generic diagram', async () => {
+  const base0 = mkdtempSync(join(tmpdir(), 'guide-kit-'));
+  const kit = join(base0, 'sdlskills');
+  mkdirSync(kit);
+  const target = join(base0, 'my-sdlc');
+  const input = new PassThrough();
+  const output = new PassThrough();
+  let text = '';
+  output.on('data', (c) => (text += c));
+  for (const a of ['', target, 'y']) input.write(a + '\n');
+  const result = await runGuide({
+    layout: CLAUDE_LAYOUT,
+    cwd: kit,
+    kitRoot: kit,
+    input,
+    output,
+    available: () => true,
+    nodeVersion: '20.0.0',
+    preview: () => ['vendored skills'],
+  });
+  assert.equal(result, target);
+  assert.match(text, /Please enter a folder path/);
+  assert.doesNotMatch(text, /sdlskills-workspace/);
+  assert.doesNotMatch(text, /workspace\/sdlskills/);
+  rmSync(base0, { recursive: true });
+});

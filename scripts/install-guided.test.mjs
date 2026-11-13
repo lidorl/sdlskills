@@ -87,3 +87,10 @@ test('the plan does not promise a plugin install when the CLI is missing', () =>
   const r = install({ kitRoot, targetDir: tmp(), layout, dryRun: true, skipNpm: true });
   assert.equal(r.actions.some((a) => /\[dry-run\] \[dry-run\]/.test(a)), false);
 });
+
+test('the root install-sdlc.mjs without a TTY prints usage naming both installers and exits 1', () => {
+  const r = run(join(kitRoot, 'install-sdlc.mjs'), []);
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /install-sdlc\.mjs/);
+  assert.match(r.stderr, /install-sdlc-copilot\.mjs/);
+});
