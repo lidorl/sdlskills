@@ -83,6 +83,7 @@ Replace "Using it in a project" with:
 - Node 20+ as the floor (the scripts use `readdirSync({ recursive })` and `node:test`); no `engines` field exists today.
 - `gh` is optional at install time because only close-out uses it.
 - Default install path is a sibling `<name>-workspace` folder (the user's choice; note the kit also creates a `workspace/` folder inside the meta-root for repo checkouts, so the README must keep the two distinct).
+- User-facing text (installer output, README) introduces the term once as "your SDLC repo (the *meta-root*)" and then uses the plain name; `CLAUDE.process.md` and the skills keep saying meta-root.
 - The code-repo heuristic above, and that it only warns.
 
 ## Left to the builder
