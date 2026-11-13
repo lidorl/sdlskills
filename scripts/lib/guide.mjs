@@ -95,42 +95,57 @@ export async function runGuide({ layout, cwd, input, output, available, nodeVers
     }
     say('');
 
-    let target;
-    for (;;) {
-      const answer = await ask(`Where should the SDLC repo go? [${defaultTarget}] `);
-      if (answer === null) return stop('Input closed.');
-      target = resolve(cwd, expandHome(answer.trim() || defaultTarget));
-
-      if (existsSync(target) && !statSync(target).isDirectory()) {
-        say(`${target} is a file, not a folder. Pick another path.`);
-        continue;
-      }
-      const code = existsSync(target) ? looksLikeCodeRepo(target) : { isCode: false };
-      if (!code.isCode) break;
-
-      say(`! ${target} looks like a code repository (${code.reason}).`);
-      say('  The kit belongs in a separate SDLC repo, not inside your code.');
-      let choice;
+    /** Asks for a location until it is usable. Returns the path, or null after stop(). */
+    const choosePath = async () => {
       for (;;) {
-        const c = await ask('  [c]ontinue here anyway, pick [a]nother path, or [q]uit? ');
-        if (c === null) return stop('Input closed.');
-        choice = c.trim().toLowerCase()[0];
-        if (choice && 'caq'.includes(choice)) break;
+        const answer = await ask(`Where should the SDLC repo go? [${defaultTarget}] `);
+        if (answer === null) return stop('Input closed.');
+        const target = resolve(cwd, expandHome(answer.trim() || defaultTarget));
+
+        if (existsSync(target) && !statSync(target).isDirectory()) {
+          say(`${target} is a file, not a folder. Pick another path.`);
+          continue;
+        }
+        const code = existsSync(target) ? looksLikeCodeRepo(target) : { isCode: false };
+        if (!code.isCode) return target;
+
+        say(`! ${target} looks like a code repository (${code.reason}).`);
+        say('  The kit belongs in a separate SDLC repo, not inside your code.');
+        let choice;
+        for (;;) {
+          const c = await ask('  [c]ontinue here anyway, pick [a]nother path, or [q]uit? ');
+          if (c === null) return stop('Input closed.');
+          choice = c.trim().toLowerCase()[0];
+          if (choice && 'caq'.includes(choice)) break;
+        }
+        if (choice === 'q') return stop('Quit.');
+        if (choice === 'c') return target;
       }
-      if (choice === 'q') return stop('Quit.');
-      if (choice === 'c') break;
+    };
+
+    for (;;) {
+      const target = await choosePath();
+      if (target === null) return null;
+
+      say('');
+      say("Here's what will happen:");
+      if (!existsSync(target)) say(`  - create the folder ${target}`);
+      for (const a of preview(target)) say(`  - ${a}`);
+      const go = await ask('Proceed? [Y/n] ');
+      if (go === null) return stop('Input closed.');
+      if (go.trim() && go.trim().toLowerCase()[0] !== 'y') return stop('Cancelled.');
+
+      if (!dryRun && !existsSync(target)) {
+        try {
+          mkdirSync(target, { recursive: true });
+        } catch (err) {
+          say(`Can't create ${target}: ${err.message}. Pick another path.`);
+          say('');
+          continue;
+        }
+      }
+      return target;
     }
-
-    say('');
-    say("Here's what will happen:");
-    if (!existsSync(target)) say(`  - create the folder ${target}`);
-    for (const a of preview(target)) say(`  - ${a}`);
-    const go = await ask('Proceed? [Y/n] ');
-    if (go === null) return stop('Input closed.');
-    if (go.trim() && go.trim().toLowerCase()[0] !== 'y') return stop('Cancelled.');
-
-    if (!dryRun && !existsSync(target)) mkdirSync(target, { recursive: true });
-    return target;
   } finally {
     prompter.close();
   }

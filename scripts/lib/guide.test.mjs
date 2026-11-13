@@ -133,3 +133,14 @@ test('closed input mid-prompt resolves null without throwing', async () => {
   assert.equal(result, null);
   rmSync(base, { recursive: true });
 });
+
+test('a folder that cannot be created is reported and the path is asked again', async () => {
+  const base0 = mkdtempSync(join(tmpdir(), 'guide-blocked-'));
+  const file = join(base0, 'f');
+  writeFileSync(file, 'x');
+  const { result, text, base } = await drive([join(file, 'sub'), 'y', '', 'y']);
+  assert.match(text, /Can't create/);
+  assert.equal(result, join(base, 'acme-api-workspace'));
+  rmSync(base, { recursive: true });
+  rmSync(base0, { recursive: true });
+});

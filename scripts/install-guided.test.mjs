@@ -5,7 +5,7 @@ import { mkdtempSync, mkdirSync, existsSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { install } from './install-sdlc.mjs';
+import { install, planActions, CLAUDE_LAYOUT } from './install-sdlc.mjs';
 
 const kitRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const scripts = {
@@ -66,4 +66,24 @@ test('the last next step tells the user to open the folder in their tool', () =>
     assert.match(r.stdout, new RegExp(`Open .* in ${tool} and run \`/setup-sdlc\``), name);
     rmSync(dir, { recursive: true });
   }
+});
+
+test('a missing target still fails with exit 1, even with --dry-run', () => {
+  const r = run(scripts.claude, [join(tmp(), 'nope'), '--dry-run', ...FLAGS]);
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /does not exist/);
+});
+
+test('the plan shown before installing has no [dry-run] prefixes', () => {
+  const lines = planActions({ kitRoot, targetDir: tmp(), skipPlugins: true, skipNpm: true });
+  assert.ok(lines.length > 0);
+  for (const l of lines) assert.doesNotMatch(l, /dry-run/, l);
+});
+
+test('the plan does not promise a plugin install when the CLI is missing', () => {
+  const layout = { ...CLAUDE_LAYOUT, plugin: { ...CLAUDE_LAYOUT.plugin, cli: 'definitely-not-a-cli' } };
+  const lines = planActions({ kitRoot, targetDir: tmp(), layout, skipNpm: true });
+  assert.equal(lines.some((l) => /superpowers plugin/.test(l)), false, lines.join('\n'));
+  const r = install({ kitRoot, targetDir: tmp(), layout, dryRun: true, skipNpm: true });
+  assert.equal(r.actions.some((a) => /\[dry-run\] \[dry-run\]/.test(a)), false);
 });

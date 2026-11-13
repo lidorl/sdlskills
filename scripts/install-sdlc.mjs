@@ -253,14 +253,16 @@ export function install({
   const manualInstall = commands.map((c) => `\`${cli} ${c.join(' ')}\``).join(' then ');
   if (skipPlugins) {
     nextSteps.push(`Install the superpowers plugin: ${manualInstall}`);
-  } else if (dryRun) {
-    did('[dry-run] would install superpowers plugin');
   } else if (commandAvailable(cli)) {
-    try {
-      for (const c of commands) runCli(cli, c, { stdio: 'inherit' });
-      did('installed superpowers plugin');
-    } catch {
-      warnings.push('superpowers plugin install failed — install it manually.');
+    if (dryRun) {
+      did('would install superpowers plugin');
+    } else {
+      try {
+        for (const c of commands) runCli(cli, c, { stdio: 'inherit' });
+        did('installed superpowers plugin');
+      } catch {
+        warnings.push('superpowers plugin install failed — install it manually.');
+      }
     }
   } else {
     warnings.push(`\`${cli}\` not on PATH — skipped plugin install.`);
@@ -272,7 +274,7 @@ export function install({
   if (skipNpm) {
     nextSteps.push('Run `npm install` in the target to pull in `yaml`.');
   } else if (dryRun) {
-    did('[dry-run] would run npm install');
+    did('would run npm install');
   } else {
     try {
       execFileSync('npm', ['install'], { cwd: targetDir, stdio: 'inherit' });
@@ -290,6 +292,15 @@ export function install({
   return { actions, warnings, nextSteps };
 }
 
+/**
+ * What an install would do, as plain action lines (no "[dry-run]" prefix), for
+ * showing a person before they confirm. Never writes anything.
+ */
+export function planActions({ kitRoot, targetDir, layout = CLAUDE_LAYOUT, skipPlugins = false, skipNpm = false }) {
+  const { actions } = install({ kitRoot, targetDir, layout, skipPlugins, skipNpm, dryRun: true });
+  return actions.map((a) => a.replace(/^\[dry-run\] /, ''));
+}
+
 export async function main(layout = CLAUDE_LAYOUT) {
   const args = process.argv.slice(2);
   const kitRoot = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -303,6 +314,7 @@ export async function main(layout = CLAUDE_LAYOUT) {
 
   if (targetDir) {
     // Scripted use: never prompt or block; surface problems as warnings.
+    if (!existsSync(targetDir)) throw new Error(`target directory does not exist: ${targetDir}`);
     for (const p of checkPrereqs({ layout })) {
       if (!p.ok && (p.id !== 'tool-cli' || flags.skipPlugins)) extraWarnings.push(`${p.label} not found. ${p.fix}`);
     }
@@ -319,7 +331,7 @@ export async function main(layout = CLAUDE_LAYOUT) {
       input: process.stdin,
       output: process.stdout,
       dryRun: flags.dryRun,
-      preview: (t) => install({ kitRoot, targetDir: t, ...flags, dryRun: true, layout }).actions,
+      preview: (t) => planActions({ kitRoot, targetDir: t, layout, ...flags }),
     });
     if (!targetDir) {
       process.exitCode = 1;
