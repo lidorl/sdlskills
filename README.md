@@ -17,6 +17,7 @@ A reusable **agentic SDLC kit** for Claude Code and GitHub Copilot: an opinionat
 - [Layout](#layout)
 - [Skills](#skills)
 - [Non-goals](#non-goals)
+- [License](#license)
 
 ## Getting started
 
@@ -182,3 +183,7 @@ External: `superpowers` plugin (`writing-plans`, `brainstorming`, `executing-pla
 ## Non-goals
 
 No application code. Process + tooling only, layered onto whatever codebase adopts it. Multi-agent / parallel execution is out of scope for now — see [`docs/kit-open-items.md`](docs/kit-open-items.md).
+
+## License
+
+[MIT](LICENSE) © Lidor Linder. The software is provided as is, without warranty or liability; see the license text.
