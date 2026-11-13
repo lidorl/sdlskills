@@ -107,12 +107,15 @@ A solo project has the same shape with one repo. Note that `workspace/` inside t
 
 ### Install
 
-Run the installer from anywhere, in a terminal. With no arguments it starts a **guided install**: it explains the meta-root, checks the prerequisites, asks where to install (suggesting a new `<your-folder>-workspace` next to where you are), warns if the folder looks like a code repository, shows what it will do, and asks before it does anything.
+From a terminal in the `sdlskills` folder, run the installer for your tool. With no arguments it starts a **guided install**: it explains the meta-root, checks the prerequisites, asks where to install (type a folder path; it is created if needed), warns if the folder looks like a code repository, shows what it will do, and asks before it does anything.
 
 ```bash
-node /path/to/sdlskills/scripts/install-sdlc.mjs            # Claude Code
-node /path/to/sdlskills/scripts/install-sdlc-copilot.mjs    # GitHub Copilot (VS Code or CLI)
+cd /path/to/sdlskills
+node scripts/install-sdlc.mjs            # Claude Code
+node scripts/install-sdlc-copilot.mjs    # GitHub Copilot (VS Code or CLI)
 ```
+
+You can also run it from any other folder using the full path to the script. In that case it suggests a new `<current-folder>-workspace` folder next to where you are.
 
 For scripts and CI, pass the folder: `... install-sdlc.mjs <target-dir>` never prompts. Other flags: `--dry-run` shows the plan and changes nothing, `--skip-plugins` and `--skip-npm` opt out of those steps. Re-run it to update the vendored skills and scripts in place; your `CLAUDE.stack.md`, `package.json` and `.gitignore` edits are left alone.
 

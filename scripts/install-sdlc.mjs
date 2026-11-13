@@ -328,6 +328,7 @@ export async function main(layout = CLAUDE_LAYOUT) {
     targetDir = await runGuide({
       layout,
       cwd: process.cwd(),
+      kitRoot,
       input: process.stdin,
       output: process.stdout,
       dryRun: flags.dryRun,

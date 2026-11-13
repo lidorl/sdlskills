@@ -53,7 +53,7 @@ const expandHome = (p) => (p === '~' || p.startsWith('~/') || p.startsWith('~\\'
  * @returns the absolute target directory to install into, or null if the user
  *          quit, a required prerequisite is missing, or input closed.
  */
-export async function runGuide({ layout, cwd, input, output, available, nodeVersion, dryRun = false, preview }) {
+export async function runGuide({ layout, cwd, kitRoot, input, output, available, nodeVersion, dryRun = false, preview }) {
   const say = (text = '') => output.write(text + '\n');
   const prompter = makePrompter(input, output);
   const { ask } = prompter;
@@ -63,8 +63,11 @@ export async function runGuide({ layout, cwd, input, output, available, nodeVers
   };
 
   try {
-    const name = basename(cwd);
-    const defaultTarget = join(dirname(cwd), `${name}-workspace`);
+    // Started from the kit repo itself: there is no "your project" to name a default after.
+    const inKit = Boolean(kitRoot) && resolve(kitRoot) === resolve(cwd);
+    const name = inKit ? 'your-code-repo' : basename(cwd);
+    const sdlcName = inKit ? 'your-sdlc-repo' : `${name}-workspace`;
+    const defaultTarget = inKit ? null : join(dirname(cwd), sdlcName);
 
     say(`This installs the SDLC kit for ${layout.toolName} into your SDLC repo (the *meta-root*).`);
     say('');
@@ -73,7 +76,7 @@ export async function runGuide({ layout, cwd, input, output, available, nodeVers
     say('checked out under workspace/ when you start work.');
     say('');
     const tree = [
-      [`${name}-workspace/`, '<- install here (your SDLC repo)'],
+      [`${sdlcName}/`, '<- install here (your SDLC repo)'],
       ['├── docs/', 'feature requests, designs, plans, history'],
       [`├── ${layout.skillsDir}/`, "the kit's skills"],
       [`└── workspace/${name}/`, 'checkouts of your code repos, created later'],
@@ -98,9 +101,18 @@ export async function runGuide({ layout, cwd, input, output, available, nodeVers
     /** Asks for a location until it is usable. Returns the path, or null after stop(). */
     const choosePath = async () => {
       for (;;) {
-        const answer = await ask(`Where should the SDLC repo go? [${defaultTarget}] `);
+        const answer = await ask(
+          defaultTarget
+            ? `Where should the SDLC repo go? [${defaultTarget}] `
+            : 'Where should the SDLC repo go? Type a folder path (created if needed; not your code repo): ',
+        );
         if (answer === null) return stop('Input closed.');
-        const target = resolve(cwd, expandHome(answer.trim() || defaultTarget));
+        const chosen = answer.trim() || defaultTarget;
+        if (!chosen) {
+          say('Please enter a folder path.');
+          continue;
+        }
+        const target = resolve(cwd, expandHome(chosen));
 
         if (existsSync(target) && !statSync(target).isDirectory()) {
           say(`${target} is a file, not a folder. Pick another path.`);
