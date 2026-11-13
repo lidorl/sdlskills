@@ -1,6 +1,11 @@
 import { execFileSync } from 'node:child_process';
+import { existsSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 
 const NODE_MIN_MAJOR = 20;
+/** Where CLIs commonly live without being on PATH (e.g. behind a shell alias). */
+const KNOWN_DIRS = ['.local/bin', '.claude/local'];
 const SAFE_TOKEN = /^[A-Za-z0-9@._:/=-]+$/;
 
 /**
@@ -9,7 +14,8 @@ const SAFE_TOKEN = /^[A-Za-z0-9@._:/=-]+$/;
  * warn about passing an args array together with `shell: true`.
  */
 function invoke(cmd, args, { exec = execFileSync, platform = process.platform, stdio = 'ignore' } = {}) {
-  if (platform === 'win32') {
+  // A real .exe needs no shell, so its path may hold spaces and backslashes.
+  if (platform === 'win32' && !/\.exe$/i.test(cmd)) {
     const parts = [cmd, ...args];
     // The shell parses this string, so only plain tokens may reach it.
     if (!parts.every((p) => SAFE_TOKEN.test(p))) throw new Error(`unsafe command for shell: ${parts.join(' ')}`);
@@ -28,6 +34,22 @@ export function commandAvailable(cmd, opts) {
   }
 }
 
+/**
+ * Where to run `cmd` from: the bare name if it is on PATH, else a known install
+ * location, else null. Shell aliases are invisible to child processes, so a CLI
+ * that "works in my terminal" may only be reachable this way.
+ */
+export function findCli(cmd, { exec, platform = process.platform, home = homedir(), exists = existsSync } = {}) {
+  const opts = { exec, platform };
+  if (commandAvailable(cmd, opts)) return cmd;
+  const ext = platform === 'win32' ? '.exe' : '';
+  for (const dir of KNOWN_DIRS) {
+    const candidate = join(home, dir, cmd + ext);
+    if (exists(candidate) && commandAvailable(candidate, opts)) return candidate;
+  }
+  return null;
+}
+
 /** Runs `cmd args...`; throws if it fails. */
 export function runCli(cmd, args, opts) {
   invoke(cmd, args, opts);
@@ -36,7 +58,7 @@ export function runCli(cmd, args, opts) {
 /**
  * @returns {{ id: 'node'|'git'|'tool-cli'|'gh', label: string, ok: boolean, required: boolean, fix: string }[]}
  */
-export function checkPrereqs({ layout, nodeVersion = process.versions.node, available = commandAvailable }) {
+export function checkPrereqs({ layout, nodeVersion = process.versions.node, available = (cmd) => findCli(cmd) !== null }) {
   const major = Number(String(nodeVersion).split('.')[0]);
   return [
     {
