@@ -52,7 +52,7 @@ First-time adopters can't tell what the kit expects. A recent adopter lacked the
    - The tool's CLI: `claude` for Claude Code; `copilot` for Copilot. For Copilot this is optional, since VS Code agent mode works without the CLI, but the plugin install needs it.
    - GitHub CLI `gh` (optional now, needed at close-out for PR verification).
    Required items that are missing stop the flow with the fix. Optional ones continue.
-4. **Ask where to install.** Default: a new folder next to the current directory, named after it plus `-meta` (e.g. `acme-api` → `acme-api-meta`). The user can type any path. If the path doesn't exist, offer to create it.
+4. **Ask where to install.** Default: a new folder next to the current directory, named after it plus `-workspace` (e.g. `acme-api` → `acme-api-workspace`). The user can type any path. If the path doesn't exist, offer to create it.
 5. **Code-repo check.** If the chosen path looks like a code repository, warn and ask: continue, pick another path, or quit. "Looks like code" means it is a git repo with a source signal: a `src/`, `app/` or `lib/` directory, or a build manifest (`package.json` with `dependencies` beyond the kit's own, `pyproject.toml`, `go.mod`, `pom.xml`, `Cargo.toml`, `*.csproj`). A directory already holding the kit (`.claude/skills/` or `.github/skills/` with kit skills) is never flagged.
 6. **Show the plan** — the same action list `--dry-run` produces — and ask to proceed.
 7. **Install**, then print the summary.
@@ -82,7 +82,7 @@ Replace "Using it in a project" with:
 - The tool is chosen by which script the user runs; the guide confirms it and points to the other script rather than asking and switching layouts. (Avoids a circular import between the two installers.)
 - Node 20+ as the floor (the scripts use `readdirSync({ recursive })` and `node:test`); no `engines` field exists today.
 - `gh` is optional at install time because only close-out uses it.
-- Default install path is a sibling `<name>-meta` folder.
+- Default install path is a sibling `<name>-workspace` folder (the user's choice; note the kit also creates a `workspace/` folder inside the meta-root for repo checkouts, so the README must keep the two distinct).
 - The code-repo heuristic above, and that it only warns.
 
 ## Left to the builder
