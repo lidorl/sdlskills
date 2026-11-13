@@ -76,7 +76,12 @@ export function createUi({ input, output, env = process.env }) {
         if (key.name === 'up' || key.name === 'k') index = (index - 1 + choices.length) % choices.length;
         else if (key.name === 'down' || key.name === 'j') index = (index + 1) % choices.length;
         else if (/^[1-9]$/.test(str ?? '') && Number(str) <= choices.length) index = Number(str) - 1;
-        else return;
+        else {
+          // A choice's own key (y/n, c/a/q, ...) picks it at once, like the old typed prompts.
+          const hit = key.ctrl || key.meta ? undefined : choices.find((c) => c.key && c.key === str?.toLowerCase());
+          if (hit) return finish(hit.value);
+          return;
+        }
         draw();
       };
       emitKeypressEvents(input);

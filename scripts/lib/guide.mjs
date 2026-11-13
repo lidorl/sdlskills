@@ -105,7 +105,8 @@ export async function runGuide({
 
         say(`${style.yellow('!')} ${target} looks like a code repository (${code.reason}).`);
         say('  The kit belongs in a separate SDLC repo, not inside your code.');
-        const choice = await ui.select({ message: 'What now?', choices: CODE_REPO_CHOICES });
+        // Default to the safe option: a reflexive Enter must not install into a code repo.
+        const choice = await ui.select({ message: 'What now?', choices: CODE_REPO_CHOICES, initial: 1 });
         if (choice === null || choice === 'q') return stop(choice === null ? 'Cancelled.' : 'Quit.');
         if (choice === 'c') return target;
       }

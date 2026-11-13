@@ -55,6 +55,11 @@ test('interactive: `initial` sets the starting highlight', async () => {
   assert.equal((await pick([KEY.enter], { select: { initial: 1 } })).value, 'copilot');
 });
 
+test("interactive: a choice's key picks it immediately, no Enter needed", async () => {
+  assert.equal((await pick(['g'])).value, 'copilot');
+  assert.equal((await pick(['C'])).value, 'claude');
+});
+
 test('interactive: Esc and Ctrl-C cancel with null', async () => {
   assert.equal((await pick([KEY.esc])).value, null);
   assert.equal((await pick([KEY.ctrlC])).value, null);

@@ -171,3 +171,14 @@ test('run from the kit repo itself: no default, asks until given a path, generic
   assert.doesNotMatch(text, /workspace\/sdlskills/);
   rmSync(base0, { recursive: true });
 });
+
+test('Enter at the code-repo warning does not continue into the code repo', async () => {
+  const base0 = mkdtempSync(join(tmpdir(), 'guide-code-'));
+  const code = gitRepoWith(base0, 'code', 'src');
+  const clean = join(base0, 'clean');
+  // '' is a bare Enter: it must mean "pick another path", never "continue here anyway".
+  const { result, base } = await drive([code, '', clean, 'y'], { end: true });
+  assert.equal(result, clean);
+  rmSync(base, { recursive: true });
+  rmSync(base0, { recursive: true });
+});
