@@ -22,6 +22,7 @@
  * Flags:  --skip-plugins  --skip-npm  --dry-run
  */
 import { CLAUDE_LAYOUT, main } from './install-sdlc.mjs';
+import { isEntryPoint } from './lib/is-entry-point.mjs';
 
 const PROCESS_FILE = '.github/instructions/sdlc-process.instructions.md';
 const STACK_FILE = '.github/instructions/sdlc-stack.instructions.md';
@@ -90,4 +91,4 @@ export const COPILOT_LAYOUT = {
   nextSteps: [`Adapt \`${STACK_FILE}\` to the real stack (or let \`/setup-sdlc\` do it).`],
 };
 
-if (import.meta.url === `file://${process.argv[1]}`) main(COPILOT_LAYOUT);
+if (isEntryPoint(import.meta.url)) main(COPILOT_LAYOUT);
