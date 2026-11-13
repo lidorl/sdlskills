@@ -76,7 +76,7 @@ export const COPILOT_LAYOUT = {
   // VS Code agent mode works without the CLI; the CLI is only needed to install the plugin.
   cliRequired: false,
   cliInstallHint:
-    'Optional for VS Code. To install the superpowers plugin from here, install the Copilot CLI: npm install -g @github/copilot',
+    'Not needed for VS Code agent mode. To install the superpowers plugin from here, install the Copilot CLI: npm install -g @github/copilot',
   skillsDir: '.github/skills',
   extraSkills: ['copilot/skills/code-review', 'copilot/skills/security-review'],
   processFile: PROCESS_FILE,
@@ -97,4 +97,4 @@ export const COPILOT_LAYOUT = {
   nextSteps: [`Adapt \`${STACK_FILE}\` to the real stack (or let \`/setup-sdlc\` do it).`],
 };
 
-if (isEntryPoint(import.meta.url)) main(COPILOT_LAYOUT);
+if (isEntryPoint(import.meta.url)) await main(COPILOT_LAYOUT);

@@ -72,10 +72,14 @@ export async function runGuide({ layout, cwd, input, output, available, nodeVers
     say('and the docs/ trail. It is not your code: your code repositories stay untouched and are');
     say('checked out under workspace/ when you start work.');
     say('');
-    say(`  ${name}-workspace/            <- install here (your SDLC repo)`);
-    say(`  ├── docs/                    feature requests, designs, plans, history`);
-    say(`  ├── ${layout.skillsDir}/        the kit's skills`);
-    say(`  └── workspace/${name}/       checkouts of your code repos, created later`);
+    const tree = [
+      [`${name}-workspace/`, '<- install here (your SDLC repo)'],
+      ['├── docs/', 'feature requests, designs, plans, history'],
+      [`├── ${layout.skillsDir}/`, "the kit's skills"],
+      [`└── workspace/${name}/`, 'checkouts of your code repos, created later'],
+    ];
+    const width = Math.max(...tree.map(([left]) => left.length)) + 3;
+    for (const [left, note] of tree) say(`  ${left.padEnd(width)}${note}`);
     say('');
     say(`This installer is for ${layout.toolName}. Using a different tool? Run scripts/${layout.otherInstaller} instead.`);
     say('');

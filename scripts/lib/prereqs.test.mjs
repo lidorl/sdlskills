@@ -28,9 +28,9 @@ test('git missing is required', () => {
   assert.equal(git.required, true);
 });
 
-test('claude CLI is required for the Claude layout, optional for Copilot', () => {
+test('the tool CLI is optional for both layouts (only the plugin install needs it)', () => {
   for (const [layout, required] of [
-    [CLAUDE_LAYOUT, true],
+    [CLAUDE_LAYOUT, false],
     [COPILOT_LAYOUT, false],
   ]) {
     const cli = find(

@@ -30,7 +30,9 @@ import { join, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import { isEntryPoint } from './lib/is-entry-point.mjs';
-import { commandAvailable, runCli } from './lib/prereqs.mjs';
+import { checkPrereqs, commandAvailable, runCli } from './lib/prereqs.mjs';
+import { looksLikeCodeRepo } from './lib/code-repo.mjs';
+import { runGuide } from './lib/guide.mjs';
 import { formatReport } from './lib/report.mjs';
 
 /** The phase skills, vendored into <target>/.claude/skills/. */
@@ -78,8 +80,9 @@ export const CLAUDE_LAYOUT = {
   /** The other harness's installer, named in the guided flow. */
   otherInstaller: 'install-sdlc-copilot.mjs',
   /** Whether a missing CLI blocks the guided install. */
-  cliRequired: true,
-  cliInstallHint: 'Install Claude Code from https://docs.claude.com/en/docs/claude-code/overview',
+  cliRequired: false,
+  cliInstallHint:
+    'Not needed for the VS Code extension. To install the superpowers plugin from here, install Claude Code: https://docs.claude.com/en/docs/claude-code/overview',
   skillsDir: '.claude/skills',
   /** Kit-relative skill directories vendored in addition to SKILLS. */
   extraSkills: [],
@@ -121,7 +124,7 @@ export function install({
   dryRun = false,
   layout = CLAUDE_LAYOUT,
 }) {
-  if (!existsSync(targetDir)) throw new Error(`target directory does not exist: ${targetDir}`);
+  if (!dryRun && !existsSync(targetDir)) throw new Error(`target directory does not exist: ${targetDir}`);
   if (!existsSync(join(kitRoot, 'skills'))) throw new Error(`not a kit root (no skills/): ${kitRoot}`);
 
   const actions = [];
@@ -281,30 +284,55 @@ export function install({
 
   nextSteps.push(
     ...layout.nextSteps,
-    'Run `/setup-sdlc` in the target to map the repo and run the autonomy interview.',
+    `Open the target folder in ${layout.toolName} and run \`/setup-sdlc\` to map the repo and run the autonomy interview.`,
   );
 
   return { actions, warnings, nextSteps };
 }
 
-export function main(layout = CLAUDE_LAYOUT) {
+export async function main(layout = CLAUDE_LAYOUT) {
   const args = process.argv.slice(2);
-  const targetDir = args.find((a) => !a.startsWith('--'));
-  if (!targetDir) {
-    console.error(`usage: node ${layout.installer} <target-dir> [--skip-plugins] [--skip-npm] [--dry-run]`);
-    process.exit(1);
-  }
   const kitRoot = dirname(dirname(fileURLToPath(import.meta.url)));
-  const r = install({
-    kitRoot,
-    targetDir,
+  const flags = {
     skipPlugins: args.includes('--skip-plugins'),
     skipNpm: args.includes('--skip-npm'),
     dryRun: args.includes('--dry-run'),
-    layout,
-  });
+  };
+  let targetDir = args.find((a) => !a.startsWith('--'));
+  const extraWarnings = [];
 
+  if (targetDir) {
+    // Scripted use: never prompt or block; surface problems as warnings.
+    for (const p of checkPrereqs({ layout })) {
+      if (!p.ok && (p.id !== 'tool-cli' || flags.skipPlugins)) extraWarnings.push(`${p.label} not found. ${p.fix}`);
+    }
+    const code = existsSync(targetDir) ? looksLikeCodeRepo(targetDir) : { isCode: false };
+    if (code.isCode) {
+      extraWarnings.push(
+        `${targetDir} looks like a code repository (${code.reason}). The kit belongs in a separate SDLC repo (the meta-root), not inside your code.`,
+      );
+    }
+  } else if (process.stdin.isTTY && process.stdout.isTTY) {
+    targetDir = await runGuide({
+      layout,
+      cwd: process.cwd(),
+      input: process.stdin,
+      output: process.stdout,
+      dryRun: flags.dryRun,
+      preview: (t) => install({ kitRoot, targetDir: t, ...flags, dryRun: true, layout }).actions,
+    });
+    if (!targetDir) {
+      process.exitCode = 1;
+      return;
+    }
+  } else {
+    console.error(`usage: node ${layout.installer} <target-dir> [--skip-plugins] [--skip-npm] [--dry-run]`);
+    process.exit(1);
+  }
+
+  const r = install({ kitRoot, targetDir, ...flags, layout });
+  r.warnings.unshift(...extraWarnings);
   console.log(formatReport({ title: layout.installer.replace(/\.mjs$/, ''), ...r }));
 }
 
-if (isEntryPoint(import.meta.url)) main();
+if (isEntryPoint(import.meta.url)) await main();
