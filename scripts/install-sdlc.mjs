@@ -31,6 +31,7 @@ import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import { isEntryPoint } from './lib/is-entry-point.mjs';
 import { commandAvailable, runCli } from './lib/prereqs.mjs';
+import { formatReport } from './lib/report.mjs';
 
 /** The phase skills, vendored into <target>/.claude/skills/. */
 export const SKILLS = [
@@ -303,14 +304,7 @@ export function main(layout = CLAUDE_LAYOUT) {
     layout,
   });
 
-  console.log(`\n${layout.installer.replace(/\.mjs$/, '')}:`);
-  for (const a of r.actions) console.log(`  ✓ ${a}`);
-  if (r.warnings.length) {
-    console.log('\nwarnings:');
-    for (const w of r.warnings) console.log(`  ! ${w}`);
-  }
-  console.log('\nnext steps:');
-  for (const n of r.nextSteps) console.log(`  → ${n}`);
+  console.log(formatReport({ title: layout.installer.replace(/\.mjs$/, ''), ...r }));
 }
 
 if (isEntryPoint(import.meta.url)) main();
