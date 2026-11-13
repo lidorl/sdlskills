@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { commandAvailable, runCli, checkPrereqs } from './prereqs.mjs';
+import { commandAvailable, runCli, checkPrereqs, findCli } from './prereqs.mjs';
 import { CLAUDE_LAYOUT } from '../install-sdlc.mjs';
 import { COPILOT_LAYOUT } from '../install-sdlc-copilot.mjs';
 
@@ -83,4 +83,42 @@ test('on win32, refuses command or args that are not plain tokens', () => {
   const exec = () => assert.fail('must not run');
   assert.throws(() => runCli('copilot', ['plugin', 'install', 'x&calc'], { exec, platform: 'win32' }), /unsafe/);
   assert.throws(() => runCli('co pilot', ['x'], { exec, platform: 'win32' }), /unsafe/);
+});
+
+test('findCli returns the bare name when it is on PATH', () => {
+  const exec = () => {};
+  assert.equal(findCli('claude', { exec, platform: 'linux', home: '/h', exists: () => false }), 'claude');
+});
+
+test('findCli finds a CLI installed outside PATH (shell alias case)', () => {
+  const exec = (file) => {
+    if (file === 'claude') throw new Error('ENOENT');
+  };
+  const exists = (p) => p === '/h/.local/bin/claude';
+  assert.equal(findCli('claude', { exec, platform: 'linux', home: '/h', exists }), '/h/.local/bin/claude');
+});
+
+test('findCli also checks the legacy ~/.claude/local install', () => {
+  const exec = (file) => {
+    if (file === 'claude') throw new Error('ENOENT');
+  };
+  const exists = (p) => p === '/h/.claude/local/claude';
+  assert.equal(findCli('claude', { exec, platform: 'linux', home: '/h', exists }), '/h/.claude/local/claude');
+});
+
+test('findCli returns null when the CLI is nowhere', () => {
+  const exec = () => {
+    throw new Error('ENOENT');
+  };
+  assert.equal(findCli('claude', { exec, platform: 'linux', home: '/h', exists: () => true }), null);
+  assert.equal(findCli('claude', { exec: () => {}, platform: 'linux', home: '/h', exists: () => false }), 'claude');
+});
+
+test('on win32 an absolute .exe path runs without a shell, spaces and all', () => {
+  const calls = [];
+  const exec = (...a) => calls.push(a);
+  runCli('C:\\Users\\Jo Doe\\.local\\bin\\claude.exe', ['plugin', 'install', 'x@y'], { exec, platform: 'win32' });
+  assert.equal(calls[0][0], 'C:\\Users\\Jo Doe\\.local\\bin\\claude.exe');
+  assert.deepEqual(calls[0][1], ['plugin', 'install', 'x@y']);
+  assert.notEqual(calls[0].at(-1).shell, true);
 });

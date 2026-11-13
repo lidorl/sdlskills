@@ -30,7 +30,7 @@ import { join, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import { isEntryPoint } from './lib/is-entry-point.mjs';
-import { checkPrereqs, commandAvailable, runCli } from './lib/prereqs.mjs';
+import { checkPrereqs, findCli, runCli } from './lib/prereqs.mjs';
 import { looksLikeCodeRepo } from './lib/code-repo.mjs';
 import { runGuide } from './lib/guide.mjs';
 import { formatReport } from './lib/report.mjs';
@@ -251,21 +251,24 @@ export function install({
   // 7. superpowers plugin.
   const { cli, commands, notes } = layout.plugin;
   const manualInstall = commands.map((c) => `\`${cli} ${c.join(' ')}\``).join(' then ');
+  const cliPath = skipPlugins ? null : findCli(cli);
   if (skipPlugins) {
     nextSteps.push(`Install the superpowers plugin: ${manualInstall}`);
-  } else if (commandAvailable(cli)) {
+  } else if (cliPath) {
     if (dryRun) {
       did('would install superpowers plugin');
     } else {
       try {
-        for (const c of commands) runCli(cli, c, { stdio: 'inherit' });
+        for (const c of commands) runCli(cliPath, c, { stdio: 'inherit' });
         did('installed superpowers plugin');
       } catch {
         warnings.push('superpowers plugin install failed — install it manually.');
       }
     }
   } else {
-    warnings.push(`\`${cli}\` not on PATH — skipped plugin install.`);
+    warnings.push(
+      `\`${cli}\` not found on PATH or in ~/.local/bin — skipped plugin install. If it works in your terminal it is probably a shell alias, which the installer cannot see; run the command below yourself.`,
+    );
     nextSteps.push(`Install the superpowers plugin once \`${cli}\` is available: ${manualInstall}`);
   }
   nextSteps.push(...notes);
