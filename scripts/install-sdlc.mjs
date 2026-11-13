@@ -25,14 +25,16 @@ import {
   writeFileSync,
   mkdirSync,
   cpSync,
+  rmSync,
 } from 'node:fs';
-import { join, dirname, basename } from 'node:path';
+import { join, dirname, basename, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import { isEntryPoint } from './lib/is-entry-point.mjs';
 import { checkPrereqs, findCli, runCli } from './lib/prereqs.mjs';
 import { looksLikeCodeRepo } from './lib/code-repo.mjs';
 import { runGuide } from './lib/guide.mjs';
+import { colorEnabled, makeStyle } from './lib/style.mjs';
 import { formatReport } from './lib/report.mjs';
 
 /** The phase skills, vendored into <target>/.claude/skills/. */
@@ -47,6 +49,22 @@ export const SKILLS = [
   'gather-open-items',
   'close-out',
 ];
+
+/**
+ * Installer-only modules under scripts/lib/. They (and their tests) must not
+ * reach adopters: the installers are not copied, so their imports would break.
+ */
+const INSTALLER_ONLY_LIB = ['choose-tool', 'code-repo', 'complete-path', 'guide', 'prereqs', 'prompter', 'report', 'style', 'ui'];
+const INSTALLER_ONLY_FILES = [
+  'install-guided.test.mjs',
+  ...INSTALLER_ONLY_LIB.flatMap((m) => [`lib/${m}.mjs`, `lib/${m}.test.mjs`]),
+];
+
+/** Whether a path under scripts/ (relative, any separator) is copied into adopters. */
+const forAdopters = (rel) => {
+  const posix = rel.split(sep).join('/');
+  return !posix.startsWith('install-sdlc') && !INSTALLER_ONLY_FILES.includes(posix);
+};
 
 /** docs/ subdirectories the process expects to exist. */
 export const DOCS_DIRS = ['feat-req', 'design', 'plans', 'history', 'decisions'];
@@ -97,7 +115,7 @@ export const CLAUDE_LAYOUT = {
   plugin: {
     cli: 'claude',
     commands: [
-      ['plugin', 'marketplace', 'add', 'claude-plugins-official'],
+      ['plugin', 'marketplace', 'add', 'anthropics/claude-plugins-official'],
       ['plugin', 'install', 'superpowers@claude-plugins-official'],
     ],
     /** Extra manual guidance shown whether or not the plugin installed. */
@@ -123,6 +141,7 @@ export function install({
   skipNpm = false,
   dryRun = false,
   layout = CLAUDE_LAYOUT,
+  log = () => {},
 }) {
   if (!dryRun && !existsSync(targetDir)) throw new Error(`target directory does not exist: ${targetDir}`);
   if (!existsSync(join(kitRoot, 'skills'))) throw new Error(`not a kit root (no skills/): ${kitRoot}`);
@@ -178,12 +197,20 @@ export function install({
   }
   did(`vendored ${skillSources.length} skills into ${layout.skillsDir}/`);
 
-  // 2. Copy the scripts (kit-owned — overwrite on re-run). Skip the installers.
+  // 2. Copy the scripts (kit-owned — overwrite on re-run). Skip the installers and
+  //    anything only they use, and clear stale copies earlier versions left behind.
+  const scriptsSrc = join(kitRoot, 'scripts');
   const scriptsDst = join(targetDir, 'scripts');
-  const scriptEntries = readdirSync(join(kitRoot, 'scripts')).filter(
-    (e) => !e.startsWith('install-sdlc'),
-  );
-  for (const e of scriptEntries) copy(join(kitRoot, 'scripts', e), join(scriptsDst, e));
+  const scriptEntries = readdirSync(scriptsSrc).filter(forAdopters);
+  for (const e of scriptEntries) {
+    if (dryRun) continue;
+    mkdirSync(scriptsDst, { recursive: true });
+    cpSync(join(scriptsSrc, e), join(scriptsDst, e), {
+      recursive: true,
+      filter: (src) => forAdopters(relative(scriptsSrc, src)),
+    });
+  }
+  if (!dryRun) for (const f of INSTALLER_ONLY_FILES) rmSync(join(scriptsDst, f), { force: true });
   did(`copied ${scriptEntries.length} script entries into scripts/`);
 
   // 3. Process docs. The process doc is kit-owned; the rest are seeds (keep if present).
@@ -259,6 +286,7 @@ export function install({
       did('would install superpowers plugin');
     } else {
       try {
+        log('Installing the superpowers plugin (this can take a moment)...');
         for (const c of commands) runCli(cliPath, c, { stdio: 'inherit' });
         did('installed superpowers plugin');
       } catch {
@@ -280,6 +308,7 @@ export function install({
     did('would run npm install');
   } else {
     try {
+      log('Running npm install (this can take a moment)...');
       execFileSync('npm', ['install'], { cwd: targetDir, stdio: 'inherit' });
       did('ran npm install');
     } catch {
@@ -346,9 +375,11 @@ export async function main(layout = CLAUDE_LAYOUT) {
     process.exit(1);
   }
 
-  const r = install({ kitRoot, targetDir, ...flags, layout });
+  const r = install({ kitRoot, targetDir, ...flags, layout, log: (m) => console.log(m) });
   r.warnings.unshift(...extraWarnings);
-  console.log(formatReport({ title: layout.installer.replace(/\.mjs$/, ''), ...r }));
+  console.log(
+    formatReport({ title: layout.installer.replace(/\.mjs$/, ''), ...r, style: makeStyle(colorEnabled(process.stdout)) }),
+  );
 }
 
 if (isEntryPoint(import.meta.url)) await main();

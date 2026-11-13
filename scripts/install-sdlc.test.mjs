@@ -1,11 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync, rmSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
-import { join, dirname } from 'node:path';
+import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { install, SKILLS, DOCS_DIRS } from './install-sdlc.mjs';
+import { install, SKILLS, DOCS_DIRS, CLAUDE_LAYOUT } from './install-sdlc.mjs';
+import { COPILOT_LAYOUT } from './install-sdlc-copilot.mjs';
 
 const kitRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const opts = (targetDir, extra = {}) => ({
@@ -134,4 +135,42 @@ test('does not warn about git when the target is a git repo', () => {
 
 test('throws when the target does not exist', () => {
   assert.throws(() => install(opts('/no/such/dir/anywhere')), /does not exist/);
+});
+
+test('copied scripts are self-contained: every relative import resolves inside the target', () => {
+  const dir = target();
+  install(opts(dir));
+  const scripts = join(dir, 'scripts');
+  const missing = [];
+  for (const f of readdirSync(scripts, { recursive: true }).filter((f) => f.endsWith('.mjs'))) {
+    const file = join(scripts, f);
+    for (const m of readFileSync(file, 'utf8').matchAll(/from\s+['"](\.[^'"]+)['"]/g)) {
+      if (!existsSync(resolve(dirname(file), m[1]))) missing.push(`${f} -> ${m[1]}`);
+    }
+  }
+  assert.deepEqual(missing, []);
+  rmSync(dir, { recursive: true });
+});
+
+test('installer-only files are not copied, and stale copies from earlier versions are removed', () => {
+  const dir = target();
+  mkdirSync(join(dir, 'scripts/lib'), { recursive: true });
+  writeFileSync(join(dir, 'scripts/lib/guide.mjs'), 'stale');
+  writeFileSync(join(dir, 'scripts/install-guided.test.mjs'), 'stale');
+  install(opts(dir));
+  for (const f of ['lib/guide.mjs', 'lib/ui.mjs', 'lib/prereqs.test.mjs', 'install-guided.test.mjs']) {
+    assert.equal(existsSync(join(dir, 'scripts', f)), false, f);
+  }
+  assert.ok(existsSync(join(dir, 'scripts/lib/catalog.mjs')));
+  assert.ok(existsSync(join(dir, 'scripts/lib/is-entry-point.mjs')));
+  rmSync(dir, { recursive: true });
+});
+
+test('every `marketplace add` uses a source (owner/repo, URL or path), never a bare marketplace name', () => {
+  const SOURCE = /^([\w.-]+\/[\w.-]+|https?:\/\/\S+|\.{0,2}\/\S*)$/;
+  for (const layout of [CLAUDE_LAYOUT, COPILOT_LAYOUT]) {
+    const adds = layout.plugin.commands.filter((c) => c[0] === 'plugin' && c[1] === 'marketplace' && c[2] === 'add');
+    assert.ok(adds.length > 0, layout.toolName);
+    for (const c of adds) assert.match(c[3], SOURCE, `${layout.toolName}: ${c.join(' ')}`);
+  }
 });

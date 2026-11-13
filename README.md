@@ -73,9 +73,15 @@ The Copilot cloud agent isn't supported, because the process needs a person at i
 
 ### What you'll see
 
+In a terminal the installer is interactive: **arrow keys and Enter** pick from menus, **Tab** completes folder names in the path prompt, and output is colored (set `NO_COLOR=1` to turn colors off). When input is piped or there is no terminal, it falls back to plain numbered questions.
+
 An abbreviated guided run:
 
 ```
+? Which tool will you use the kit with?
+❯ Claude Code
+  GitHub Copilot (VS Code or CLI)
+
 This installs the SDLC kit for Claude Code into your SDLC repo (the *meta-root*).
 ...
 Prerequisites:
@@ -84,12 +90,15 @@ Prerequisites:
   - Claude Code CLI (`claude`) (optional): Not needed for the VS Code extension. ...
   ✓ GitHub CLI (`gh`)
 
-Where should the SDLC repo go? [/home/you/projects/acme-workspace]
+? Where should the SDLC repo go? (/home/you/projects/acme-workspace)
+
 Here's what will happen:
   - create the folder /home/you/projects/acme-workspace
   - vendored 9 skills into .claude/skills/
   ...
-Proceed? [Y/n]
+? Proceed?
+❯ Yes, install
+  No, cancel
 ```
 
 It ends with three blocks: **Done** (what was written), **Needs attention** (anything missing or failed) and **Next steps**.
