@@ -33,6 +33,7 @@ import { isEntryPoint } from './lib/is-entry-point.mjs';
 import { checkPrereqs, findCli, runCli } from './lib/prereqs.mjs';
 import { looksLikeCodeRepo } from './lib/code-repo.mjs';
 import { runGuide } from './lib/guide.mjs';
+import { colorEnabled, makeStyle } from './lib/style.mjs';
 import { formatReport } from './lib/report.mjs';
 
 /** The phase skills, vendored into <target>/.claude/skills/. */
@@ -123,6 +124,7 @@ export function install({
   skipNpm = false,
   dryRun = false,
   layout = CLAUDE_LAYOUT,
+  log = () => {},
 }) {
   if (!dryRun && !existsSync(targetDir)) throw new Error(`target directory does not exist: ${targetDir}`);
   if (!existsSync(join(kitRoot, 'skills'))) throw new Error(`not a kit root (no skills/): ${kitRoot}`);
@@ -259,6 +261,7 @@ export function install({
       did('would install superpowers plugin');
     } else {
       try {
+        log('Installing the superpowers plugin (this can take a moment)...');
         for (const c of commands) runCli(cliPath, c, { stdio: 'inherit' });
         did('installed superpowers plugin');
       } catch {
@@ -280,6 +283,7 @@ export function install({
     did('would run npm install');
   } else {
     try {
+      log('Running npm install (this can take a moment)...');
       execFileSync('npm', ['install'], { cwd: targetDir, stdio: 'inherit' });
       did('ran npm install');
     } catch {
@@ -346,9 +350,11 @@ export async function main(layout = CLAUDE_LAYOUT) {
     process.exit(1);
   }
 
-  const r = install({ kitRoot, targetDir, ...flags, layout });
+  const r = install({ kitRoot, targetDir, ...flags, layout, log: (m) => console.log(m) });
   r.warnings.unshift(...extraWarnings);
-  console.log(formatReport({ title: layout.installer.replace(/\.mjs$/, ''), ...r }));
+  console.log(
+    formatReport({ title: layout.installer.replace(/\.mjs$/, ''), ...r, style: makeStyle(colorEnabled(process.stdout)) }),
+  );
 }
 
 if (isEntryPoint(import.meta.url)) await main();

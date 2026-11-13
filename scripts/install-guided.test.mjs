@@ -15,7 +15,10 @@ const scripts = {
 const FLAGS = ['--skip-plugins', '--skip-npm'];
 
 /** Runs an installer with piped stdio, so stdin and stdout are not TTYs. */
-const run = (script, args) => spawnSync(process.execPath, [script, ...args], { input: '', encoding: 'utf8', timeout: 60_000 });
+const run = (script, args, env = {}) => {
+  const { FORCE_COLOR, NO_COLOR, ...base } = process.env;
+  return spawnSync(process.execPath, [script, ...args], { input: '', encoding: 'utf8', timeout: 60_000, env: { ...base, ...env } });
+};
 
 const tmp = () => mkdtempSync(join(tmpdir(), 'guided-'));
 
@@ -93,4 +96,20 @@ test('the root install-sdlc.mjs without a TTY prints usage naming both installer
   assert.equal(r.status, 1);
   assert.match(r.stderr, /install-sdlc\.mjs/);
   assert.match(r.stderr, /install-sdlc-copilot\.mjs/);
+});
+
+test('the final report is plain when piped and colored with FORCE_COLOR', () => {
+  const dir = tmp();
+  const plain = run(scripts.claude, [dir, ...FLAGS]);
+  assert.doesNotMatch(plain.stdout, /\x1b/);
+  const colored = run(scripts.claude, [dir, ...FLAGS], { FORCE_COLOR: '1' });
+  assert.match(colored.stdout, /\x1b\[32m✓/);
+  rmSync(dir, { recursive: true });
+});
+
+test('slow steps announce themselves through the log callback', () => {
+  const layout = { ...CLAUDE_LAYOUT, plugin: { ...CLAUDE_LAYOUT.plugin, cli: process.execPath, commands: [['-e', '0']] } };
+  const logged = [];
+  install({ kitRoot, targetDir: tmp(), layout, skipNpm: true, log: (m) => logged.push(m) });
+  assert.ok(logged.some((m) => /superpowers plugin/.test(m)), logged.join('|'));
 });
