@@ -1,6 +1,6 @@
 // Headless agent invocation: routing, prompt, CLI command, one supervised run, the result file.
 import { spawn } from 'node:child_process';
-import { readFileSync, appendFileSync, mkdirSync } from 'node:fs';
+import { readFileSync, appendFileSync, mkdirSync, rmSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 
 const PHASE_STATUSES = ['ACCEPTED', 'DESIGNED', 'PLANNED', 'IN_PROGRESS', 'IMPLEMENTED'];
@@ -59,7 +59,7 @@ export function agentCommand(cfg, prompt, home) {
     : ['-p', prompt, '--model', cfg.model, '--output-format', 'json',
       '--settings', join(home, 'agent-settings.json'), ...extra];
   const env = {
-    SDLC_RESULT_FILE: join(home, 'result.json'),
+    SDLC_RESULT_FILE: join(home, 'run', 'result.json'),
     SDLC_WORKER_ID: cfg.id,
     SDLC_HEADLESS: '1',
   };
@@ -70,6 +70,11 @@ const lastLines = (text, n) => text.split('\n').filter((l, i, a) => l !== '' || 
 
 export function runAgent({ cmd, args = [], env = {}, cwd, timeoutMs, logPath, onTick, tickMs = 1000 }) {
   mkdirSync(dirname(logPath), { recursive: true });
+  // A previous run's result must never be mistaken for this one's.
+  if (env.SDLC_RESULT_FILE) {
+    mkdirSync(dirname(env.SDLC_RESULT_FILE), { recursive: true });
+    rmSync(env.SDLC_RESULT_FILE, { force: true });
+  }
   const log = (s) => { try { appendFileSync(logPath, s); } catch { /* log is best effort */ } };
 
   return new Promise((resolve) => {

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -14,7 +14,7 @@ function fakeRun(dir, script, extra = {}) {
   writeFileSync(sp, JSON.stringify(script));
   return runAgent({
     cmd: process.execPath, args: [FAKE], cwd: dir, timeoutMs: 5000, logPath: join(dir, 'logs', 'run.log'),
-    env: { FAKE_AGENT_SCRIPT: sp, SDLC_RESULT_FILE: join(dir, 'result.json') }, ...extra,
+    env: { FAKE_AGENT_SCRIPT: sp, SDLC_RESULT_FILE: join(dir, 'run', 'result.json') }, ...extra,
   });
 }
 
@@ -54,7 +54,7 @@ test('agentCommand claude passes --settings and --model; env has SDLC_HEADLESS=1
   assert.deepEqual(args, ['-p', 'PROMPT', '--model', 'opus', '--output-format', 'json', '--settings', '/h/agent-settings.json', '--x']);
   assert.equal(env.SDLC_HEADLESS, '1');
   assert.equal(env.SDLC_WORKER_ID, 'al-abc123');
-  assert.equal(env.SDLC_RESULT_FILE, '/h/result.json');
+  assert.equal(env.SDLC_RESULT_FILE, '/h/run/result.json');
 
   const cp = agentCommand({ ...cfg, agent: 'copilot', agent_cmd: '/bin/fake', cli_args: [] }, 'P', '/h');
   assert.equal(cp.cmd, '/bin/fake');
@@ -74,7 +74,7 @@ test('runAgent with the fake agent: exit code, log written, onTick called', asyn
   assert.ok(ticks >= 2, `ticks=${ticks}`);
   assert.equal(readFileSync(join(dir, 'sub', 'out.txt'), 'utf8'), 'hi');
   assert.match(readFileSync(join(dir, 'logs', 'run.log'), 'utf8'), /boom/);
-  assert.equal(readResult(join(dir, 'result.json')).ok, true);
+  assert.equal(readResult(join(dir, 'run', 'result.json')).ok, true);
 });
 
 test('runAgent: onTick errors are logged and do not kill the run; ticks never overlap', async () => {
@@ -101,7 +101,19 @@ test('runAgent kills on timeout and reports timedOut', async () => {
   assert.equal(r.timedOut, true);
   assert.ok(r.signal === 'SIGTERM' || r.exitCode !== 0);
   assert.ok(Date.now() - t0 < 1500);
-  assert.equal(existsSync(join(dir, 'result.json')), false);
+  assert.equal(existsSync(join(dir, 'run', 'result.json')), false);
+});
+
+test('runAgent clears a stale result file before the run', async () => {
+  const dir = tmp();
+  const rf = join(dir, 'run', 'result.json');
+  mkdirSync(dirname(rf), { recursive: true });
+  writeFileSync(rf, JSON.stringify({ outcome: 'completed', phase: 'DESIGNED', summary: 'stale' }));
+  assert.equal(readResult(rf).ok, true);
+  await fakeRun(dir, { result: null, exitCode: 1 });
+  const r = readResult(rf);
+  assert.equal(r.ok, false);
+  assert.match(r.problem, /missing/);
 });
 
 test('runAgent resolves spawnError on ENOENT', async () => {
