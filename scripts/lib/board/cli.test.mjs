@@ -14,10 +14,10 @@ const ME = { login: 'lidorl', name: 'Lidor L', email: 'lidorl@example.com' };
 const T0 = new Date('2026-06-01T10:00:00Z');
 const hours = (n) => new Date(T0.getTime() + n * 3600e3);
 
-async function cli(cwd, argv, { now = T0, whoami = () => ME, sleep = async () => {}, interactive = false, ui } = {}) {
+async function cli(cwd, argv, { now = T0, whoami = () => ME, sleep = async () => {}, interactive = false, ui, hooks } = {}) {
   let out = '';
   let err = '';
-  const code = await run(argv, { cwd, out: (s) => { out += s; }, err: (s) => { err += s; }, now: () => now, whoami, sleep, interactive, ui });
+  const code = await run(argv, { cwd, out: (s) => { out += s; }, err: (s) => { err += s; }, now: () => now, whoami, sleep, interactive, ui, hooks });
   return { code, out, err };
 }
 
@@ -207,13 +207,13 @@ test('reportPaths gathers the effort docs, changed history, and extras', () => {
   const c = b.clone('c');
   mkdirSync(join(c, 'docs/plans'), { recursive: true });
   mkdirSync(join(c, 'docs/history'), { recursive: true });
-  writeFileSync(join(c, 'docs/plans/bulk-export-plan.md'), 'p');
+  writeFileSync(join(c, 'docs/plans/bulk-export-2.md'), 'p');
   writeFileSync(join(c, 'docs/plans/other.md'), 'p');
   writeFileSync(join(c, 'docs/history/2026-06-01_bulk-export.md'), 'h');
   writeFileSync(join(c, 'docs/history/2026-06-01_other.md'), 'h');
   writeFileSync(join(c, 'notes.txt'), 'n');
   assert.deepEqual(reportPaths(c, 'bulk-export', ['notes.txt']), [
-    'docs/feat-req/bulk-export.md', 'docs/plans/bulk-export-plan.md', 'docs/history/2026-06-01_bulk-export.md', 'notes.txt',
+    'docs/feat-req/bulk-export.md', 'docs/plans/bulk-export-2.md', 'docs/history/2026-06-01_bulk-export.md', 'notes.txt',
   ]);
   assert.throws(() => reportPaths(c, 'bulk-export', ['../x']));
 });
@@ -234,4 +234,73 @@ test('answer on a terminal with no --choice asks through the menu', async () => 
   const r = await cli(c, ['answer', id], { interactive: true, ui });
   assert.equal(r.code, 0, r.err);
   assert.equal(parseDoc(readFileSync(join(c, `board/requests/${id}.md`), 'utf8')).data.answer, 'confirm');
+});
+
+test('reportPaths: efforts `bulk` and `bulk-export` side by side do not take each other\'s files', () => {
+  const b = makeBoard({ featReqs: { bulk: feat(), 'bulk-export': feat() } });
+  const c = b.clone('c');
+  mkdirSync(join(c, 'docs/plans'), { recursive: true });
+  mkdirSync(join(c, 'docs/history'), { recursive: true });
+  for (const f of ['bulk.md', 'bulk-2.md', 'bulk-export.md', 'bulk-export-2.md', 'bulk-notes.md']) writeFileSync(join(c, 'docs/plans', f), 'p');
+  for (const f of ['2026-06-01_bulk.md', '2026-06-02_bulk-3.md', '2026-06-01_bulk-export.md']) writeFileSync(join(c, 'docs/history', f), 'h');
+  assert.deepEqual(reportPaths(c, 'bulk'), [
+    'docs/feat-req/bulk.md', 'docs/plans/bulk-2.md', 'docs/plans/bulk.md',
+    'docs/history/2026-06-01_bulk.md', 'docs/history/2026-06-02_bulk-3.md',
+  ]);
+});
+
+test('report --paths refuses board/ files and other efforts\' docs (exit 2)', async () => {
+  const b = makeBoard({ featReqs: { 'bulk-export': feat(), other: feat() } });
+  const c = b.clone('c');
+  await cli(c, ['claim', 'bulk-export']);
+  for (const p of ['board/config.yml', 'board/requests/x.md', './board/workers/a.yml', 'docs/feat-req/other.md', 'docs/feat-req/../../board/config.yml']) {
+    const r = await cli(c, ['report', 'bulk-export', '--phase', 'PLANNED', '--paths', p]);
+    assert.equal(r.code, 2, p);
+  }
+  assert.equal(git(b.remote, 'log', '--format=%s', 'main').split('\n').filter((l) => l.startsWith('board(report)')).length, 0);
+});
+
+test('watch --since must be a hex sha (no git option injection)', async () => {
+  const c = makeBoard().clone('c');
+  const r = await cli(c, ['watch', '--max-polls', '1', '--since=--output=../x']);
+  assert.equal(r.code, 2);
+});
+
+test('a whoami that cannot find a GitHub login stops with the fix and pushes nothing', async () => {
+  const b = makeBoard({ featReqs: { 'bulk-export': feat() } });
+  const c = b.clone('c');
+  const before = git(b.remote, 'rev-parse', 'main');
+  const whoami = () => { throw new Error('cannot determine your GitHub login: run `gh auth login`, then try again'); };
+  for (const argv of [['claim', 'bulk-export'], ['report', 'bulk-export', '--phase', 'PLANNED'], ['inbox']]) {
+    const r = await cli(c, argv, { whoami });
+    assert.equal(r.code, 1, argv.join(' '));
+    assert.match(r.err, /run `gh auth login`/);
+  }
+  assert.equal(git(b.remote, 'rev-parse', 'main'), before);
+});
+
+test('report that loses to a takeover mid-push exits 3 and keeps the new design doc on disk', async () => {
+  const b = makeBoard({ featReqs: { 'bulk-export': feat() } });
+  const a = b.clone('a');
+  const o = b.clone('o');
+  assert.equal((await cli(a, ['claim', 'bulk-export'])).code, 0);
+  git(o, 'pull', '-q', '--ff-only', 'origin', 'main');
+  mkdirSync(join(a, 'docs/design'), { recursive: true });
+  writeFileSync(join(a, 'docs/design/bulk-export.md'), '# my design\n');
+  let fired = false;
+  const hooks = {
+    beforePush: () => {
+      if (fired) return;
+      fired = true;
+      const f = join(o, 'docs/feat-req/bulk-export.md');
+      writeFileSync(f, readFileSync(f, 'utf8').replace('claimed_by: lidorl', 'claimed_by: lidorl-1a2b3c'));
+      git(o, 'commit', '-qam', 'board(takeover): bulk-export');
+      git(o, 'push', '-q', 'origin', 'main');
+    },
+  };
+  const r = await cli(a, ['report', 'bulk-export', '--phase', 'DESIGNED'], { now: hours(1), hooks });
+  assert.equal(r.code, 3, r.err);
+  assert.match(r.err, /lidorl-1a2b3c/);
+  assert.equal(readFileSync(join(a, 'docs/design/bulk-export.md'), 'utf8'), '# my design\n');
+  assert.equal(git(a, 'rev-parse', 'HEAD'), git(a, 'rev-parse', 'origin/main'));
 });

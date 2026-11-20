@@ -2,7 +2,7 @@
 // the sibling modules; this file parses argv, calls them, and renders results.
 import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
-import { join } from 'node:path';
+import { join, posix } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parse } from 'yaml';
 import { BoardError, assertOnMain, sync, boardWrite } from './git.mjs';
@@ -86,26 +86,42 @@ function warnOverlaps(deps, slug, list) {
   for (const o of list) deps.err(`warning: ${slug} shares ${o.repos.join(', ')} with ${o.slug}\n`);
 }
 
+// Which docs belong to an effort: exact names only, so `bulk` never takes `bulk-export` files.
+function ownerPatterns(slug) {
+  return [
+    new RegExp(`^docs/feat-req/${slug}\\.md$`),
+    new RegExp(`^docs/design/${slug}\\.md$`),
+    new RegExp(`^docs/plans/${slug}(-\\d+)?\\.md$`),
+  ];
+}
+const historyRe = (slug) => new RegExp(`^docs/history/[^/]*_${slug}(-\\d+)?\\.md$`);
+
 // The files a report commits for an effort: its docs, history entries changed since origin/main, and extras.
 export function reportPaths(root, slug, extra = []) {
   const out = [];
   const add = (rel) => { if (!out.includes(rel) && existsSync(join(root, rel))) out.push(rel); };
+  const [featRe, designRe, planRe] = ownerPatterns(slug);
   add(`docs/feat-req/${slug}.md`);
   add(`docs/design/${slug}.md`);
   const plans = join(root, 'docs/plans');
   if (existsSync(plans)) {
-    for (const n of readdirSync(plans).sort()) if (n.startsWith(slug) && n.endsWith('.md')) add(`docs/plans/${n}`);
+    for (const n of readdirSync(plans).sort()) if (planRe.test(`docs/plans/${n}`)) add(`docs/plans/${n}`);
   }
   const changed = new Set([
     ...gitOut(root, ['ls-files', '--others', '--exclude-standard', '--', 'docs/history']).split('\n'),
     ...gitOut(root, ['diff', '--name-only', 'origin/main', '--', 'docs/history']).split('\n'),
   ].filter(Boolean));
-  const hist = new RegExp(`^docs/history/[^/]*_${slug}[^/]*$`);
+  const hist = historyRe(slug);
   for (const rel of [...changed].sort()) if (hist.test(rel)) add(rel);
   for (const p of extra) {
     safePath(root, p);
-    if (!existsSync(join(root, p))) throw new Error(`--paths: ${p} does not exist`);
-    add(p.replace(/^\.\//, ''));
+    const rel = posix.normalize(p.replaceAll('\\', '/'));
+    if (rel === 'board' || rel.startsWith('board/')) throw new Error(`--paths: ${p} is under board/; reports never write there`);
+    if (/^docs\/(feat-req|design|plans)\//.test(rel) && ![featRe, designRe, planRe].some((re) => re.test(rel))) {
+      throw new Error(`--paths: ${p} does not belong to ${slug}`);
+    }
+    if (!existsSync(join(root, rel))) throw new Error(`--paths: ${p} does not exist`);
+    add(rel);
   }
   return out;
 }
@@ -202,20 +218,29 @@ async function cmdReport(root, { flags, positional: [slug] }, deps) {
   try { reportPaths(root, slug, extra); } catch (e) { throw new UsageError(firstLine(e)); }
   assertOnMain(root);
   const id = deps.whoami();
-  const lost = () => {
-    const by = readFm(root, slug)?.claimed_by;
-    deps.err(by
-      ? `${slug} is now held by ${by}; nothing was pushed\n`
-      : `${slug} is not claimed by ${id.login}; nothing was pushed\n`);
+  const holder = () => {
+    try { return parseDoc(gitOut(root, ['show', `origin/main:docs/feat-req/${slug}.md`])).data?.claimed_by; } catch { return undefined; }
+  };
+  const lost = (landed = false) => {
+    const by = holder();
+    if (landed) deps.err(`${slug}: report landed but ${slug} is now held by ${by}\n`);
+    else {
+      deps.err(by
+        ? `${slug} is now held by ${by}; nothing was pushed\n`
+        : `${slug} is not claimed by ${id.login}; nothing was pushed\n`);
+    }
     return 3;
   };
   sync(root);
   if (!holds(root, slug, id.login)) return lost();
   const stamp = iso(deps.now());
+  let refused = false;
   const r = await boardWrite(root, {
-    kind: 'report', subject: slug, identity: id, onReject: 'rebase',
+    kind: 'report', subject: slug, identity: id, onReject: 'rebase', onFailure: 'keep-work', hooks: deps.hooks,
     trailers: { effort: slug, phase },
     mutate: (c) => {
+      refused = false;
+      if (!holds(c, slug, id.login)) { refused = true; return []; }
       const f = join(c, `docs/feat-req/${slug}.md`);
       writeFileSync(f, setFields(readFileSync(f, 'utf8'), { renewed_at: stamp }));
       return reportPaths(c, slug, extra);
@@ -223,7 +248,8 @@ async function cmdReport(root, { flags, positional: [slug] }, deps) {
     validate: (c) => holds(c, slug, id.login),
   });
   if (r.ok) { deps.out(`reported ${slug} at ${phase}\n`); return 0; }
-  if (r.reason === 'replaced') return lost();
+  if (refused || r.reason === 'conflict') return lost();
+  if (r.reason === 'replaced') return lost(true);
   deps.err(`could not report ${slug} (${r.reason})\n`);
   return 1;
 }
@@ -354,6 +380,7 @@ async function cmdWatch(root, { flags }, deps) {
   const interval = flags['--interval'] ? parseDuration(flags['--interval']) : cfg.watchIntervalMs;
   const max = flags['--max-polls'] === undefined ? Infinity : Number(flags['--max-polls']);
   if (!(max >= 1)) throw new UsageError('--max-polls must be a positive integer');
+  if (flags['--since'] !== undefined && !/^[0-9a-f]{7,40}$/.test(flags['--since'])) throw new UsageError('--since must be a commit sha (7-40 hex chars)');
   const tip = () => gitOut(root, ['rev-parse', 'origin/main']).trim();
   refresh(root, deps);
   let last = flags['--since'] ?? tip();

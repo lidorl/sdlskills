@@ -6,16 +6,14 @@ import { isEntryPoint } from './lib/is-entry-point.mjs';
 
 const sh = (cmd, args) => execFileSync(cmd, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
 
-// The signed-in GitHub user, falling back to git config when gh is unavailable.
+// The signed-in GitHub user. Commits and answers are recorded under this login, so there is no fallback.
 export function whoami() {
   try {
     const u = JSON.parse(sh('gh', ['api', 'user']));
-    const email = u.email || `${u.id}+${u.login}@users.noreply.github.com`;
-    return { login: u.login, name: u.name || u.login, email };
+    if (!u.login) throw new Error('no login');
+    return { login: u.login, name: u.name || u.login, email: u.email || `${u.id}+${u.login}@users.noreply.github.com` };
   } catch {
-    const name = sh('git', ['config', 'user.name']);
-    const email = sh('git', ['config', 'user.email']);
-    return { login: name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, ''), name, email };
+    throw new Error('cannot determine your GitHub login: run `gh auth login`, then try again');
   }
 }
 

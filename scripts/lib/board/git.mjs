@@ -49,7 +49,9 @@ export function assertOnMain(clone) {
 // Put HEAD at origin/main (our unpushed commit goes away), keeping unrelated dirty files.
 // If --keep refuses (a dirty file differs on origin), stash, hard-reset, pop; on a conflicting pop the
 // dirty work stays in the stash and the clone is clean at origin/main.
-function restoreToOrigin(clone, env) {
+function restoreToOrigin(clone, env, keepWork = false) {
+  // keep-work: the caller's files (including ones our commit added) stay on disk, uncommitted and unstaged.
+  if (keepWork) { git(clone, ['reset', '--mixed', 'origin/main'], { env }); return; }
   if (git(clone, ['reset', '--keep', 'origin/main'], { env, allowFail: true }) !== null) return;
   const stashRef = () => git(clone, ['rev-parse', '-q', '--verify', 'refs/stash'], { env, allowFail: true });
   const before = stashRef();
@@ -75,8 +77,9 @@ export function identityEnv(identity) {
 }
 
 export async function boardWrite(clone, {
-  kind, subject, trailers = {}, identity, mutate, validate, onReject, hooks = {}, sleep = defaultSleep,
+  kind, subject, trailers = {}, identity, mutate, validate, onReject, onFailure = 'discard', hooks = {}, sleep = defaultSleep,
 }) {
+  const keepWork = onFailure === 'keep-work';
   const message = formatMessage({ kind, subject, trailers });
   const emptyOk = EMPTY_COMMIT_KINDS.has(kind);
   const env = identityEnv(identity);
@@ -107,17 +110,17 @@ export async function boardWrite(clone, {
 
       git(clone, ['fetch', 'origin', 'main'], { env });
       if (onReject !== 'rebase' || attempt >= MAX_REBASE_ATTEMPTS) {
-        restoreToOrigin(clone, env);
+        restoreToOrigin(clone, env, keepWork);
         return { ok: false, reason: 'lost-race' };
       }
       if (git(clone, ['rebase', '--autostash', 'origin/main'], { env, allowFail: true }) === null) {
         git(clone, ['rebase', '--abort'], { env, allowFail: true });
-        restoreToOrigin(clone, env);
+        restoreToOrigin(clone, env, keepWork);
         return { ok: false, reason: 'conflict' };
       }
       if (hasUnmerged(clone)) { // autostash pop conflicted: nothing of ours has been pushed yet
         git(clone, ['reset', '--hard', 'HEAD'], { env });
-        restoreToOrigin(clone, env);
+        restoreToOrigin(clone, env, keepWork);
         throw new BoardError(UNMERGED_MSG);
       }
       if (git(clone, ['rev-list', '--count', 'origin/main..HEAD'], { env }).trim() === '0') {
@@ -129,7 +132,7 @@ export async function boardWrite(clone, {
     }
   } catch (e) {
     if (!landed) {
-      try { restoreToOrigin(clone, env); } catch { /* the original error is what matters */ }
+      try { restoreToOrigin(clone, env, keepWork); } catch { /* the original error is what matters */ }
     }
     if (e instanceof BoardError) throw e;
     throw new BoardError(`board write failed: ${String(e.message).split('\n')[0]}`);

@@ -193,3 +193,18 @@ test('R2: a renew emptied by rebase does not sweep a staged new file', async () 
   assert.equal(g(a, 'show', '--name-only', '--format=', 'HEAD'), '');
   assert.equal(g(a, 'diff', '--cached', '--name-only'), 'secret.md');
 });
+
+test('keep-work: a lost race leaves a newly added file on disk, HEAD at origin/main, nothing staged', async () => {
+  const fx = makeBoard(); const a = fx.clone('a'); const b = fx.clone('b');
+  const r = await boardWrite(a, { ...base, kind: 'report', subject: 's', onReject: 'restart', onFailure: 'keep-work', mutate: writer('new.md', 'mine\n'), hooks: { beforePush: racer(b, 'y.md', 'b\n') } });
+  assert.equal(r.reason, 'lost-race');
+  assert.equal(readFileSync(join(a, 'new.md'), 'utf8'), 'mine\n');
+  assert.equal(revParse(a, 'HEAD'), revParse(a, 'origin/main'));
+  assert.equal(g(a, 'diff', '--cached', '--name-only'), '');
+});
+
+test('default discard: a lost race removes the file our commit added', async () => {
+  const fx = makeBoard(); const a = fx.clone('a'); const b = fx.clone('b');
+  await boardWrite(a, { ...base, kind: 'claim', subject: 's', onReject: 'restart', mutate: writer('new.md', 'mine\n'), hooks: { beforePush: racer(b, 'y.md', 'b\n') } });
+  assert.throws(() => readFileSync(join(a, 'new.md')));
+});
