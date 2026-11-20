@@ -45,7 +45,7 @@ test('URL credentials are hidden, host kept', () => {
 test('key/value secrets keep the key and hide the value', () => {
   assert.equal(redact('password=hunter2', {}), 'password=[REDACTED]');
   assert.equal(redact('api_key: abc', {}), 'api_key: [REDACTED]');
-  assert.equal(redact('secret="x"', {}), 'secret=[REDACTED]');
+  assert.equal(redact('secret="x"', {}), 'secret="[REDACTED]"');
 });
 
 test('env values for sensitive names are redacted when bare', () => {
@@ -94,4 +94,60 @@ test('safeExcerpt withholds the excerpt when redaction throws', () => {
   });
   const r = safeExcerpt('secret stuff', { env });
   assert.deepEqual(r, { text: 'excerpt withheld: redaction failed', withheld: true });
+});
+
+test('redaction is linear-time on pathological long lines', () => {
+  for (const line of ['a-'.repeat(50000), 'token'.repeat(30000), 'https://'.repeat(20000), '-----BEGIN PRIVATE KEY-----'.repeat(4000), 'password='.repeat(10000)]) {
+    const t0 = performance.now();
+    redact(line, {});
+    const ms = performance.now() - t0;
+    assert.ok(ms < 500, `${line.slice(0, 12)} took ${ms}ms`);
+  }
+});
+
+test('safeExcerpt truncates overlong lines after redacting', () => {
+  const r = safeExcerpt('x'.repeat(5000), { env: {} });
+  assert.ok(r.text.endsWith(' …[truncated]'));
+  assert.equal(r.text.length, 2000 + ' …[truncated]'.length);
+});
+
+test('credential headers keep the scheme and hide the credential', () => {
+  assert.equal(redact('Authorization: Basic dXNlcjpwYXNz', {}), 'Authorization: Basic [REDACTED]');
+  assert.equal(redact('Authorization: Token abc123def', {}), 'Authorization: Token [REDACTED]');
+  assert.equal(redact('Proxy-Authorization: Digest username="u", response="r"', {}), 'Proxy-Authorization: Digest [REDACTED]');
+  assert.equal(redact('Cookie: sid=abc; other=1', {}), 'Cookie: [REDACTED]');
+  assert.equal(redact('Set-Cookie: sid=abc; HttpOnly', {}), 'Set-Cookie: [REDACTED]');
+});
+
+test('URL userinfo containing @ or / is fully hidden', () => {
+  assert.equal(redact('https://user:p@ss@host/x', {}), 'https://[REDACTED]@host/x');
+  assert.equal(redact('https://user:pa/ss@host', {}), 'https://[REDACTED]@host');
+});
+
+test('more token shapes', () => {
+  assertWhole('sk-proj-' + a(30));
+  assertWhole('xoxb-123');
+  assertWhole('glpat-' + a(20));
+  assertWhole('npm_' + a(36));
+  assertWhole('AIza' + a(35));
+  assertWhole('sk_live_' + a(24));
+  assertWhole('rk_live_' + a(24));
+  assert.equal(redact('id AKIA' + 'B'.repeat(16) + '_x', {}), 'id [REDACTED]_x');
+});
+
+test('PGP private key block is redacted', () => {
+  const pem = ['-----BEGIN PGP PRIVATE KEY BLOCK-----', a(60), '-----END PGP PRIVATE KEY BLOCK-----'].join('\n');
+  assert.equal(redact(`x\n${pem}\ny`, {}), 'x\n[REDACTED]\ny');
+  assert.equal(redact(['ok', '-----BEGIN PGP PRIVATE KEY BLOCK-----', a(60)].join('\n'), {}), 'ok\n[REDACTED]');
+});
+
+test('stray END marker redacts everything before it', () => {
+  assert.equal(redact([a(64), a(64), '-----END RSA PRIVATE KEY-----', 'tail'].join('\n'), {}), '[REDACTED]\ntail');
+});
+
+test('delimited values do not leak a tail and keep quotes', () => {
+  assert.equal(redact('secret=a\\ b', {}), 'secret=[REDACTED]');
+  assert.equal(redact('{"password":"a\\"b"}', {}), '{"password":"[REDACTED]"}');
+  assert.equal(redact("api_key: 'x\\'y' z", {}), "api_key: '[REDACTED]' z");
+  assert.equal(redact('token=abc,def;ghi', {}), 'token=[REDACTED]');
 });
