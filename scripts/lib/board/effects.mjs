@@ -1,8 +1,9 @@
 // Answer effects: what happens, in the docs, once a request has been answered. Answering only writes
 // the request file; the next claimant of the effort applies it all in one `apply` commit.
-import { readFileSync, writeFileSync, existsSync, readdirSync, mkdirSync, unlinkSync, rmSync, lstatSync, realpathSync } from 'node:fs';
-import { join, dirname, resolve, relative, isAbsolute, basename, sep } from 'node:path';
+import { readFileSync, writeFileSync, existsSync, readdirSync, mkdirSync, unlinkSync, rmSync } from 'node:fs';
+import { join, dirname, basename } from 'node:path';
 import { stringify } from 'yaml';
+import { safePath, SLUG_RE, REQUEST_ID_RE } from './safe-path.mjs';
 import { boardWrite } from './git.mjs';
 import { holds } from './claims.mjs';
 import { parseDoc, setFields, appendToSection } from './frontmatter.mjs';
@@ -18,27 +19,8 @@ class NotHolder extends Error {}
 const oneLine = (s) => String(s ?? '').replace(/\s+/g, ' ').trim();
 const firstLine = (s) => String(s ?? '').split('\n').map((l) => l.trim()).find(Boolean) ?? '';
 
-const SLUG_RE = /^[a-z0-9][a-z0-9-]*$/;
-const ID_RE = /^\d{12}-[a-z0-9]{6}$/;
-
-// The one path guard: stays inside the repo, lexically and for real (no symlinked component, no escape).
-function inside(root, rel) {
-  const abs = resolve(root, rel);
-  const r = relative(resolve(root), abs);
-  if (r === '' || r.startsWith('..') || isAbsolute(r)) throw new Error(`path escapes the repository: ${rel}`);
-  let cur = resolve(root);
-  for (const part of r.split(sep)) {
-    cur = join(cur, part);
-    let st;
-    try { st = lstatSync(cur); } catch (e) { if (e.code === 'ENOENT') break; throw e; }
-    if (st.isSymbolicLink()) throw new Error(`refusing symlinked path: ${rel}`);
-  }
-  let anc = abs;
-  while (!existsSync(anc)) anc = dirname(anc);
-  const real = relative(realpathSync(root), realpathSync(anc));
-  if (real.startsWith('..') || isAbsolute(real)) throw new Error(`path escapes the repository: ${rel}`);
-  return abs;
-}
+const ID_RE = REQUEST_ID_RE;
+const inside = safePath;
 
 const exists = (root, rel) => existsSync(inside(root, rel));
 
