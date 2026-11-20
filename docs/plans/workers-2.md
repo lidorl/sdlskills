@@ -1,7 +1,7 @@
 ---
 feat_req: docs/feat-req/workers.md
 design: docs/design/workers.md
-status: PLANNED
+status: IN_PROGRESS
 date: 2026-11-20
 plan: 2 of 3
 repos: [sdlskills]
@@ -47,6 +47,51 @@ repos: [sdlskills]
 The PR is tracked in `docs/plans/workers-3.md`.
 
 ---
+
+### Task 0: Protocol writes never touch the working tree
+
+Added after Plan 1's final review (Ruling 17 in the Plan 1 ledger). Plan 1's `commitFromHead` (scripts/lib/board/git.mjs) lifts uncommitted edits under `docs/feat-req|design|plans` and `board/` out of the working tree into process memory for the whole push. A kill mid-push loses them, and a write made during the push is overwritten. Task 5 renews the lease while an agent is writing exactly those files, so this must be fixed first.
+
+**Files:**
+- Modify: `scripts/lib/board/git.mjs` (the `commitFromHead` path of `boardWrite`)
+- Modify: the protocol-write callers only if their `mutate` contract changes (`claims.mjs`, `requests.mjs`, `effects.mjs`)
+- Test: `scripts/lib/board/git.test.mjs`
+
+**Interfaces:**
+- Produces: for protocol kinds (claim, renew, release, request, answer, withdraw, apply), `boardWrite` builds the commit from HEAD blobs in a temporary index (`GIT_INDEX_FILE` in a temp dir: `read-tree HEAD`, `hash-object -w` the patched content, `update-index --cacheinfo`, `write-tree`, `commit-tree`, then update `refs/heads/main`). `mutate` receives a content API (read a path at HEAD, write patched content for a path) and never reads or writes the working tree. After the push lands, each touched path is fast-forwarded in the working tree only if the working file still equals the old HEAD blob. Otherwise the person's copy is left untouched. Report (`onFailure: 'keep-work'`) keeps its current working-tree behaviour.
+
+- [ ] **Step 1: Write the failing tests**
+
+```js
+test('process killed mid-push loses no uncommitted docs edit', () => {
+  // child process: dirty feat-req body + untracked design draft, renew with hooks.beforePush → process.exit
+  // after: both edits still on disk, byte-identical
+});
+test('a file written during the push survives', () => {
+  // hooks.beforePush writes a new line into the dirty plan file; after renew completes it is still there
+});
+test('protocol commit contains only the patched frontmatter, never working-tree edits', () => {});
+test('clean working file is fast-forwarded to the new HEAD; dirty one is left as is', () => {});
+```
+
+- [ ] **Step 2: Run the tests and confirm they fail**
+
+Run: `node --test scripts/lib/board/git.test.mjs`
+Expected: the new tests fail; the existing ones pass.
+
+- [ ] **Step 3: Replace the working-tree swap with the temporary-index commit**
+
+- [ ] **Step 4: Run the board tests and the full suite**
+
+Run: `node --test "scripts/lib/board/*.test.mjs"` then `npm test`
+Expected: PASS.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add scripts/lib/board/
+git commit -m "fix(board): protocol writes commit from a temporary index, never the working tree"
+```
 
 ### Task 1: Worker home
 
