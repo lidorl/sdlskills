@@ -332,3 +332,110 @@ test('report whose takeover conflicts exits 3, keeps only the design doc, and a 
   assert.match(again.err, /held by lidorl-1a2b3c/);
   assert.equal(git(b.remote, 'rev-parse', 'main'), tip);
 });
+
+const setStatus = (clone, slug, status) => {
+  const f = join(clone, 'docs/feat-req', `${slug}.md`);
+  writeFileSync(f, readFileSync(f, 'utf8').replace(/status: \w+/, `status: ${status}`));
+};
+const onMain = (b, slug) => parseDoc(git(b.remote, 'show', `main:docs/feat-req/${slug}.md`)).data;
+
+test('the final report lands: status IMPLEMENTED set locally, report --phase IMPLEMENTED exits 0', async () => {
+  const b = makeBoard({ featReqs: { 'bulk-export': feat({ status: 'IN_PROGRESS' }) } });
+  const c = b.clone('c');
+  assert.equal((await cli(c, ['claim', 'bulk-export'])).code, 0);
+  setStatus(c, 'bulk-export', 'IMPLEMENTED');
+  const r = await cli(c, ['report', 'bulk-export', '--phase', 'IMPLEMENTED'], { now: hours(1) });
+  assert.equal(r.code, 0, r.err);
+  assert.match(r.out, /reported bulk-export at IMPLEMENTED/);
+  assert.equal(onMain(b, 'bulk-export').status, 'IMPLEMENTED');
+  assert.equal(onMain(b, 'bulk-export').claimed_by, 'lidorl');
+  assert.match(head(b.remote), /Phase: IMPLEMENTED/);
+});
+
+test('report refuses when main already closed the effort (PARKED upstream) and pushes nothing', async () => {
+  const b = makeBoard({ featReqs: { 'bulk-export': feat({ claimed_by: 'lidorl', claimed_at: '2026-06-01T09:00:00Z', renewed_at: '2026-06-01T09:00:00Z' }) } });
+  const c = b.clone('c');
+  b.seed('docs/feat-req/bulk-export.md', git(b.remote, 'show', 'main:docs/feat-req/bulk-export.md').replace('status: ACCEPTED', 'status: PARKED'));
+  const before = git(b.remote, 'rev-parse', 'main');
+  const r = await cli(c, ['report', 'bulk-export', '--phase', 'DESIGNED']);
+  assert.equal(r.code, 3);
+  assert.match(r.err, /bulk-export is PARKED on main; nothing was pushed/);
+  assert.equal(git(b.remote, 'rev-parse', 'main'), before);
+});
+
+test('claim of a closed effort exits 1: "<slug> is PARKED; not claimable"', async () => {
+  const b = makeBoard({ featReqs: { 'bulk-export': feat({ status: 'PARKED' }) } });
+  const r = await cli(b.clone('c'), ['claim', 'bulk-export']);
+  assert.equal(r.code, 1);
+  assert.match(r.err, /bulk-export is PARKED; not claimable/);
+});
+
+test('read commands on a topic branch leave HEAD, the branch and the tree alone, and show origin/main', async () => {
+  const b = makeBoard({ featReqs: { 'bulk-export': feat(), other: feat() } });
+  const c = b.clone('c');
+  git(c, 'checkout', '-q', '-b', 'topic');
+  setStatus(c, 'other', 'PARKED');
+  git(c, 'commit', '-qam', 'local work on topic');
+  writeFileSync(join(c, 'README.md'), 'dirty\n');
+  assert.equal((await cli(b.clone('o'), ['claim', 'bulk-export'], { whoami: () => ({ ...ME, login: 'other' }) })).code, 0);
+  const state = () => [git(c, 'rev-parse', 'HEAD'), git(c, 'rev-parse', 'topic'), git(c, 'symbolic-ref', 'HEAD'), git(c, 'status', '--porcelain'), git(c, 'stash', 'list')];
+  const before = state();
+  const st = JSON.parse((await cli(c, ['status', '--json'])).out);
+  assert.deepEqual(st.inFlight.map((e) => [e.slug, e.claimant]), [['bulk-export', 'other']]);
+  const nx = JSON.parse((await cli(c, ['next', '--json'])).out);
+  assert.equal(nx.next.slug, 'other', 'origin/main has other ACCEPTED, the topic branch has it PARKED');
+  assert.equal((await cli(c, ['inbox'])).code, 0);
+  assert.equal((await cli(c, ['check'])).code, 0);
+  assert.equal((await cli(c, ['watch', '--max-polls', '1'])).code, 0);
+  assert.deepEqual(state(), before);
+});
+
+test('read commands on main behind origin do not fast-forward the clone', async () => {
+  const b = makeBoard({ featReqs: { 'bulk-export': feat() } });
+  const c = b.clone('c');
+  const mine = git(c, 'rev-parse', 'HEAD');
+  b.seed('docs/feat-req/new-one.md', '---\nstatus: ACCEPTED\npriority: high\ndate: 2026-01-01\n---\n# n\n');
+  const nx = JSON.parse((await cli(c, ['next', '--json'])).out);
+  assert.equal(nx.next.slug, 'new-one');
+  assert.equal(git(c, 'rev-parse', 'HEAD'), mine);
+});
+
+test('a report that keeps losing the race prints what was kept and that feat-req edits were not kept', async () => {
+  const b = makeBoard({ featReqs: { 'bulk-export': feat() } });
+  const a = b.clone('a');
+  const o = b.clone('o');
+  assert.equal((await cli(a, ['claim', 'bulk-export'])).code, 0);
+  git(o, 'pull', '-q', '--ff-only', 'origin', 'main');
+  setStatus(a, 'bulk-export', 'DESIGNED');
+  mkdirSync(join(a, 'docs/design'), { recursive: true });
+  writeFileSync(join(a, 'docs/design/bulk-export.md'), '# my design\n');
+  let n = 0;
+  const hooks = { beforePush: () => { n += 1; writeFileSync(join(o, `race-${n}.md`), 'x\n'); git(o, 'add', '.'); git(o, 'commit', '-qm', 'race'); git(o, 'push', '-q', 'origin', 'main'); } };
+  let slept = 0;
+  const r = await cli(a, ['report', 'bulk-export', '--phase', 'DESIGNED'], { now: hours(1), hooks, sleep: async () => { slept += 1; } });
+  assert.equal(r.code, 3, r.err);
+  assert.ok(slept >= 1, 'the injected sleep is used between rebase retries');
+  assert.match(r.err, /kept your uncommitted work: docs\/design\/bulk-export\.md/);
+  assert.match(r.err, /your edits to docs\/feat-req\/bulk-export\.md were not kept/);
+  assert.equal(readFileSync(join(a, 'docs/design/bulk-export.md'), 'utf8'), '# my design\n');
+});
+
+// A post-merge hook records the author identity git was given for each merge (sync's fast-forward).
+function recordMergeIdentity(clone) {
+  const log = join(clone, '.git', 'merge-ident.log');
+  writeFileSync(join(clone, '.git/hooks/post-merge'), `#!/bin/sh\necho "\${GIT_AUTHOR_NAME:-none}" >> "${log}"\n`, { mode: 0o755 });
+  return () => readFileSync(log, 'utf8').trim().split('\n');
+}
+
+test('report and answer sync with the GitHub identity, not the clone config', async () => {
+  const id = '202606010900-abc123';
+  const b = makeBoard({ featReqs: { 'bulk-export': feat() }, files: { [`board/requests/${id}.md`]: request(id) } });
+  const c = b.clone('c');
+  assert.equal((await cli(c, ['claim', 'bulk-export'])).code, 0);
+  const merges = recordMergeIdentity(c);
+  b.seed('upstream-1.md', 'u\n');
+  assert.equal((await cli(c, ['report', 'bulk-export', '--phase', 'ACCEPTED'], { now: hours(1) })).code, 0);
+  b.seed('upstream-2.md', 'u\n');
+  assert.equal((await cli(c, ['answer', id, '--choice', 'confirm'])).code, 0);
+  assert.deepEqual([...new Set(merges())], ['Lidor L']);
+});

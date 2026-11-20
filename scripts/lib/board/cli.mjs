@@ -5,8 +5,8 @@ import { execFileSync } from 'node:child_process';
 import { join, posix } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parse } from 'yaml';
-import { BoardError, assertOnMain, sync, boardWrite } from './git.mjs';
-import { claim, holds, release } from './claims.mjs';
+import { assertOnMain, sync, boardWrite, identityEnv, fetchMain, snapshotMain } from './git.mjs';
+import { claim, release, committedFm, featReqPath, NOT_HOLDABLE } from './claims.mjs';
 import { loadEfforts, rank, overlaps } from './queue.mjs';
 import { listRequests, validateRequest, answerRequest } from './requests.mjs';
 import { boardView, listWorkers } from './registry.mjs';
@@ -57,17 +57,14 @@ function parseArgs(spec, argv) {
   return { flags, positional };
 }
 
-const readFm = (root, slug) => {
-  const f = join(root, 'docs/feat-req', `${slug}.md`);
-  if (!existsSync(f)) return null;
-  try { return parseDoc(readFileSync(f, 'utf8')).data ?? {}; } catch { return null; }
-};
-
 const gitOut = (root, args) => execFileSync('git', args, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
 
-// Read commands refresh the clone best-effort; a failed refresh is a warning, not a stop.
-function refresh(root, deps) {
-  try { sync(root); } catch (e) { deps.err(`warning: could not refresh from origin/main: ${firstLine(e)}\n`); }
+// Read commands never touch the clone's branch or files: fetch origin/main (a failure is a warning), then
+// read the board from a throwaway copy of origin/main's docs/ and board/.
+async function withMainBoard(root, deps, fn) {
+  try { fetchMain(root); } catch (e) { deps.err(`warning: could not refresh from origin/main: ${firstLine(e)}\n`); }
+  const snap = snapshotMain(root);
+  try { return await fn(snap.dir); } finally { snap.cleanup(); }
 }
 
 const firstLine = (e) => String(e.message).split('\n')[0];
@@ -99,7 +96,7 @@ const historyRe = (slug) => new RegExp(`^docs/history/[^/]*_${slug}(-\\d+)?\\.md
 // The files a report commits for an effort: its docs, history entries changed since origin/main, and extras.
 export function reportPaths(root, slug, extra = []) {
   const out = [];
-  const add = (rel) => { if (!out.includes(rel) && existsSync(join(root, rel))) out.push(rel); };
+  const add = (rel) => { if (!out.includes(rel) && existsSync(safePath(root, rel))) out.push(rel); };
   const [featRe, designRe, planRe] = ownerPatterns(slug);
   add(`docs/feat-req/${slug}.md`);
   add(`docs/design/${slug}.md`);
@@ -139,44 +136,60 @@ const age = (ms) => {
 
 // ---- commands -------------------------------------------------------------------------------
 
-function cmdCheck(root, { flags }, deps) {
+function cmdCheck(root, args, deps) {
+  return withMainBoard(root, deps, (board) => checkBoard(board, args, deps));
+}
+
+function checkBoard(root, { flags }, deps) {
   const problems = [];
   const add = (file, problem) => problems.push({ file, problem });
-  const cfgFile = join(root, 'board/config.yml');
-  if (existsSync(cfgFile)) {
+  const read = (rel) => readFileSync(safePath(root, rel), 'utf8');
+  const list = (rel, ext) => {
     try {
-      for (const p of validateConfig(parse(readFileSync(cfgFile, 'utf8')) ?? {})) add('board/config.yml', p);
-    } catch (e) { add('board/config.yml', `invalid YAML: ${firstLine(e)}`); }
-  }
-  const dir = join(root, 'board/requests');
-  if (existsSync(dir)) {
-    for (const n of readdirSync(dir).filter((f) => f.endsWith('.md')).sort()) {
-      for (const p of validateRequest(readFileSync(join(dir, n), 'utf8'), n)) add(`board/requests/${n}`, p);
+      const dir = safePath(root, rel);
+      return existsSync(dir) ? readdirSync(dir).filter((f) => f.endsWith(ext)).sort() : [];
+    } catch (e) { add(rel, firstLine(e)); return []; }
+  };
+  try {
+    if (existsSync(safePath(root, 'board/config.yml'))) {
+      const text = read('board/config.yml');
+      let cfg;
+      try { cfg = parse(text) ?? {}; } catch (e) { throw new Error(`invalid YAML: ${firstLine(e)}`); }
+      for (const p of validateConfig(cfg)) add('board/config.yml', p);
     }
+  } catch (e) { add('board/config.yml', firstLine(e)); }
+  for (const n of list('board/requests', '.md')) {
+    const rel = `board/requests/${n}`;
+    try {
+      for (const p of validateRequest(read(rel), n)) add(rel, p);
+    } catch (e) { add(rel, firstLine(e)); }
   }
-  const wdir = join(root, 'board/workers');
-  if (existsSync(wdir)) {
-    for (const n of readdirSync(wdir).filter((f) => f.endsWith('.yml')).sort()) {
-      try {
-        const w = parse(readFileSync(join(wdir, n), 'utf8'));
-        if (!w || typeof w !== 'object') add(`board/workers/${n}`, 'must be a mapping');
-        else if (w.id !== n.slice(0, -4)) add(`board/workers/${n}`, `id "${w.id}" must match the filename`);
-      } catch (e) { add(`board/workers/${n}`, `invalid YAML: ${firstLine(e)}`); }
-    }
+  for (const n of list('board/workers', '.yml')) {
+    const rel = `board/workers/${n}`;
+    let text;
+    try { text = read(rel); } catch (e) { add(rel, firstLine(e)); continue; }
+    try {
+      const w = parse(text);
+      if (!w || typeof w !== 'object') add(rel, 'must be a mapping');
+      else if (w.id !== n.slice(0, -4)) add(rel, `id "${w.id}" must match the filename`);
+    } catch (e) { add(rel, `invalid YAML: ${firstLine(e)}`); }
   }
-  for (const p of loadEfforts(root).problems) add(p.file.startsWith(root) ? p.file.slice(root.length + 1) : p.file, p.message);
+  for (const p of loadEfforts(root).problems) add(p.file, p.message);
   if (flags['--json']) deps.out(`${JSON.stringify({ ok: problems.length === 0, problems })}\n`);
   else for (const p of problems) deps.err(`${p.file}: ${p.problem}\n`);
   if (!flags['--json'] && !problems.length) deps.out('board ok\n');
   return problems.length ? 1 : 0;
 }
 
-function cmdNext(root, { flags }, deps) {
-  refresh(root, deps);
-  const cfg = loadConfig(root);
+function cmdNext(root, args, deps) {
+  return withMainBoard(root, deps, (board) => nextOn(root, board, args, deps));
+}
+
+function nextOn(root, board, { flags }, deps) {
+  const cfg = loadConfig(board);
   const now = deps.now();
-  const { efforts } = loadEfforts(root);
-  const ranked = rank(efforts, { now, ttlMs: cfg.leaseTtlMs, openRequestIds: openRequestIds(root) });
+  const { efforts } = loadEfforts(board);
+  const ranked = rank(efforts, { now, ttlMs: cfg.leaseTtlMs, openRequestIds: openRequestIds(board) });
   const next = ranked[0] ?? null;
   const ov = next ? overlaps(next, efforts, { now, ttlMs: cfg.leaseTtlMs, readonlyKeys: readonlyKeys(root) }) : [];
   if (flags['--json']) { deps.out(`${JSON.stringify({ next, overlaps: ov })}\n`); return 0; }
@@ -196,9 +209,9 @@ async function cmdClaim(root, { positional: [slug] }, deps) {
     isAwaitingOpen: (fm) => openRequestIds(root).has(String(fm.awaiting)),
   });
   if (!r.ok) {
-    const by = readFm(root, slug)?.claimed_by;
+    const fm = committedFm(root, slug);
     const why = {
-      gone: `no such effort ${slug}`, held: `${slug} is held by ${by}`,
+      gone: `no such effort ${slug}`, held: `${slug} is held by ${fm?.claimed_by}`, closed: `${slug} is ${fm?.status}; not claimable`,
       awaiting: `${slug} is waiting on an open request`, mismatch: `${slug} changed while claiming; try again`,
     }[r.reason] ?? `could not claim ${slug} (${r.reason})`;
     deps.err(`${why}\n`);
@@ -218,40 +231,51 @@ async function cmdReport(root, { flags, positional: [slug] }, deps) {
   try { reportPaths(root, slug, extra); } catch (e) { throw new UsageError(firstLine(e)); }
   assertOnMain(root);
   const id = deps.whoami();
-  const holder = () => {
-    try { return parseDoc(gitOut(root, ['show', `origin/main:docs/feat-req/${slug}.md`])).data?.claimed_by; } catch { return undefined; }
+  const feat = featReqPath(slug);
+  // The holder is whoever main says. The working copy may already say IMPLEMENTED/PARKED: that is the report.
+  const refusal = (fm) => {
+    if (!fm || fm.claimed_by !== id.login) return 'not-holder';
+    return NOT_HOLDABLE.has(fm.status) ? 'closed' : null;
   };
-  const lost = (landed = false, res = {}) => {
-    const by = holder();
-    if (landed) deps.err(`${slug}: report landed but ${slug} is now held by ${by}\n`);
+  const lost = (why, res = {}) => {
+    const up = committedFm(root, slug, 'origin/main');
+    if (why === 'closed') deps.err(`${slug} is ${up?.status} on main; nothing was pushed\n`);
+    else if (why === 'landed') deps.err(`${slug}: report landed but ${slug} is now held by ${up?.claimed_by}\n`);
+    else if (why === 'race') deps.err(`${slug}: lost the race to push the report; nothing was pushed\n`);
     else {
-      deps.err(by
-        ? `${slug} is now held by ${by}; nothing was pushed\n`
+      deps.err(up?.claimed_by
+        ? `${slug} is now held by ${up.claimed_by}; nothing was pushed\n`
         : `${slug} is not claimed by ${id.login}; nothing was pushed\n`);
     }
     if (res.kept?.length) deps.err(`kept your uncommitted work: ${res.kept.join(', ')}\n`);
     if (res.conflicted?.length) deps.err(`changed upstream too; your version saved beside it as <path>.ours-<sha>: ${res.conflicted.join(', ')}\n`);
+    if (res.dropped) deps.err(`your edits to ${feat} were not kept (main's copy wins); redo them once you hold ${slug} again\n`);
     return 3;
   };
-  sync(root);
-  if (!holds(root, slug, id.login)) return lost();
+  sync(root, identityEnv(id));
+  const pre = refusal(committedFm(root, slug));
+  if (pre) return lost(pre);
   const stamp = iso(deps.now());
-  let refused = false;
+  let refused = null;
   const r = await boardWrite(root, {
-    kind: 'report', subject: slug, identity: id, onReject: 'rebase', onFailure: 'keep-work', hooks: deps.hooks,
+    kind: 'report', subject: slug, identity: id, onReject: 'rebase', onFailure: 'keep-work', hooks: deps.hooks, sleep: deps.sleep,
     trailers: { effort: slug, phase },
     mutate: (c) => {
-      refused = false;
-      if (!holds(c, slug, id.login)) { refused = true; return []; }
-      const f = join(c, `docs/feat-req/${slug}.md`);
-      writeFileSync(f, setFields(readFileSync(f, 'utf8'), { renewed_at: stamp }));
+      const up = committedFm(c, slug);
+      refused = refusal(up);
+      if (refused) return [];
+      // Publish the working copy (the report), but the claim fields are main's: only renewed_at moves.
+      const f = safePath(c, feat);
+      writeFileSync(f, setFields(readFileSync(f, 'utf8'), { claimed_by: up.claimed_by, claimed_at: up.claimed_at ?? null, renewed_at: stamp }));
       return reportPaths(c, slug, extra);
     },
-    validate: (c) => holds(c, slug, id.login),
+    validate: (c) => committedFm(c, slug, 'origin/main')?.claimed_by === id.login,
   });
   if (r.ok) { deps.out(`reported ${slug} at ${phase}\n`); return 0; }
-  if (refused || r.reason === 'conflict') return lost(false, r);
-  if (r.reason === 'replaced') return lost(true);
+  if (refused) return lost(refused);
+  if (r.reason === 'conflict') return lost('not-holder', { ...r, dropped: true });
+  if (r.reason === 'lost-race') return lost('race', { ...r, dropped: true });
+  if (r.reason === 'replaced') return lost('landed');
   deps.err(`could not report ${slug} (${r.reason})\n`);
   return 1;
 }
@@ -265,10 +289,15 @@ async function cmdRelease(root, { positional: [slug] }, deps) {
   return 1;
 }
 
-function cmdStatus(root, { flags }, deps) {
-  refresh(root, deps);
-  const cfg = loadConfig(root);
-  const view = boardView(root, { now: deps.now(), ttlMs: cfg.leaseTtlMs });
+function cmdStatus(root, args, deps) {
+  return withMainBoard(root, deps, (board) => statusOn(root, board, args, deps));
+}
+
+function statusOn(root, board, { flags }, deps) {
+  const cfg = loadConfig(board);
+  let events;
+  try { events = parseLog(root, { ref: 'origin/main' }); } catch { events = []; }
+  const view = boardView(board, { now: deps.now(), ttlMs: cfg.leaseTtlMs, events });
   if (flags['--json']) { deps.out(`${JSON.stringify(view)}\n`); return 0; }
   const ts = (v) => (v ? new Date(v).toISOString().slice(0, 16).replace('T', ' ') : '-');
   deps.out(`Workers\n${table(['id', 'owner', 'state', 'effort', 'last seen'],
@@ -280,9 +309,12 @@ function cmdStatus(root, { flags }, deps) {
   return 0;
 }
 
-function cmdInbox(root, { flags }, deps) {
-  refresh(root, deps);
+function cmdInbox(root, args, deps) {
   const login = deps.whoami().login;
+  return withMainBoard(root, deps, (board) => inboxOn(board, login, args, deps));
+}
+
+function inboxOn(root, login, { flags }, deps) {
   const mine = (r) => flags['--all'] || r.fm.for === login || r.fm.for === 'approvers';
   const time = (r) => new Date(r.fm.created_at).getTime() || 0;
   const rows = listRequests(root).requests
@@ -353,7 +385,7 @@ async function promptWith(ui, req) {
 async function cmdAnswer(root, { flags, positional: [id] }, deps) {
   assertOnMain(root);
   const ident = deps.whoami();
-  sync(root);
+  sync(root, identityEnv(ident));
   const req = listRequests(root).requests.find((r) => r.id === id);
   if (!req || req.fm.status !== 'open') { deps.err(`no such open request ${id}\n`); return 1; }
   let answer;
@@ -369,7 +401,7 @@ async function cmdAnswer(root, { flags, positional: [id] }, deps) {
   } else {
     throw new UsageError('answer needs --choice (or run it in a terminal)');
   }
-  const r = await answerRequest(root, id, { answer, notes, by: ident.login, via: 'cli', identity: ident, now: deps.now() });
+  const r = await answerRequest(root, id, { answer, notes, by: ident.login, via: 'cli', identity: ident, now: deps.now(), sleep: deps.sleep });
   if (r.ok) { deps.out(`answered ${id}\n`); return 0; }
   deps.err(r.reason === 'missing' || r.reason === 'not-open' ? `no such open request ${id}\n`
     : r.reason === 'invalid-answer' ? `that answer does not fit request ${id}; see its Options or Findings\n`
@@ -384,10 +416,11 @@ async function cmdWatch(root, { flags }, deps) {
   if (!(max >= 1)) throw new UsageError('--max-polls must be a positive integer');
   if (flags['--since'] !== undefined && !/^[0-9a-f]{7,40}$/.test(flags['--since'])) throw new UsageError('--since must be a commit sha (7-40 hex chars)');
   const tip = () => gitOut(root, ['rev-parse', 'origin/main']).trim();
-  refresh(root, deps);
+  const refresh = () => { try { fetchMain(root); } catch (e) { deps.err(`warning: could not refresh from origin/main: ${firstLine(e)}\n`); } };
+  refresh();
   let last = flags['--since'] ?? tip();
   for (let poll = 1; poll <= max; poll++) {
-    if (poll > 1) { await deps.sleep(interval); refresh(root, deps); }
+    if (poll > 1) { await deps.sleep(interval); refresh(); }
     const events = parseLog(root, { sinceSha: last }).reverse();
     for (const e of events) {
       if (flags['--json']) deps.out(`${JSON.stringify(e)}\n`);
