@@ -109,3 +109,69 @@ test('assertOnMain throws off main', () => {
   g(a, 'checkout', '-b', 'topic');
   assert.throws(() => assertOnMain(a), (e) => e instanceof BoardError && e.message === 'not on main');
 });
+
+const once = (fn) => { let done = false; return () => { if (!done) { done = true; fn(); } }; };
+const originHas = (a, sha) => { try { g(a, 'merge-base', '--is-ancestor', sha, 'origin/main'); return true; } catch { return false; } };
+
+test('C1: local unpushed commits make boardWrite throw before publishing them', async () => {
+  const a = makeBoard().clone('a');
+  writeFileSync(join(a, 'mine.md'), 'x\n'); g(a, 'add', 'mine.md'); g(a, 'commit', '-m', 'person work');
+  const mine = revParse(a, 'HEAD');
+  await assert.rejects(boardWrite(a, { ...base, kind: 'claim', subject: 's', onReject: 'restart', mutate: writer('x.md', 'a\n') }),
+    (e) => e instanceof BoardError && /local commits ahead/.test(e.message));
+  g(a, 'fetch', 'origin', 'main');
+  assert.equal(originHas(a, mine), false);
+});
+
+test('C1: local unpushed commits survive (not dropped) when the write would have lost the race', async () => {
+  const fx = makeBoard(); const a = fx.clone('a'); const b = fx.clone('b');
+  writeFileSync(join(a, 'mine.md'), 'x\n'); g(a, 'add', 'mine.md'); g(a, 'commit', '-m', 'person work');
+  const mine = revParse(a, 'HEAD');
+  await assert.rejects(boardWrite(a, { ...base, kind: 'claim', subject: 's', onReject: 'restart', mutate: writer('x.md', 'a\n'), hooks: { beforePush: racer(b, 'y.md', 'b\n') } }), BoardError);
+  assert.equal(revParse(a, 'HEAD'), mine);
+});
+
+test('I1: a dirty file that --keep cannot preserve ends clean at origin/main, work kept in stash', async () => {
+  const fx = makeBoard(); fx.seed('notes.md', 'one\n'); const a = fx.clone('a'); const b = fx.clone('b');
+  writeFileSync(join(a, 'notes.md'), 'dirty\n');
+  await assert.rejects(boardWrite(a, { ...base, kind: 'claim', subject: 's', onReject: 'restart', mutate: writer('x.md', 'a\n'), hooks: { beforePush: racer(b, 'notes.md', 'theirs\n') } }),
+    (e) => e instanceof BoardError);
+  assert.equal(revParse(a, 'HEAD'), revParse(a, 'origin/main'));
+  assert.equal(g(a, 'status', '--porcelain'), '');
+  assert.match(g(a, 'stash', 'show', '-p'), /dirty/);
+  // clone is usable afterwards
+  g(a, 'stash', 'drop');
+  assert.equal((await boardWrite(a, { ...base, kind: 'claim', subject: 's', onReject: 'restart', mutate: writer('z.md', 'z\n') })).ok, true);
+});
+
+test('I2: rebase whose autostash pop conflicts never pushes and leaves the clone clean at origin/main', async () => {
+  const fx = makeBoard(); fx.seed('notes.md', 'one\n'); const a = fx.clone('a'); const b = fx.clone('b');
+  writeFileSync(join(a, 'notes.md'), 'dirty\n');
+  await assert.rejects(boardWrite(a, { ...base, kind: 'claim', subject: 's', onReject: 'rebase', mutate: writer('x.md', 'a\n'), hooks: { beforePush: once(racer(b, 'notes.md', 'theirs\n')) } }),
+    (e) => e instanceof BoardError);
+  assert.equal(revParse(a, 'HEAD'), revParse(a, 'origin/main'));
+  assert.equal(g(a, 'status', '--porcelain'), '');
+  assert.equal(g(a, 'diff', '--name-only', '--diff-filter=U'), '');
+});
+
+test('I3: rebase commits use the supplied identity, not the clone config', async () => {
+  const fx = makeBoard(); const a = fx.clone('a', { name: 'Someone Else', email: 'else@example.com' }); const b = fx.clone('b');
+  const r = await boardWrite(a, { ...base, kind: 'claim', subject: 's', onReject: 'rebase', mutate: writer('x.md', 'a\n'), hooks: { beforePush: once(racer(b, 'y.md', 'b\n')) } });
+  assert.equal(r.ok, true);
+  assert.equal(g(a, 'log', '-1', '--format=%an <%ae>|%cn <%ce>'), 'Test Owner <owner@example.com>|Test Owner <owner@example.com>');
+});
+
+test('I4: event kind whose rebased commit becomes a no-op is kept, sha is ours', async () => {
+  const fx = makeBoard(); const a = fx.clone('a'); const b = fx.clone('b');
+  const r = await boardWrite(a, { ...base, kind: 'renew', subject: 's', onReject: 'rebase', mutate: writer('x.md', 'same\n'), hooks: { beforePush: once(racer(b, 'x.md', 'same\n')) } });
+  assert.equal(r.ok, true);
+  assert.equal(r.sha, revParse(a, 'origin/main'));
+  assert.match(g(a, 'log', '-1', '--format=%B', r.sha), /Sdlc-Event: renew/);
+});
+
+test('I4: non-event kind whose rebased commit becomes a no-op returns nothing-to-do', async () => {
+  const fx = makeBoard(); const a = fx.clone('a'); const b = fx.clone('b');
+  const r = await boardWrite(a, { ...base, kind: 'claim', subject: 's', onReject: 'rebase', mutate: writer('x.md', 'same\n'), hooks: { beforePush: once(racer(b, 'x.md', 'same\n')) } });
+  assert.deepEqual(r, { ok: false, reason: 'nothing-to-do' });
+  assert.equal(revParse(a, 'HEAD'), revParse(a, 'origin/main'));
+});

@@ -45,10 +45,10 @@ export function makeBoard({ featReqs = {}, board = true } = {}) {
   return {
     dir,
     remote,
-    clone(name) {
+    clone(name, ident = IDENT) {
       const path = join(dir, name);
       git(dir, ['clone', remote, path]);
-      setIdent(path);
+      setIdent(path, ident);
       return path;
     },
     // Commit a file straight onto the remote's main (repo-relative `file`), via the seeder clone.
