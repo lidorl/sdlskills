@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { readFileSync, existsSync, symlinkSync, mkdirSync, writeFileSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
+import { stringify } from 'yaml';
 import { makeBoard, IDENT } from './fixtures.mjs';
 import { applyAnswer, applyAnswered, applyClosed } from './effects.mjs';
 import { buildRequest, listRequests } from './requests.mjs';
@@ -28,11 +29,22 @@ function answered({ kind, gate = null, scope = 'effort', effort = SLUG, sections
   return { id, text };
 }
 
-function setup({ fm = { title: 'Bulk export', status: 'ACCEPTED' }, files = {}, reqs = [] } = {}) {
-  const fx = makeBoard({ featReqs: { [SLUG]: fm } });
-  for (const [f, c] of Object.entries(files)) fx.seed(f, c);
-  for (const r of reqs) fx.seed(`board/requests/${r.id}.md`, r.text);
-  return fx;
+const DEFAULT_FM = { title: 'Bulk export', status: 'ACCEPTED' };
+const requestFiles = (reqs) => Object.fromEntries(reqs.map((r) => [`board/requests/${r.id}.md`, r.text]));
+
+function setup({ fm = DEFAULT_FM, files = {}, reqs = [] } = {}) {
+  return makeBoard({ featReqs: { [SLUG]: fm }, files: { ...files, ...requestFiles(reqs) } });
+}
+
+// applyAnswer is pure file work: a plain directory, no git.
+function plainTree({ fm = DEFAULT_FM, files = {}, reqs = [] } = {}) {
+  const root = mkdtempSync(join(tmpdir(), 'effects-'));
+  const all = { [`docs/feat-req/${SLUG}.md`]: `---\n${stringify(fm)}---\n\n# ${SLUG}\n`, ...files, ...requestFiles(reqs) };
+  for (const [f, c] of Object.entries(all)) {
+    mkdirSync(dirname(join(root, f)), { recursive: true });
+    writeFileSync(join(root, f), c);
+  }
+  return root;
 }
 
 const read = (root, f) => readFileSync(join(root, f), 'utf8');
@@ -41,8 +53,7 @@ const DESIGN = '---\nstatus: DRAFT\n---\n\n# Design\n';
 const PLAN = '---\nstatus: PLANNED\n---\n\n# Plan\n\n- [x] one\n- [x] two\n- [ ] three\n';
 
 function run(req, setupOpts = {}) {
-  const fx = setup({ ...setupOpts, reqs: [req] });
-  const root = fx.clone('a');
+  const root = plainTree({ ...setupOpts, reqs: [req] });
   const r = listRequests(root).requests.find((x) => x.id === req.id);
   const out = applyAnswer(root, r, ctx);
   return { root, out };
@@ -151,8 +162,7 @@ test('effort error park / retry / text', () => {
 
 test('worker error resolved: nothing applied', () => {
   const req = answered({ kind: 'error', scope: 'worker', effort: null, sections: { Error: 'x' }, answer: 'resolved' });
-  const fx = setup({ reqs: [req] });
-  const root = fx.clone('a');
+  const root = plainTree({ reqs: [req] });
   const r = listRequests(root).requests[0];
   assert.deepEqual(applyAnswer(root, r, ctx), { paths: [], agentInput: null, newRequests: [] });
 });
@@ -282,7 +292,7 @@ test('applyAnswered after a lost race applies once: one Decisions line, one plan
 });
 
 test('path guards: unsafe effort or id never reaches the filesystem', () => {
-  const root = setup().clone('a');
+  const root = plainTree();
   const req = (over) => ({ id: '202611201000-abcde1', path: 'x', fm: { id: '202611201000-abcde1', kind: 'question', scope: 'effort', effort: SLUG, answer: 'A', ...over }, sections: { Answer: '' } });
   assert.throws(() => applyAnswer(root, req({ effort: '../../evil' }), ctx), /unsafe/);
   assert.throws(() => applyAnswer(root, { ...req({}), id: '../../x' }, ctx), /unsafe/);

@@ -33,8 +33,7 @@ function request(id, over = {}) {
 }
 
 test('check exits 1 and names a broken request file', async () => {
-  const b = makeBoard();
-  b.seed('board/requests/bad.md', '---\nid: nope\n---\n');
+  const b = makeBoard({ files: { 'board/requests/bad.md': '---\nid: nope\n---\n' } });
   const c = b.clone('c');
   const r = await cli(c, ['check']);
   assert.equal(r.code, 1);
@@ -48,9 +47,10 @@ test('next --json ranks and reports overlaps', async () => {
     alpha: feat({ claimed_by: 'someone', claimed_at: '2026-06-01T09:00:00Z' }),
     beta: feat({ priority: 'low' }),
     gamma: feat({ priority: 'high' }),
+  }, files: {
+    'docs/design/alpha.md': '---\nrepos: [api, web]\n---\n# a\n',
+    'docs/design/gamma.md': '---\nrepos: [web]\n---\n# g\n',
   } });
-  b.seed('docs/design/alpha.md', '---\nrepos: [api, web]\n---\n# a\n');
-  b.seed('docs/design/gamma.md', '---\nrepos: [web]\n---\n# g\n');
   const c = b.clone('c');
   const r = await cli(c, ['next', '--json']);
   assert.equal(r.code, 0);
@@ -118,9 +118,8 @@ test('argv is validated before use', async () => {
 });
 
 test('answer touches only the request file; second answer exits non-zero', async () => {
-  const b = makeBoard();
   const id = '202606010900-abc123';
-  b.seed(`board/requests/${id}.md`, request(id));
+  const b = makeBoard({ files: { [`board/requests/${id}.md`]: request(id) } });
   const c = b.clone('c');
   const r = await cli(c, ['answer', id, '--choice', 'confirm', '--note', 'ok']);
   assert.equal(r.code, 0, r.err);
@@ -133,12 +132,11 @@ test('answer touches only the request file; second answer exits non-zero', async
 });
 
 test('answer takes review-gate choices as F1=fix,F2=accept', async () => {
-  const b = makeBoard();
   const id = '202606010900-abc123';
-  b.seed(`board/requests/${id}.md`, request(id, {
+  const b = makeBoard({ files: { [`board/requests/${id}.md`]: request(id, {
     kind: 'gate', gate: 'review-findings', blocking: true,
     sections: { Request: 'r', Context: 'c', Findings: '### F1\nx\n\n### F2\ny' },
-  }));
+  }) } });
   const c = b.clone('c');
   const r = await cli(c, ['answer', id, '--choice', 'F1=fix,F2=accept']);
   assert.equal(r.code, 0, r.err);
@@ -154,17 +152,17 @@ test('answer for a withdrawn request: "no such open request", exit 1', async () 
 });
 
 test('answer without --choice off a terminal is a usage error', async () => {
-  const b = makeBoard();
   const id = '202606010900-abc123';
-  b.seed(`board/requests/${id}.md`, request(id));
+  const b = makeBoard({ files: { [`board/requests/${id}.md`]: request(id) } });
   assert.equal((await cli(b.clone('c'), ['answer', id])).code, 2);
 });
 
 test('inbox shows mine + approvers, oldest first; --all shows everyone', async () => {
-  const b = makeBoard();
-  b.seed('board/requests/202606010900-aaaaaa.md', request('202606010900-aaaaaa', { for: 'lidorl', now: hours(2) }));
-  b.seed('board/requests/202606010800-bbbbbb.md', request('202606010800-bbbbbb', { for: 'approvers', now: hours(1) }));
-  b.seed('board/requests/202606010700-cccccc.md', request('202606010700-cccccc', { for: 'other', now: hours(0) }));
+  const b = makeBoard({ files: {
+    'board/requests/202606010900-aaaaaa.md': request('202606010900-aaaaaa', { for: 'lidorl', now: hours(2) }),
+    'board/requests/202606010800-bbbbbb.md': request('202606010800-bbbbbb', { for: 'approvers', now: hours(1) }),
+    'board/requests/202606010700-cccccc.md': request('202606010700-cccccc', { for: 'other', now: hours(0) }),
+  } });
   const c = b.clone('c');
   const mine = JSON.parse((await cli(c, ['inbox', '--json'])).out);
   assert.deepEqual(mine.map((r) => r.id), ['202606010800-bbbbbb', '202606010900-aaaaaa']);
@@ -226,9 +224,8 @@ test('worker subcommand before Plan 2 exits 2 with a clear message', async () =>
 });
 
 test('answer on a terminal with no --choice asks through the menu', async () => {
-  const b = makeBoard();
   const id = '202606010900-abc123';
-  b.seed(`board/requests/${id}.md`, request(id));
+  const b = makeBoard({ files: { [`board/requests/${id}.md`]: request(id) } });
   const c = b.clone('c');
   const ui = { select: async ({ choices }) => choices.find((x) => x.value === 'confirm').value };
   const r = await cli(c, ['answer', id], { interactive: true, ui });
@@ -306,8 +303,7 @@ test('report that lands but is then replaced by a takeover exits 3 and keeps the
 });
 
 test('report whose takeover conflicts exits 3, keeps only the design doc, and a second report pushes nothing', async () => {
-  const b = makeBoard({ featReqs: { 'bulk-export': feat() } });
-  b.seed('other.md', 'x\n');
+  const b = makeBoard({ featReqs: { 'bulk-export': feat() }, files: { 'other.md': 'x\n' } });
   const a = b.clone('a');
   const o = b.clone('o');
   assert.equal((await cli(a, ['claim', 'bulk-export'])).code, 0);

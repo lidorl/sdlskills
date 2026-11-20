@@ -4,7 +4,6 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { makeBoard, IDENT } from './fixtures.mjs';
-import { claim } from './claims.mjs';
 import { parseDoc } from './frontmatter.mjs';
 import {
   newRequestId, buildRequest, validateRequest, listRequests, postRequest, answerRequest, withdrawRequest, answeredFor,
@@ -90,9 +89,10 @@ test('validateRequest checks answer consistency per kind', () => {
 });
 
 async function posted(v = variants.question, opts = {}) {
-  const fx = makeBoard({ featReqs: feat() });
+  // Already claimed by a-worker1 on main (what claim() would have pushed).
+  const stamp = '2026-11-20T12:00:00Z';
+  const fx = makeBoard({ featReqs: { 'bulk-export': { title: 'Bulk export', status: 'APPROVED', claimed_by: 'a-worker1', claimed_at: stamp, renewed_at: stamp } } });
   const a = fx.clone('a');
-  await claim(a, 'bulk-export', { identity: IDENT, claimant: 'a-worker1', workerId: 'a-worker1', now: NOW, ttlMs: 4 * 3600e3, isAwaitingOpen: () => false });
   const req = { ...base, ...v, ...opts.req };
   const r = await postRequest(a, req, { identity: IDENT, workerId: 'a-worker1', ...(opts.post ?? { releaseFrom: { slug: 'bulk-export', claimant: 'a-worker1' } }) });
   return { fx, a, r, req };
@@ -191,7 +191,7 @@ test('answering a missing request → missing, nothing pushed', async () => {
   const head = g(b, 'rev-parse', 'origin/main');
   const r = await answerRequest(b, ID, { answer: 'A', by: 'lidorl', via: 'cli', identity: IDENT, now: NOW });
   assert.deepEqual(r, { ok: false, reason: 'missing' });
-  assert.equal(g(fx.clone('c'), 'rev-parse', 'origin/main'), head);
+  assert.equal(g(fx.remote, 'rev-parse', 'main'), head);
 });
 
 test('withdrawRequest removes the file, clears awaiting, logs the note', async () => {
