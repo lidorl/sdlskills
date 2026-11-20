@@ -47,32 +47,51 @@ export function setFields(text, patch) {
   return yaml === null ? `${head}\n${text}` : head + rest;
 }
 
-const FENCE = /^\s*(```|~~~)/;
+const FENCE = /^\s*(`{3,}|~{3,})(.*)$/;
+
+// Stateful per-line fence tracker: returns true for fence delimiter lines and lines inside a fence.
+// A fence closes only on the same marker character, at least as long, with nothing after it.
+export function fenceTracker() {
+  let open = null;
+  return (line) => {
+    const m = FENCE.exec(line);
+    if (!open) {
+      if (m) { open = m[1]; return true; }
+      return false;
+    }
+    if (m && m[1][0] === open[0] && m[1].length >= open.length && m[2].trim() === '') open = null;
+    return true;
+  };
+}
+
+// Locate a level-2 section outside code fences: { start, end } line indexes (end = next #/## heading or EOF).
+// `last` picks the final matching heading instead of the first.
+export function locateSection(lines, heading, { last = false } = {}) {
+  const target = new RegExp(`^##\\s+${heading.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*$`);
+  const inFence = fenceTracker();
+  let found = null;
+  for (let i = 0; i < lines.length; i += 1) {
+    if (inFence(lines[i])) continue;
+    if (found && found.end === null) {
+      if (/^#{1,2}\s/.test(lines[i])) {
+        found.end = i;
+        if (!last) break;
+      }
+    }
+    if (target.test(lines[i]) && (last || !found)) found = { start: i, end: null };
+  }
+  return found && { start: found.start, end: found.end ?? lines.length };
+}
 
 export function appendToSection(text, heading, line) {
   const eol = text.includes('\r\n') ? '\r\n' : '\n';
   const lines = text.split(/\r?\n/);
-  const target = new RegExp(`^##\\s+${heading.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*$`);
-  let inFence = false;
-  let start = -1;
-  let end = lines.length;
-  for (let i = 0; i < lines.length; i += 1) {
-    if (FENCE.test(lines[i])) {
-      inFence = !inFence;
-      continue;
-    }
-    if (inFence) continue;
-    if (start === -1) {
-      if (target.test(lines[i])) start = i;
-    } else if (/^#{1,2}\s/.test(lines[i])) {
-      end = i;
-      break;
-    }
-  }
-  if (start === -1) {
+  const sec = locateSection(lines, heading);
+  if (!sec) {
     const body = text.replace(/(\r?\n)*$/, '');
     return `${body}${eol}${eol}## ${heading}${eol}${line}${eol}`;
   }
+  const { start, end } = sec;
   let last = end - 1;
   while (last > start && lines[last].trim() === '') last -= 1;
   lines.splice(last + 1, 0, line);

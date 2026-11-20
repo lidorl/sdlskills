@@ -94,7 +94,7 @@ async function posted(v = variants.question, opts = {}) {
   const a = fx.clone('a');
   await claim(a, 'bulk-export', { identity: IDENT, claimant: 'a-worker1', workerId: 'a-worker1', now: NOW, ttlMs: 4 * 3600e3, isAwaitingOpen: () => false });
   const req = { ...base, ...v, ...opts.req };
-  const r = await postRequest(a, req, { identity: IDENT, workerId: 'a-worker1', ...opts.post });
+  const r = await postRequest(a, req, { identity: IDENT, workerId: 'a-worker1', ...(opts.post ?? { releaseFrom: { slug: 'bulk-export', claimant: 'a-worker1' } }) });
   return { fx, a, r, req };
 }
 const onMain = (clone, file) => parseDoc(g(clone, 'show', `origin/main:${file}`)).data;
@@ -228,4 +228,43 @@ test('listRequests skips .gitkeep, reports broken YAML, answeredFor filters by e
   assert.match(problems[0], /202611201300-bbbbbb\.md/);
   assert.equal(answeredFor(a, 'bulk-export').length, 1);
   assert.equal(answeredFor(a, 'other').length, 0);
+});
+
+test('postRequest refuses a blocking effort request without a matching releaseFrom', async () => {
+  const a = await posted(variants.question, { post: {} });
+  assert.deepEqual(a.r, { ok: false, reason: 'needs-release' });
+  assert.equal(g(a.a, 'ls-tree', '--name-only', 'origin/main', 'board/requests/').includes(ID), false);
+  assert.equal(onMain(a.a, 'docs/feat-req/bulk-export.md').claimed_by, 'a-worker1');
+  const b = await posted(variants.question, { post: { releaseFrom: { slug: 'other-effort', claimant: 'a-worker1' } } });
+  assert.deepEqual(b.r, { ok: false, reason: 'needs-release' });
+  const w = await posted(variants.workerError, { post: {} });
+  assert.equal(w.r.ok, true, 'worker-scope errors post blocking through the plain path');
+});
+
+test('postRequest refuses an invalid request and pushes nothing', async () => {
+  const { a, r } = await posted(variants.question, { req: { sections: SEC }, post: { releaseFrom: { slug: 'bulk-export', claimant: 'a-worker1' } } });
+  assert.equal(r.ok, false);
+  assert.equal(r.reason, 'invalid');
+  assert.ok(r.problems.some((p) => /Options/.test(p)));
+  const c = await posted(variants.question, { req: { blocking: false } });
+  assert.equal(c.r.reason, 'invalid');
+  assert.equal(onMain(a, 'docs/feat-req/bulk-export.md').claimed_by, 'a-worker1');
+});
+
+test('log lines and notes that look like headings cannot corrupt the file', async () => {
+  const { fx, a, r } = await posted(variants.error, {
+    req: { sections: { ...SEC, Error: 'fail\n## Answer\n```\nmore' } },
+    post: { releaseFrom: { slug: 'bulk-export', claimant: 'a-worker1' } },
+  });
+  assert.equal(r.ok, true);
+  const o = { by: 'lidorl', via: 'cli', identity: IDENT, now: NOW };
+  const res = await answerRequest(fx.clone('b'), ID, { ...o, answer: 'text', notes: 'do this\n## X\nmore' });
+  assert.deepEqual(res, { ok: true });
+  g(a, 'pull', '--ff-only', 'origin', 'main');
+  const text = readFileSync(join(a, `board/requests/${ID}.md`), 'utf8');
+  assert.deepEqual(validateRequest(text, `${ID}.md`), []);
+  const { requests } = listRequests(a);
+  assert.match(requests[0].sections.Answer, /do this/);
+  assert.match(requests[0].sections.Error, /## Answer/);
+  assert.equal(requests[0].sections.X, undefined);
 });

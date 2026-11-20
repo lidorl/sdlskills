@@ -5,7 +5,7 @@ import { join, dirname } from 'node:path';
 import { stringify } from 'yaml';
 import { boardWrite } from './git.mjs';
 import { release } from './claims.mjs';
-import { parseDoc, setFields, appendToSection } from './frontmatter.mjs';
+import { parseDoc, setFields, appendToSection, locateSection, fenceTracker } from './frontmatter.mjs';
 import { safeExcerpt } from './redact.mjs';
 
 const KINDS = ['gate', 'question', 'clarification', 'error'];
@@ -41,25 +41,34 @@ export function buildRequest({ id, kind, gate = null, scope, effort = null, phas
 function parseSections(body) {
   const out = {};
   let name = null;
-  let fence = false;
+  const inFence = fenceTracker();
   for (const line of body.split(/\r?\n/)) {
-    if (/^\s*(```|~~~)/.test(line)) fence = !fence;
-    const m = !fence && /^##\s+(.+?)\s*$/.exec(line);
+    const fenced = inFence(line);
+    const m = !fenced && /^##\s+(.+?)\s*$/.exec(line);
     if (m) { name = m[1]; out[name] = []; continue; }
     if (name) out[name].push(line);
   }
   return Object.fromEntries(Object.entries(out).map(([k, v]) => [k, v.join('\n').trim()]));
 }
 
+// Replace the body of the LAST `## heading` outside code fences (the Answer section is always last).
 function replaceSection(text, heading, content) {
   const lines = text.split('\n');
-  const start = lines.findIndex((l) => l.trim() === `## ${heading}`);
+  const sec = locateSection(lines, heading, { last: true });
   const block = [`## ${heading}`, '', ...(content ? [content, ''] : [])];
-  if (start === -1) return `${text.replace(/\n*$/, '\n\n')}${block.join('\n')}`;
-  let end = lines.length;
-  for (let i = start + 1; i < lines.length; i++) if (/^#{1,2}\s/.test(lines[i])) { end = i; break; }
-  lines.splice(start, end - start, ...block);
+  if (!sec) return `${text.replace(/\n*$/, '\n\n')}${block.join('\n')}`;
+  lines.splice(sec.start, sec.end - sec.start, ...block);
   return lines.join('\n');
+}
+
+// Notes must not be able to open a section of their own.
+const defang = (notes) => notes.replace(/^(#{1,2}\s)/gm, ' $1');
+
+// Fence longer than any backtick run inside, so log text can never close it or add headings.
+function fenced(text) {
+  const longest = Math.max(0, ...(text.match(/`+/g) ?? []).map((m) => m.length));
+  const f = '`'.repeat(Math.max(3, longest + 1));
+  return `${f}\n${text}\n${f}`;
 }
 
 const findingIds = (findings = '') => [...findings.matchAll(/^###\s+(F\d+)\b/gm)].map((m) => m[1]);
@@ -168,9 +177,13 @@ export function answeredFor(root, slug) {
 
 export async function postRequest(clone, req, { identity, workerId, releaseFrom }) {
   const sections = { ...req.sections };
-  if (sections.Error != null) sections.Error = safeExcerpt(String(sections.Error)).text;
-  const text = buildRequest({ ...req, sections });
+  if (sections.Error != null) sections.Error = fenced(safeExcerpt(String(sections.Error)).text);
   const id = req.id;
+  const slugOk = releaseFrom?.slug === req.effort;
+  if (req.blocking && req.scope === 'effort' && !(releaseFrom && slugOk)) return { ok: false, reason: 'needs-release' };
+  const text = buildRequest({ ...req, sections });
+  const problems = validateRequest(text, `${id}.md`);
+  if (problems.length) return { ok: false, reason: 'invalid', problems };
   const trailers = { request: id, ...(req.effort ? { effort: req.effort } : {}) };
   const writeFile = (c) => {
     const abs = join(c, reqPath(id));
@@ -217,7 +230,7 @@ export async function answerRequest(clone, id, { answer, notes, by, via = 'cli',
       let text = setFields(readFileSync(file, 'utf8'), {
         status: 'answered', answer, answered_by: by, answered_at: stamp, answered_via: via,
       });
-      text = replaceSection(text, 'Answer', notes?.trim() ?? '');
+      text = replaceSection(text, 'Answer', defang(notes?.trim() ?? ''));
       writeFileSync(file, text);
       return [reqPath(id)];
     },
