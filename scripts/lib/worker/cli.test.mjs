@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync, spawnSync } from 'node:child_process';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, dirname, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -41,7 +41,9 @@ function setup({ featReqs = {}, files = {}, registry = {}, config } = {}) {
   const home = workerHome(ID, env);
   b.clone(relative(b.dir, join(home, 'meta')));
   writeConfig(home, { id: ID, owner: 'alice', meta_url: b.remote, agent: 'claude', model: 'opus', cli_args: [], name: ID, author: OWNER });
-  const t = { b, env, home, meta: join(home, 'meta'), seed: tip(b), logs: [], now: T0, fire: null };
+  // cmds: pid -> command line, standing in for `ps` (a pid with no entry is some unrelated process).
+  const t = { b, env, home, meta: join(home, 'meta'), seed: tip(b), logs: [], now: T0, fire: null, cmds: new Map() };
+  t.asWorker = (pid) => t.cmds.set(pid, `node /x/scripts/sdlc.mjs worker start ${ID}`);
   t.loop = {
     now: () => t.now, sleep: async () => {}, gh: { installed: () => true, authOk: () => true }, which: () => true,
     log: (m) => t.logs.push(m),
@@ -57,6 +59,7 @@ async function cli(t, argv, over = {}) {
   const code = await runWorker(argv, {
     out: (s) => { out += s; }, err: (s) => { err += s; }, env: t.env, now: () => t.now, sleep: async () => {},
     loop: t.loop,
+    procCommand: (pid) => t.cmds.get(pid) ?? null,
     onSignal: (h) => { t.fire = h; return () => { t.fire = null; }; },
     wait: async () => { t.fire?.('SIGTERM'); },
     ...over,
@@ -67,6 +70,7 @@ async function cli(t, argv, over = {}) {
 test('start refuses when already running', async () => {
   const t = setup();
   writePid(t.home, process.pid);
+  t.asWorker(process.pid);
   const r = await cli(t, ['start', ID]);
   assert.equal(r.code, 1);
   assert.match(r.err, new RegExp(`already running, pid ${process.pid}`));
@@ -173,7 +177,7 @@ test('start --detach returns immediately; process survives the parent; stop ends
     for (let i = 0; i < 300 && !eventsSince(t.b, t.seed).includes('start'); i++) await delay(50);
     assert.ok(isAlive(pid));
     assert.deepEqual(eventsSince(t.b, t.seed), ['start']);
-    const r = await cli(t, ['stop', ID], { wait: undefined });
+    const r = await cli(t, ['stop', ID], { wait: undefined, procCommand: undefined });
     assert.equal(r.code, 0, r.err);
     assert.equal(isAlive(pid), false);
     assert.deepEqual(eventsSince(t.b, t.seed), ['start', 'stop']);
@@ -197,6 +201,7 @@ test('once with empty queue exits 0 and prints "queue empty"', async () => {
 test('config --model updates config.json and registry; start refuses on mismatch', async () => {
   const t = setup();
   writePid(t.home, process.pid);
+  t.asWorker(process.pid);
   const busy = await cli(t, ['config', ID, '--model', 'sonnet']);
   assert.equal(busy.code, 1);
   assert.match(busy.err, /running/);
@@ -267,4 +272,96 @@ test('usage errors exit 2', async () => {
   const missing = await cli(t, ['start', 'bob-zzzzzz']);
   assert.equal(missing.code, 1);
   assert.match(missing.err, /no worker bob-zzzzzz on this machine/);
+});
+
+test('a pid file naming a live unrelated process is stale: start recovers from a crash, stop signals nothing', async () => {
+  const t = setup();
+  writePid(t.home, process.pid); // alive, but `ps` shows it is not this worker
+  const kills = [];
+  const stop = await cli(t, ['stop', ID], { kill: (pid, sig) => kills.push([pid, sig]) });
+  assert.equal(stop.code, 0);
+  assert.match(stop.out, /not running/);
+  assert.deepEqual(kills, []);
+  assert.equal((await cli(t, ['start', ID])).code, 0);
+  assert.deepEqual(eventsSince(t.b, t.seed), ['crash', 'request', 'start', 'stop']);
+  assert.equal(readPid(t.home), null);
+});
+
+test('two starts at once: exactly one runs, the other refuses', { timeout: 30000 }, async () => {
+  const t = setup({ config: 'idle_poll: 1s\n' });
+  const start = () => {
+    const c = spawn(process.execPath, [HARNESS, 'worker', 'start', ID], { env: t.env, stdio: ['ignore', 'pipe', 'pipe'] });
+    let err = '';
+    c.stderr.on('data', (x) => { err += x; });
+    const exited = new Promise((r) => c.on('exit', (code) => r({ code, err })));
+    return { c, exited };
+  };
+  const a = start();
+  const b = start();
+  try {
+    const first = await Promise.race([a.exited.then((r) => ({ ...r, who: a })), b.exited.then((r) => ({ ...r, who: b }))]);
+    assert.equal(first.code, 1);
+    assert.match(first.err, /already running|being started/);
+    const other = first.who === a ? b : a;
+    assert.equal(readPid(t.home), other.c.pid);
+    for (let i = 0; i < 300 && !eventsSince(t.b, t.seed).includes('start'); i++) await delay(50);
+    const r = await cli(t, ['stop', ID], { wait: undefined, procCommand: undefined });
+    assert.equal(r.code, 0, r.err);
+    assert.equal((await other.exited).code, 0);
+    assert.deepEqual(eventsSince(t.b, t.seed), ['start', 'stop']);
+  } finally {
+    for (const x of [a, b]) { try { x.c.kill('SIGKILL'); } catch { /* gone */ } }
+  }
+});
+
+// A worker (pid 4242) that ignores SIGTERM, with its agent (pid 4343) still running; signals are recorded.
+function hungWorker(t, { diesOnKill = true } = {}) {
+  writePid(t.home, 4242);
+  t.asWorker(4242);
+  mkdirSync(join(t.home, 'run'), { recursive: true });
+  writeFileSync(join(t.home, 'run', 'agent.pid'), '4343\n');
+  const h = { kills: [], alive: true };
+  h.deps = {
+    stopTimeoutMs: 1000,
+    wait: async () => {},
+    isAlive: (pid) => pid === 4242 && h.alive,
+    kill: (pid, sig) => { h.kills.push([pid, sig]); if (pid === -4242 && sig === 'SIGKILL' && diesOnKill) h.alive = false; },
+  };
+  return h;
+}
+
+test('stop: SIGTERM ignored → SIGKILL the worker group and the agent group, then release and the stop event', async () => {
+  const t = setup({ featReqs: { alpha: feat({ status: 'DESIGNED', claimed_by: ID, claimed_at: '2026-06-01T09:00:00Z', renewed_at: '2026-06-01T09:00:00Z' }) } });
+  const h = hungWorker(t);
+  const r = await cli(t, ['stop', ID], h.deps);
+  assert.equal(r.code, 0, r.err);
+  assert.deepEqual(h.kills, [[4242, 'SIGTERM'], [-4242, 'SIGKILL'], [-4343, 'SIGKILL']]);
+  assert.deepEqual(eventsSince(t.b, t.seed), ['release', 'stop']);
+  assert.match(git(t.b.remote, 'log', '-1', '--format=%B', 'main'), /^board\(stop\): alice-aaaaaa\n\nkilled after it did not stop in time/);
+  assert.equal(fmOnMain(t.b, 'alpha').claimed_by, undefined);
+  assert.equal(readState(t.home).clean_stop, true);
+  assert.equal(readPid(t.home), null);
+  assert.equal(existsSync(join(t.home, 'run', 'agent.pid')), false);
+});
+
+test('stop: a worker still alive after SIGKILL is an error and nothing is cleaned up', async () => {
+  const t = setup({ featReqs: { alpha: feat({ status: 'DESIGNED', claimed_by: ID, claimed_at: '2026-06-01T09:00:00Z', renewed_at: '2026-06-01T09:00:00Z' }) } });
+  const h = hungWorker(t, { diesOnKill: false });
+  const r = await cli(t, ['stop', ID], h.deps);
+  assert.equal(r.code, 1);
+  assert.match(r.err, /still alive after SIGKILL/);
+  assert.equal(tip(t.b), t.seed);
+  assert.equal(fmOnMain(t.b, 'alpha').claimed_by, ID);
+  assert.equal(readPid(t.home), 4242);
+});
+
+test('stop: when the release after a kill fails, clean_stop stays false (Ruling P2-16)', async () => {
+  const t = setup({ featReqs: { alpha: feat({ status: 'DESIGNED', claimed_by: ID, claimed_at: '2026-06-01T09:00:00Z', renewed_at: '2026-06-01T09:00:00Z' }) } });
+  const h = hungWorker(t);
+  let pushes = 0;
+  t.loop.hooks = { beforePush: () => { if (pushes++ < 3) throw new Error('network down'); } }; // the release's attempts fail
+  const r = await cli(t, ['stop', ID], h.deps);
+  assert.equal(r.code, 0, r.err);
+  assert.equal(fmOnMain(t.b, 'alpha').claimed_by, ID);
+  assert.equal(readState(t.home).clean_stop, false);
 });

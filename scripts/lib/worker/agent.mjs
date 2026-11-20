@@ -1,6 +1,6 @@
 // Headless agent invocation: routing, prompt, CLI command, one supervised run, the result file.
 import { spawn } from 'node:child_process';
-import { readFileSync, appendFileSync, mkdirSync, rmSync } from 'node:fs';
+import { readFileSync, appendFileSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 
 const PHASE_STATUSES = ['ACCEPTED', 'DESIGNED', 'PLANNED', 'IN_PROGRESS', 'IMPLEMENTED'];
@@ -66,11 +66,17 @@ export function agentCommand(cfg, prompt, home) {
   return { cmd, args, env };
 }
 
+// Set by `sdlc worker start --detach` for the worker process itself (see worker/cli.mjs).
+export const WORKER_PROCESS_VARS = ['SDLC_WORKER_DETACHED', 'SDLC_WORKER_PARENT_PID'];
+
 const lastLines = (text, n) => text.split('\n').filter((l, i, a) => l !== '' || i < a.length - 1).slice(-n).join('\n');
 
 // `signal` (AbortSignal): on abort the agent's process group is killed and the run resolves { aborted: true }
 // (with exitCode/signal/stderrTail when it had started); an already-aborted signal starts nothing.
-export function runAgent({ cmd, args = [], env = {}, cwd, timeoutMs, logPath, onTick, tickMs = 1000, signal }) {
+// `pidFile`: holds the agent's pid (it leads its own process group) while it runs, so `sdlc worker stop` can
+// kill an agent its worker left behind.
+// The detached worker's own markers (WORKER_PROCESS_VARS) are not passed on to the agent.
+export function runAgent({ cmd, args = [], env = {}, cwd, timeoutMs, logPath, onTick, tickMs = 1000, signal, pidFile }) {
   if (signal?.aborted) return Promise.resolve({ aborted: true });
   mkdirSync(dirname(logPath), { recursive: true });
   // A previous run's result must never be mistaken for this one's.
@@ -83,8 +89,10 @@ export function runAgent({ cmd, args = [], env = {}, cwd, timeoutMs, logPath, on
   return new Promise((resolve) => {
     let child;
     try {
+      const base = { ...process.env };
+      for (const k of WORKER_PROCESS_VARS) delete base[k];
       child = spawn(cmd, args, {
-        cwd, env: { ...process.env, ...env }, detached: true, stdio: ['ignore', 'pipe', 'pipe'],
+        cwd, env: { ...base, ...env }, detached: true, stdio: ['ignore', 'pipe', 'pipe'],
       });
     } catch (spawnError) {
       resolve({ spawnError });
@@ -99,6 +107,9 @@ export function runAgent({ cmd, args = [], env = {}, cwd, timeoutMs, logPath, on
     let ticking = false;
     let tickTimer;
 
+    if (pidFile && child.pid) {
+      try { mkdirSync(dirname(pidFile), { recursive: true }); writeFileSync(pidFile, `${child.pid}\n`); } catch { /* best effort */ }
+    }
     const killGroup = (sig) => { try { process.kill(-child.pid, sig); } catch { /* already gone */ } };
 
     child.stdout.on('data', (d) => log(d));
@@ -132,6 +143,7 @@ export function runAgent({ cmd, args = [], env = {}, cwd, timeoutMs, logPath, on
       clearTimeout(killTimer);
       clearInterval(tickTimer);
       signal?.removeEventListener('abort', onAbort);
+      if (pidFile) rmSync(pidFile, { force: true });
       resolve(result);
     };
 

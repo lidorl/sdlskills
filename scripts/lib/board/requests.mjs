@@ -67,7 +67,7 @@ function replaceSection(text, heading, content) {
 const defang = (notes) => notes.replace(/^(#{1,2}\s)/gm, ' $1');
 
 // Fence longer than any backtick run inside, so log text can never close it or add headings.
-function fenced(text) {
+export function fenced(text) {
   const longest = Math.max(0, ...(text.match(/`+/g) ?? []).map((m) => m.length));
   const f = '`'.repeat(Math.max(3, longest + 1));
   return `${f}\n${text}\n${f}`;

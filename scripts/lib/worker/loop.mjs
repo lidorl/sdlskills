@@ -284,7 +284,7 @@ async function runHeld(ctx, slug, bcfg) {
   try {
     res = await deps.runAgent({
       ...cmd, env: { ...cmd.env, ...identityEnv(identity) }, cwd: clone, timeoutMs: bcfg.phaseTimeoutMs, logPath,
-      onTick, tickMs: Math.max(50, Math.min(60e3, half / 4)), signal: run.signal,
+      onTick, tickMs: Math.max(50, Math.min(60e3, half / 4)), signal: run.signal, pidFile: join(home, 'run', 'agent.pid'),
     });
   } finally {
     ctx.signal?.removeEventListener('abort', stopRun);

@@ -3,14 +3,14 @@
 // the protocol writes for the lifecycle events. Exit codes: 0 ok, 1 refusal or failure, 2 usage.
 import { spawn as realSpawn, execFileSync } from 'node:child_process';
 import {
-  appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, rmSync,
+  appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, rmSync, writeFileSync,
 } from 'node:fs';
 import { hostname } from 'node:os';
 import { join } from 'node:path';
 import { parse } from 'yaml';
 import { boardWrite, fetchMain, snapshotMain, identityEnv } from '../board/git.mjs';
 import { release } from '../board/claims.mjs';
-import { listRequests, postRequest, newRequestId } from '../board/requests.mjs';
+import { listRequests, postRequest, newRequestId, fenced } from '../board/requests.mjs';
 import { readWorker, workerYaml, workerState } from '../board/registry.mjs';
 import { parseLog } from '../board/events.mjs';
 import { loadEfforts } from '../board/queue.mjs';
@@ -24,6 +24,7 @@ import {
 } from './home.mjs';
 import { preflight } from './preflight.mjs';
 import { makeContext, step, WorkerFatal } from './loop.mjs';
+import { WORKER_PROCESS_VARS } from './agent.mjs';
 import { letGo } from './outcomes.mjs';
 import { pushCodeBranches } from './code-repos.mjs';
 import { createWorker, CreateError } from './create.mjs';
@@ -34,7 +35,7 @@ class Refusal extends Error {}
 const STOP_TIMEOUT_MS = 60_000;
 const STOP_POLL_MS = 250;
 const DEFAULT_IDLE_MS = 60_000;
-const DETACHED = 'SDLC_WORKER_DETACHED';
+const [DETACHED, PARENT_PID] = WORKER_PROCESS_VARS;
 
 const iso = (d) => d.toISOString().replace(/\.\d{3}Z$/, 'Z');
 const firstLine = (e) => String(e?.message ?? e).split('\n')[0];
@@ -97,6 +98,15 @@ function abortableWait(ms, signal) {
   });
 }
 
+// The command line of process `pid`; null when there is no such process, undefined when `ps` is unavailable.
+function realProcCommand(pid) {
+  try {
+    return execFileSync('ps', ['-o', 'command=', '-p', String(pid)], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim() || null;
+  } catch (e) {
+    return e.code === 'ENOENT' ? undefined : null;
+  }
+}
+
 const realGh = {
   api: (path) => JSON.parse(execFileSync('gh', ['api', path], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })),
 };
@@ -112,6 +122,7 @@ function resolveDeps(d) {
     wait: d.wait ?? abortableWait,
     kill: d.kill ?? ((pid, sig) => process.kill(pid, sig)),
     isAlive: d.isAlive ?? isAlive,
+    procCommand: d.procCommand ?? realProcCommand,
     spawn: d.spawn ?? realSpawn,
     pid: d.pid ?? process.pid,
     scriptPath: d.scriptPath, // the sdlc entry a detached worker runs; <home>/meta/scripts/sdlc.mjs by default
@@ -130,6 +141,39 @@ function runtimeLog(home, d) {
     if (!tee) return;
     try { mkdirSync(join(home, 'logs'), { recursive: true }); appendFileSync(file, line); } catch { /* best effort */ }
   };
+}
+
+// A pid file outlives reboots and pids get reused: a pid counts as this worker only while that process is
+// alive and its command line is `… worker start|once <id>`. Where `ps` is missing, liveness alone decides.
+function isWorker(pid, id, d) {
+  if (!pid || !d.isAlive(pid)) return false;
+  const cmd = d.procCommand(pid);
+  if (cmd === undefined) return true;
+  return !!cmd && new RegExp(`(^|\\s)worker\\s(.*\\s)?(start|once)\\s(.*\\s)?${id}(\\s|$)`).test(cmd);
+}
+
+const runningPid = (home, id, d) => { const pid = readPid(home); return isWorker(pid, id, d) ? pid : null; };
+
+// The pid file is the run lock: created exclusively, so two starts can never both pass the check.
+// A detached worker takes over the lock its parent took for it. -> { stalePid } (a pid file left behind)
+function lockRun(home, id, d) {
+  const file = join(home, 'worker.pid');
+  const handedOver = d.env[DETACHED] === '1' ? [d.pid, Number(d.env[PARENT_PID]) || 0] : [];
+  let stalePid = null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      writeFileSync(file, `${d.pid}\n`, { flag: 'wx' });
+      return { stalePid };
+    } catch (e) {
+      if (e.code !== 'EEXIST') throw e;
+    }
+    const pid = readPid(home);
+    if (pid && handedOver.includes(pid)) { writePid(home, d.pid); return { stalePid }; }
+    if (isWorker(pid, id, d)) throw new Refusal(`worker ${id} is already running, pid ${pid}`);
+    stalePid ??= pid ?? 0;
+    rmSync(file, { force: true });
+  }
+  throw new Refusal(`worker ${id} is being started by another process`);
 }
 
 function requireHome(id, d) {
@@ -203,23 +247,20 @@ async function updateRegistry(ctx, kind, patch, check) {
 }
 
 // Release every claim this worker holds on origin/main, pushing each effort's code branches first.
+// -> { held: [slug], ok: every release landed }
 async function releaseHeld(ctx) {
   const { cfg, clone, identity, deps } = ctx;
+  let ok = true;
   const held = onMain(clone, (board) => loadEfforts(board).efforts.filter((e) => e.fm?.claimed_by === cfg.id).map((e) => e.slug));
   for (const slug of held) {
     const code = pushCodeBranches(clone, slug, resolveRepoKeys(clone, slug));
     for (const f of code.failed) deps.log(`warning: push of workspace/${f.key} failed: ${f.error}; the commits stay in the local branch`);
     const r = await release(clone, slug, { claimant: cfg.id, identity, workerId: cfg.id, hooks: deps.hooks });
     deps.log(r.ok ? `released ${slug}` : `could not release ${slug} (${r.reason})`);
+    ok &&= r.ok;
   }
   if (held.length) writeState(ctx.home, { prepared: null });
-  return held;
-}
-
-function fence(text) {
-  const longest = Math.max(0, ...(text.match(/`+/g) ?? []).map((m) => m.length));
-  const f = '`'.repeat(Math.max(3, longest + 1));
-  return `${f}\n${text}\n${f}`;
+  return { held, ok };
 }
 
 // The previous run ended without a clean stop: a crash event, then a worker error (one open per worker).
@@ -239,7 +280,7 @@ async function reportCrash(ctx, why) {
       id: newRequestId(now, deps.rand), kind: 'error', scope: 'worker', worker: cfg.id, for: cfg.owner, blocking: true, now,
       sections: {
         Request: `worker ${cfg.id} stopped without a clean shutdown. Check the log below and the machine it runs on, then answer resolved.`,
-        Context: `Host ${hostname()}: ${why}. Last lines of logs/worker.log:\n\n${fence(excerpt)}`,
+        Context: `Host ${hostname()}: ${why}. Last lines of logs/worker.log:\n\n${fenced(excerpt)}`,
         Error: why,
       },
     }, { identity, workerId: cfg.id, sleep: deps.sleep, hooks: deps.hooks });
@@ -251,34 +292,54 @@ async function reportCrash(ctx, why) {
 
 // ---- process control ------------------------------------------------------------------------------
 
-// SIGTERM, wait up to stopTimeoutMs, then SIGKILL. -> true when it had to kill.
-async function endProcess(pid, d) {
-  try { d.kill(pid, 'SIGTERM'); } catch { return false; }
+// SIGKILL a process group (a detached worker and every agent lead their own), or the process alone when
+// it leads none (a worker started in a terminal).
+function killGroup(pid, d) {
+  try { d.kill(-pid, 'SIGKILL'); } catch {
+    try { d.kill(pid, 'SIGKILL'); } catch { /* gone */ }
+  }
+}
+
+// SIGTERM, wait up to stopTimeoutMs, then SIGKILL the worker's group and the agent's group it left behind.
+// -> true when it had to kill. Throws when the worker cannot be signalled or survives the kill.
+async function endProcess(home, pid, d) {
+  try { d.kill(pid, 'SIGTERM'); } catch (e) {
+    if (e.code === 'ESRCH') return false;
+    throw new Refusal(`cannot signal pid ${pid}: ${e.code ?? firstLine(e)}`);
+  }
   for (let waited = 0; waited < d.stopTimeoutMs; waited += STOP_POLL_MS) {
     if (!d.isAlive(pid)) return false;
     await d.wait(STOP_POLL_MS);
   }
   if (!d.isAlive(pid)) return false;
-  try { d.kill(pid, 'SIGKILL'); } catch { /* gone */ }
+  killGroup(pid, d);
+  const agentPidFile = join(home, 'run', 'agent.pid');
+  const agent = existsSync(agentPidFile) ? Number.parseInt(readFileSync(agentPidFile, 'utf8'), 10) : null;
+  if (agent > 0) { killGroup(agent, d); rmSync(agentPidFile, { force: true }); }
   for (let i = 0; i < 40 && d.isAlive(pid); i++) await d.wait(STOP_POLL_MS);
+  if (d.isAlive(pid)) {
+    throw new Refusal(`worker pid ${pid} is still alive after SIGKILL; nothing was released (run stop again once it is gone)`);
+  }
   return true;
 }
 
-// The worker was killed before its own shutdown ran: release and the stop event from <home>/meta.
+// The worker was killed before its own shutdown ran: release and the stop event from <home>/meta. The stop
+// counts as clean only when both landed (Ruling P2-16); otherwise the next start reports a crash.
 async function cleanUpAfterKill(home, d) {
   const ctx = context(home, d);
   ctx.deps.log(`worker ${ctx.cfg.id} did not stop within ${d.stopTimeoutMs / 1000}s; killed`);
   refresh(ctx);
-  try { await releaseHeld(ctx); } catch (e) { ctx.deps.log(`warning: could not release claims (${firstLine(e)})`); }
-  await tryEvent(ctx, 'stop', 'killed after it did not stop in time');
-  writeState(home, { clean_stop: true });
+  let released = false;
+  try { released = (await releaseHeld(ctx)).ok; } catch (e) { ctx.deps.log(`warning: could not release claims (${firstLine(e)})`); }
+  const stopped = await tryEvent(ctx, 'stop', 'killed after it did not stop in time');
+  writeState(home, { clean_stop: released && stopped });
   clearPid(home);
 }
 
 async function stopRunning(id, home, d) {
-  const pid = readPid(home);
-  if (!pid || !d.isAlive(pid)) return false;
-  if (await endProcess(pid, d)) await cleanUpAfterKill(home, d);
+  const pid = runningPid(home, id, d);
+  if (!pid) return false;
+  if (await endProcess(home, pid, d)) await cleanUpAfterKill(home, d);
   return true;
 }
 
@@ -306,23 +367,30 @@ async function cmdCreate({ flags }, d) {
   }
 }
 
-function detach(id, home, d, oldPid) {
-  // A stale pid file is about to be overwritten: keep its crash signal for the worker's own start.
-  if (oldPid && !d.isAlive(oldPid)) writeState(home, { clean_stop: false });
-  const script = d.scriptPath ?? join(home, 'meta', 'scripts', 'sdlc.mjs');
-  if (!existsSync(script)) throw new Refusal(`cannot start in the background: ${script} is missing (is the kit installed in the meta repo?)`);
+// Holds the run lock (lockRun) and hands it to the child: the child takes over a lock naming it or us.
+function detach(id, home, d, stalePid) {
   const logFile = join(home, 'logs', 'worker.log');
-  mkdirSync(join(home, 'logs'), { recursive: true });
-  const fd = openSync(logFile, 'a');
   let child;
   try {
-    child = d.spawn(process.execPath, [script, 'worker', 'start', id], {
-      cwd: join(home, 'meta'), detached: true, stdio: ['ignore', fd, fd], env: { ...d.env, [DETACHED]: '1' },
-    });
-  } finally { closeSync(fd); }
-  if (!child.pid) throw new Refusal('could not start the background worker');
+    // A stale pid file was just replaced: keep its crash signal for the worker's own start.
+    if (stalePid !== null) writeState(home, { clean_stop: false });
+    const script = d.scriptPath ?? join(home, 'meta', 'scripts', 'sdlc.mjs');
+    if (!existsSync(script)) throw new Refusal(`cannot start in the background: ${script} is missing (is the kit installed in the meta repo?)`);
+    mkdirSync(join(home, 'logs'), { recursive: true });
+    const fd = openSync(logFile, 'a');
+    try {
+      child = d.spawn(process.execPath, [script, 'worker', 'start', id], {
+        cwd: join(home, 'meta'), detached: true, stdio: ['ignore', fd, fd],
+        env: { ...d.env, [DETACHED]: '1', [PARENT_PID]: String(d.pid) },
+      });
+    } finally { closeSync(fd); }
+    if (!child.pid) throw new Refusal('could not start the background worker');
+  } catch (e) {
+    clearPid(home);
+    throw e;
+  }
   child.unref();
-  writePid(home, child.pid);
+  if (readPid(home) === d.pid) writePid(home, child.pid);
   d.out(`worker ${id} started in the background, pid ${child.pid}; log: ${logFile}\n`);
   return 0;
 }
@@ -330,23 +398,24 @@ function detach(id, home, d, oldPid) {
 // start and once: preflight, crash detection, the start event, the loop (or one cycle), the shutdown.
 async function cmdRun({ flags, positional: [id] }, d, { once }) {
   const home = requireHome(id, d);
-  const pid = readPid(home);
-  const self = d.env[DETACHED] === '1' && pid === d.pid; // the pid file `start --detach` wrote for us
-  if (pid && !self && d.isAlive(pid)) throw new Refusal(`worker ${id} is already running, pid ${pid}`);
-  if (flags['--detach']) return detach(id, home, d, pid);
+  const { stalePid } = lockRun(home, id, d);
+  if (flags['--detach']) return detach(id, home, d, stalePid);
 
   const ac = new AbortController();
-  const ctx = context(home, d, ac.signal);
-  const { cfg, clone, deps } = ctx;
-  refresh(ctx);
-  const pf = onMain(clone, (board) => preflight({ home, cfg, root: board, gh: { authOk: () => true }, which: () => true }));
-  if (!pf.ok) { // only fatal problems are checked here; the loop's own preflight handles the rest
-    if (self) clearPid(home);
-    throw new Refusal(pf.problem);
+  let ctx;
+  try {
+    ctx = context(home, d, ac.signal);
+    refresh(ctx);
+    const pf = onMain(ctx.clone, (board) => preflight({ home, cfg: ctx.cfg, root: board, gh: { authOk: () => true }, which: () => true }));
+    // only fatal problems are checked here; the loop's own preflight handles the rest
+    if (!pf.ok) throw new Refusal(pf.problem);
+  } catch (e) {
+    clearPid(home); // a refused start leaves nothing behind
+    throw e;
   }
-  const stale = pid && !self && !d.isAlive(pid);
-  const crashed = stale ? `its pid file names process ${pid}, which is gone` : readState(home).clean_stop === false
-    ? 'its last run did not record a clean stop' : null;
+  const { cfg, clone, deps } = ctx;
+  const crashed = stalePid !== null ? `its pid file names process ${stalePid}, which is not this worker running`
+    : readState(home).clean_stop === false ? 'its last run did not record a clean stop' : null;
 
   let stopping = null;
   const off = d.onSignal((sig) => {
@@ -355,7 +424,6 @@ async function cmdRun({ flags, positional: [id] }, d, { once }) {
     deps.log(`${sig}: stopping`);
     ac.abort();
   });
-  writePid(home, d.pid);
   writeState(home, { clean_stop: false });
   let code = 0;
   let canWrite = true;
@@ -431,8 +499,8 @@ function localIds(d) {
 function describe(id, d) {
   const home = workerHome(id, d.env);
   const cfg = readConfig(home);
-  const pid = readPid(home);
-  const running = !!pid && d.isAlive(pid);
+  const pid = runningPid(home, id, d);
+  const running = !!pid;
   const clone = join(home, 'meta');
   let board = { state: 'unknown', effort: null, lastSeen: null };
   try { fetchMain(clone); } catch (e) { d.err(`warning: ${id}: could not refresh from origin/main: ${firstLine(e)}\n`); }
@@ -485,7 +553,9 @@ async function cmdRetire({ flags, positional: [id] }, d) {
   const ctx = context(home, d);
   const { clone } = ctx;
   refresh(ctx);
-  for (const slug of await releaseHeld(ctx)) d.out(`released ${slug}\n`);
+  const { held, ok } = await releaseHeld(ctx);
+  for (const slug of held) d.out(`released ${slug}\n`);
+  if (!ok) throw new Refusal(`worker ${id} not retired: a claim could not be released (see the log)`);
   const ws = join(clone, 'workspace');
   const keep = [
     ...(isProtected(clone) ? ['meta'] : []),
@@ -507,8 +577,8 @@ async function cmdConfig({ flags, positional: [id] }, d) {
   const model = flags['--model'];
   if (!model) throw new UsageError('config needs --model');
   const home = requireHome(id, d);
-  const pid = readPid(home);
-  if (pid && d.isAlive(pid)) throw new Refusal(`worker ${id} is running (pid ${pid}); stop it first`);
+  const pid = runningPid(home, id, d);
+  if (pid) throw new Refusal(`worker ${id} is running (pid ${pid}); stop it first`);
   const ctx = context(home, d);
   refresh(ctx);
   await updateRegistry(ctx, 'config', (w) => (w.model === model ? null : { ...w, model }), (w) => w?.model === model);
