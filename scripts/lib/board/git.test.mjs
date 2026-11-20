@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { writeFileSync, readFileSync } from 'node:fs';
+import { writeFileSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { makeBoard, IDENT } from './fixtures.mjs';
 import { boardWrite, assertOnMain, BoardError } from './git.mjs';
@@ -225,4 +225,32 @@ test('default discard: a lost race removes the file our commit added', async () 
   const fx = makeBoard(); const a = fx.clone('a'); const b = fx.clone('b');
   await boardWrite(a, { ...base, kind: 'claim', subject: 's', onReject: 'restart', mutate: writer('new.md', 'mine\n'), hooks: { beforePush: racer(b, 'y.md', 'b\n') } });
   assert.throws(() => readFileSync(join(a, 'new.md')));
+});
+
+test('keep-work gives back binary files byte for byte and keeps the exec bit', async () => {
+  const fx = makeBoard(); const a = fx.clone('a'); const b = fx.clone('b');
+  const bytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0xff, 0xfe, 0x0d, 0x0a, 0x80, 0xc3, 0x28]);
+  const mutate = (clone) => {
+    writeFileSync(join(clone, 'logo.png'), bytes);
+    writeFileSync(join(clone, 'run.sh'), '#!/bin/sh\necho hi\n', { mode: 0o755 });
+    return ['logo.png', 'run.sh'];
+  };
+  const r = await boardWrite(a, { ...base, kind: 'report', subject: 's', onReject: 'restart', onFailure: 'keep-work', mutate, hooks: { beforePush: once(racer(b, 'y.md', 'b\n')) } });
+  assert.equal(r.reason, 'lost-race');
+  assert.deepEqual(r.kept.sort(), ['logo.png', 'run.sh']);
+  assert.deepEqual(readFileSync(join(a, 'logo.png')), bytes);
+  assert.equal(statSync(join(a, 'run.sh')).mode & 0o111, 0o111);
+});
+
+test('commitFromHead: an edit the person has not committed is never part of the commit', async () => {
+  const fx = makeBoard({ featReqs: { s: { status: 'ACCEPTED' } } }); const a = fx.clone('a');
+  const f = join(a, 'docs/feat-req/s.md');
+  writeFileSync(f, readFileSync(f, 'utf8').replace('# s', '# s\n\nprivate draft'));
+  const mutate = (clone) => { writeFileSync(f, readFileSync(join(clone, 'docs/feat-req/s.md'), 'utf8').replace('ACCEPTED', 'DESIGNED')); return ['docs/feat-req/s.md']; };
+  const r = await boardWrite(a, { ...base, kind: 'apply', subject: 's', onReject: 'restart', commitFromHead: true, mutate });
+  assert.equal(r.ok, true);
+  const committed = g(a, 'show', 'HEAD:docs/feat-req/s.md');
+  assert.match(committed, /DESIGNED/);
+  assert.doesNotMatch(committed, /private draft/);
+  assert.match(readFileSync(f, 'utf8'), /DESIGNED[\s\S]*private draft/);
 });

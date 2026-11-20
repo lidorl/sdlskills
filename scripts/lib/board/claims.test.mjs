@@ -1,9 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdtempSync, symlinkSync, mkdirSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { makeBoard, IDENT } from './fixtures.mjs';
+import { BoardError } from './git.mjs';
 import { claimState, claim, renew, release, holds } from './claims.mjs';
 import { parseDoc } from './frontmatter.mjs';
 
@@ -16,10 +18,7 @@ const rel = (slug) => `docs/feat-req/${slug}.md`;
 
 function setup(fm = { title: 'Bulk export', status: 'APPROVED' }) {
   const fx = makeBoard({ featReqs: { 'bulk-export': fm } });
-  const fmOnRemote = (slug = 'bulk-export') => {
-    const t = g(fx.clone(`peek-${Math.random().toString(36).slice(2)}`), 'show', 'origin/main:' + rel(slug));
-    return parseDoc(t).data;
-  };
+  const fmOnRemote = (slug = 'bulk-export') => parseDoc(g(fx.remote, 'show', 'main:' + rel(slug))).data;
   return { fx, fmOnRemote };
 }
 
@@ -53,7 +52,8 @@ test('race: two clones claim the same effort, exactly one holds it on origin/mai
   const rA = await claim(a, 'bulk-export', {
     ...base, claimant: 'a-worker1', workerId: 'a-worker1',
     // B's claim runs its whole git sequence synchronously inside A's push window.
-    hooks: { beforePush: () => { pB = claim(b, 'bulk-export', { ...base, claimant: 'b-worker1', workerId: 'b-worker1' }); } },
+    // A awaits B's whole claim inside its push window, so B always lands first.
+    hooks: { beforePush: () => (pB ??= claim(b, 'bulk-export', { ...base, claimant: 'b-worker1', workerId: 'b-worker1' })) },
   });
   const rB = await pB;
   assert.equal(rA.ok, false); assert.equal(rA.reason, 'lost-race');
@@ -64,8 +64,10 @@ test('race: two clones claim the same effort, exactly one holds it on origin/mai
 });
 
 test('live claim by someone else is held; awaiting open is awaiting; missing file is gone', async () => {
-  const { fx } = setup({ title: 't', claimed_by: 'x', claimed_at: '2026-11-20T11:00:00Z', renewed_at: '2026-11-20T11:30:00Z' });
-  fx.seed(rel('waiting'), '---\nawaiting: question-1\n---\n\n# w\n');
+  const fx = makeBoard({
+    featReqs: { 'bulk-export': { title: 't', claimed_by: 'x', claimed_at: '2026-11-20T11:00:00Z', renewed_at: '2026-11-20T11:30:00Z' } },
+    files: { [rel('waiting')]: '---\nawaiting: question-1\n---\n\n# w\n' },
+  });
   const a = fx.clone('a');
   assert.deepEqual(await claim(a, 'bulk-export', { ...base, claimant: 'a-w' }), { ok: false, reason: 'held' });
   assert.deepEqual(await claim(a, 'waiting', { ...base, claimant: 'a-w', isAwaitingOpen: () => true }), { ok: false, reason: 'awaiting' });
@@ -225,4 +227,98 @@ test('renew touches only renewed_at', async () => {
   assert.equal(r.ok, true);
   assert.deepEqual(fmOnRemote(), { ...SPREAD, renewed_at: '2026-11-20T12:00:00Z' });
   assert.match(g(a, 'log', '-1', '--format=%B'), /^board\(renew\)/);
+});
+
+test('claim refuses a PARKED, REJECTED or IMPLEMENTED effort as closed and pushes nothing', async () => {
+  for (const status of ['PARKED', 'REJECTED', 'IMPLEMENTED']) {
+    const { fx } = setup({ title: 't', status });
+    const a = fx.clone('a');
+    const before = g(fx.remote, 'rev-parse', 'main');
+    assert.deepEqual(await claim(a, 'bulk-export', { ...base, claimant: 'a-w' }), { ok: false, reason: 'closed' }, status);
+    assert.equal(g(fx.remote, 'rev-parse', 'main'), before);
+  }
+});
+
+test('renew of a claim whose effort is now IMPLEMENTED is replaced and pushes nothing', async () => {
+  const { fx } = setup({ ...SPREAD, status: 'IMPLEMENTED' });
+  const a = fx.clone('a');
+  const before = g(fx.remote, 'rev-parse', 'main');
+  assert.deepEqual(await renew(a, 'bulk-export', { ...base, claimant: 'a-w' }), { ok: false, reason: 'replaced' });
+  assert.equal(g(fx.remote, 'rev-parse', 'main'), before);
+});
+
+test('re-claiming your own live claim renews it: ok, no takeover, renewed_at refreshed', async () => {
+  const { fx, fmOnRemote } = setup(SPREAD);
+  const a = fx.clone('a');
+  const r = await claim(a, 'bulk-export', { ...base, claimant: 'a-w', workerId: 'a-w' });
+  assert.deepEqual(r, { ok: true, takeover: null });
+  assert.equal(fmOnRemote().claimed_by, 'a-w');
+  assert.equal(fmOnRemote().claimed_at, SPREAD.claimed_at);
+  assert.equal(fmOnRemote().renewed_at, '2026-11-20T12:00:00Z');
+  assert.match(g(a, 'log', '-1', '--format=%B'), /^board\(renew\): bulk-export/);
+});
+
+test('a committed symlinked feat-req is refused by claim; the outside file is untouched', async () => {
+  const fx = makeBoard();
+  const outside = join(mkdtempSync(join(tmpdir(), 'outside-')), 'target.md');
+  writeFileSync(outside, '---\nstatus: ACCEPTED\n---\n# outside\n');
+  const pusher = fx.clone('pusher');
+  mkdirSync(join(pusher, 'docs/feat-req'), { recursive: true });
+  symlinkSync(outside, join(pusher, rel('evil')));
+  g(pusher, 'add', '-A'); g(pusher, 'commit', '-qm', 'symlink'); g(pusher, 'push', '-q', 'origin', 'main');
+  const a = fx.clone('a');
+  const before = g(fx.remote, 'rev-parse', 'main');
+  await assert.rejects(claim(a, 'evil', { ...base, claimant: 'a-w' }), /symlink/);
+  assert.equal(readFileSync(outside, 'utf8'), '---\nstatus: ACCEPTED\n---\n# outside\n');
+  assert.equal(g(fx.remote, 'rev-parse', 'main'), before);
+  assert.equal(g(a, 'status', '--porcelain'), '');
+});
+
+test('claim, renew and release refuse an invalid slug before touching anything', async () => {
+  const { fx } = setup();
+  const a = fx.clone('a');
+  for (const slug of ['../etc/passwd', 'Bulk', '', 'a/b']) {
+    await assert.rejects(claim(a, slug, { ...base, claimant: 'a-w' }), (e) => e instanceof BoardError && /invalid slug/.test(e.message), slug);
+    await assert.rejects(renew(a, slug, { ...base, claimant: 'a-w' }), BoardError, slug);
+    await assert.rejects(release(a, slug, { ...base, claimant: 'a-w' }), BoardError, slug);
+  }
+});
+
+test('renew does not publish an uncommitted edit to the feat-req; the edit survives locally', async () => {
+  const { fx } = setup(SPREAD);
+  const a = fx.clone('a');
+  const f = join(a, rel('bulk-export'));
+  writeFileSync(f, `${readFileSync(f, 'utf8')}\nMy local draft note.\n`);
+  const r = await renew(a, 'bulk-export', { ...base, claimant: 'a-w' });
+  assert.equal(r.ok, true);
+  const onMain = g(fx.remote, 'show', 'main:' + rel('bulk-export'));
+  assert.doesNotMatch(onMain, /local draft/);
+  assert.equal(parseDoc(onMain).data.renewed_at, '2026-11-20T12:00:00Z');
+  const local = readFileSync(f, 'utf8');
+  assert.match(local, /My local draft note\./);
+  assert.equal(parseDoc(local).data.renewed_at, '2026-11-20T12:00:00Z', 'the person keeps the new lease too');
+});
+
+test('a person\'s conflicting uncommitted frontmatter edit is left exactly as it was', async () => {
+  const { fx } = setup(SPREAD);
+  const a = fx.clone('a');
+  const f = join(a, rel('bulk-export'));
+  const mine = readFileSync(f, 'utf8').replace(/renewed_at: .*/, 'renewed_at: 2030-01-01T00:00:00Z');
+  writeFileSync(f, mine);
+  assert.equal((await renew(a, 'bulk-export', { ...base, claimant: 'a-w' })).ok, true);
+  assert.equal(parseDoc(g(fx.remote, 'show', 'main:' + rel('bulk-export'))).data.renewed_at, '2026-11-20T12:00:00Z');
+  assert.equal(readFileSync(f, 'utf8'), mine);
+});
+
+test('a mutate that throws leaves no half-written protocol files: the next renew still sees the claim', async () => {
+  const { fx, fmOnRemote } = setup(SPREAD);
+  const a = fx.clone('a');
+  await assert.rejects(release(a, 'bulk-export', {
+    ...base, claimant: 'a-w',
+    extraMutate: (c) => { writeFileSync(join(c, 'board/requests/202611201200-aaaaaa.md'), 'half\n'); throw new Error('boom'); },
+  }), /boom/);
+  assert.equal(g(a, 'status', '--porcelain'), '');
+  assert.equal(parseDoc(readFileSync(join(a, rel('bulk-export')), 'utf8')).data.claimed_by, 'a-w');
+  assert.equal((await renew(a, 'bulk-export', { ...base, claimant: 'a-w' })).ok, true);
+  assert.equal(fmOnRemote().claimed_by, 'a-w');
 });
