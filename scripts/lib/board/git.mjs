@@ -85,7 +85,7 @@ export async function boardWrite(clone, {
   const paths = mutate(clone);
   if (paths.length === 0) {
     if (!emptyOk) return { ok: false, reason: 'nothing-to-do' };
-    git(clone, ['commit', '--allow-empty', '-F', '-'], { input: message, env });
+    git(clone, ['commit', '--only', '--allow-empty', '-F', '-'], { input: message, env });
   } else {
     git(clone, ['add', '--', ...paths], { env });
     if (!emptyOk && git(clone, ['diff', '--cached', '--quiet', '--', ...paths], { allowFail: true }) !== null) {
@@ -119,7 +119,7 @@ export async function boardWrite(clone, {
       if (git(clone, ['rev-list', '--count', 'origin/main..HEAD'], { env }).trim() === '0') {
         // The rebase dropped our commit (its change is already on main).
         if (!emptyOk) return { ok: false, reason: 'nothing-to-do' };
-        git(clone, ['commit', '--allow-empty', '-F', '-'], { input: message, env }); // events still need their record
+        git(clone, ['commit', '--only', '--allow-empty', '-F', '-'], { input: message, env }); // events still need their record
       }
       await sleep(jitterMs());
     }

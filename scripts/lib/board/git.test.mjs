@@ -175,3 +175,21 @@ test('I4: non-event kind whose rebased commit becomes a no-op returns nothing-to
   assert.deepEqual(r, { ok: false, reason: 'nothing-to-do' });
   assert.equal(revParse(a, 'HEAD'), revParse(a, 'origin/main'));
 });
+
+test('R2: an empty start event does not sweep a staged new file', async () => {
+  const a = makeBoard().clone('a');
+  writeFileSync(join(a, 'secret.md'), 's\n'); g(a, 'add', 'secret.md');
+  const r = await boardWrite(a, { ...base, kind: 'start', subject: 'go', onReject: 'restart', mutate: () => [] });
+  assert.equal(r.ok, true);
+  assert.equal(g(a, 'show', '--name-only', '--format=', 'HEAD'), '');
+  assert.equal(g(a, 'diff', '--cached', '--name-only'), 'secret.md');
+});
+
+test('R2: a renew emptied by rebase does not sweep a staged new file', async () => {
+  const fx = makeBoard(); const a = fx.clone('a'); const b = fx.clone('b');
+  writeFileSync(join(a, 'secret.md'), 's\n'); g(a, 'add', 'secret.md');
+  const r = await boardWrite(a, { ...base, kind: 'renew', subject: 's', onReject: 'rebase', mutate: writer('x.md', 'same\n'), hooks: { beforePush: once(racer(b, 'x.md', 'same\n')) } });
+  assert.equal(r.ok, true);
+  assert.equal(g(a, 'show', '--name-only', '--format=', 'HEAD'), '');
+  assert.equal(g(a, 'diff', '--cached', '--name-only'), 'secret.md');
+});
