@@ -2,8 +2,12 @@
 date: 2026-11-19
 priority: High
 severity: Low
-status: DESIGNED
+status: PLANNED
 source: Promoted from docs/kit-open-items.md ("Parallel agents / task claiming"), shaped in a 2026-11-19 discussion
+plans:
+  - docs/plans/workers-1.md
+  - docs/plans/workers-2.md
+  - docs/plans/workers-3.md
 ---
 
 # Workers and the meta-root work board
