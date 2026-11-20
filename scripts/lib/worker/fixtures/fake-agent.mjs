@@ -1,6 +1,7 @@
 // Stand-in for a headless agent CLI. FAKE_AGENT_SCRIPT points at JSON:
-// { writes: {relPath: content}, result: object | null, exitCode, sleepMs, stderr }
+// { writes: {relPath: content}, exec: [[cwdRel, cmd, ...args]], result: object | null, exitCode, sleepMs, stderr }
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { dirname, resolve } from 'node:path';
 
 const script = JSON.parse(readFileSync(process.env.FAKE_AGENT_SCRIPT, 'utf8'));
@@ -9,6 +10,9 @@ for (const [rel, content] of Object.entries(script.writes ?? {})) {
   const file = resolve(process.cwd(), rel);
   mkdirSync(dirname(file), { recursive: true });
   writeFileSync(file, content);
+}
+for (const [cwd, cmd, ...args] of script.exec ?? []) {
+  execFileSync(cmd, args, { cwd: resolve(process.cwd(), cwd), stdio: 'ignore' });
 }
 if (script.sleepMs) await new Promise((r) => setTimeout(r, script.sleepMs));
 if (script.result != null && process.env.SDLC_RESULT_FILE) {
