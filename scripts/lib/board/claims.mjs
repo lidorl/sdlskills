@@ -110,10 +110,11 @@ export function renew(clone, slug, { claimant, identity, workerId, now, hooks })
   }));
 }
 
-export function release(clone, slug, { claimant, identity, workerId, extraMutate, hooks }) {
+// kind, subject and trailers override the defaults when the release is part of another event (a blocking request).
+export function release(clone, slug, { claimant, identity, workerId, extraMutate, hooks, kind = 'release', subject = slug, trailers }) {
   return asHolder(() => boardWrite(clone, {
-    kind: 'release', subject: slug, identity, onReject: 'restart', hooks,
-    trailers: trailersFor(slug, workerId),
+    kind, subject, identity, onReject: 'restart', hooks,
+    trailers: trailersFor(slug, workerId, trailers),
     mutate: (c) => {
       const cur = requireHolder(c, slug, claimant);
       writeFileSync(cur.file, setFields(cur.text, Object.fromEntries(CLAIM_FIELDS.map((k) => [k, null]))));
