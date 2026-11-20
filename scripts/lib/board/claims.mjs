@@ -71,7 +71,8 @@ const trailersFor = (slug, workerId, extra = {}) => ({
 const MAX_ATTEMPTS = 3;
 class NotHolder extends Error {}
 
-export async function claim(clone, slug, { claimant, identity, workerId, now, ttlMs, hooks }) {
+// `body` (optional) goes into the claim or takeover commit message, e.g. overlap warnings.
+export async function claim(clone, slug, { claimant, identity, workerId, now, ttlMs, hooks, body }) {
   checkSlug(slug);
   const stamp = iso(now);
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
@@ -92,7 +93,7 @@ export async function claim(clone, slug, { claimant, identity, workerId, now, tt
     hooks?.afterPeek?.();
     let refusal = null;
     const r = await boardWrite(clone, {
-      kind: stale ? 'takeover' : 'claim', subject: slug, identity, onReject: 'restart', hooks, commitFromHead: true,
+      kind: stale ? 'takeover' : 'claim', subject: slug, body, identity, onReject: 'restart', hooks, commitFromHead: true,
       trailers: trailersFor(slug, workerId, stale ? { replaces: old } : {}),
       mutate: (tree) => {
         const cur = readFm(tree, slug);

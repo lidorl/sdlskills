@@ -5,7 +5,7 @@ import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { makeBoard } from './fixtures.mjs';
 import { run, reportPaths } from './cli.mjs';
-import { claim } from './claims.mjs';
+import { claim, renew } from './claims.mjs';
 import { buildRequest } from './requests.mjs';
 import { parseDoc } from './frontmatter.mjs';
 
@@ -485,4 +485,37 @@ test('answer never touches the local tree: a dirty edit survives an upstream mov
   assert.equal(readFileSync(join(c, 'notes.md'), 'utf8'), 'mine\n');
   assert.equal(git(c, 'stash', 'list'), '');
   assert.equal(parseDoc(git(b.remote, 'show', `main:board/requests/${id}.md`)).data.status, 'answered');
+});
+
+// status sits right after renewed_at, so an edit to it and a renew touch adjacent lines.
+const adjacent = () => ({ priority: 'high', date: '2026-05-01', claimed_by: 'someone', claimed_at: '2026-05-01T00:00:00Z', renewed_at: '2026-05-01T00:00:00Z', status: 'ACCEPTED' });
+
+test('report merges a renew made next to the edited status line instead of stashing', async () => {
+  const b = makeBoard({ featReqs: { 'bulk-export': adjacent() } });
+  const c = b.clone('c');
+  assert.equal((await cli(c, ['claim', 'bulk-export'])).code, 0);
+  setStatus(c, 'bulk-export', 'DESIGNED');
+  assert.match(readFileSync(join(c, 'docs/feat-req/bulk-export.md'), 'utf8'), /renewed_at: .*\nstatus: DESIGNED/);
+  assert.equal((await renew(b.clone('o'), 'bulk-export', { claimant: 'lidorl', identity: ME, now: hours(1) })).ok, true);
+  const r = await cli(c, ['report', 'bulk-export', '--phase', 'DESIGNED'], { now: hours(2) });
+  assert.equal(r.code, 0, r.err);
+  assert.equal(onMain(b, 'bulk-export').status, 'DESIGNED');
+  assert.equal(onMain(b, 'bulk-export').renewed_at, '2026-06-01T12:00:00Z');
+  assert.equal(git(c, 'stash', 'list'), '');
+  assert.equal(git(c, 'status', '--porcelain'), '');
+});
+
+test('report whose edit truly conflicts with main exits 1, pushes nothing and leaves the files untouched', async () => {
+  const b = makeBoard({ featReqs: { 'bulk-export': feat() }, files: { 'docs/design/bulk-export.md': '# design\nline\n' } });
+  const c = b.clone('c');
+  assert.equal((await cli(c, ['claim', 'bulk-export'])).code, 0);
+  writeFileSync(join(c, 'docs/design/bulk-export.md'), '# design\nmine\n');
+  b.seed('docs/design/bulk-export.md', '# design\ntheirs\n');
+  const tip = git(b.remote, 'rev-parse', 'main');
+  const r = await cli(c, ['report', 'bulk-export', '--phase', 'ACCEPTED'], { now: hours(1) });
+  assert.equal(r.code, 1);
+  assert.match(r.err, /docs\/design\/bulk-export\.md conflict with origin\/main; nothing was pushed and your files are untouched/);
+  assert.equal(git(b.remote, 'rev-parse', 'main'), tip);
+  assert.equal(readFileSync(join(c, 'docs/design/bulk-export.md'), 'utf8'), '# design\nmine\n');
+  assert.equal(git(c, 'stash', 'list'), '');
 });

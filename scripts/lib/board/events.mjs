@@ -11,7 +11,8 @@ const TRAILERS = [
   ['Phase', 'phase'], ['Replaces', 'replaces'], ['Answered-by', 'answeredBy'],
 ];
 
-export function formatMessage({ kind, subject, trailers = {} }) {
+// `body` (optional) is a free-text paragraph between the subject and the trailers.
+export function formatMessage({ kind, subject, body, trailers = {} }) {
   if (!EVENT_KINDS.includes(kind)) throw new Error(`unknown event kind ${JSON.stringify(kind)}`);
   const values = { ...trailers, kind };
   // A line break would let a value end the subject or forge a trailer of its own.
@@ -21,7 +22,8 @@ export function formatMessage({ kind, subject, trailers = {} }) {
   const lines = TRAILERS
     .filter(([, field]) => values[field] !== null && values[field] !== undefined)
     .map(([key, field]) => `${key}: ${values[field]}`);
-  return `board(${kind}): ${subject}\n\n${lines.join('\n')}\n`;
+  const text = body == null ? '' : String(body).replace(/\r/g, '').trim();
+  return `board(${kind}): ${subject}\n\n${text ? `${text}\n\n` : ''}${lines.join('\n')}\n`;
 }
 
 export function parseLog(root, { ref = 'origin/main', limit = 2000, sinceSha } = {}) {

@@ -317,12 +317,14 @@ export function identityEnv(identity) {
 // read or written while the write runs. validate(view) reads origin/main through the same API.
 // `sdlc report`, which publishes the working tree on purpose, uses mutate(clone) and validate(clone).
 // A protocol write only fetches: it never stashes, merges or resets the working tree.
+// `body` adds a paragraph to the commit message; `sync(clone, env)` replaces the default sync for a
+// working-tree write (a report brings its edits along its own way).
 export async function boardWrite(clone, { commitFromHead = false, ...opts }) {
-  const message = formatMessage({ kind: opts.kind, subject: opts.subject, trailers: opts.trailers ?? {} });
+  const message = formatMessage({ kind: opts.kind, subject: opts.subject, body: opts.body, trailers: opts.trailers ?? {} });
   const env = identityEnv(opts.identity);
   assertOnMain(clone);
   if (commitFromHead) fetchMain(clone, env);
-  else sync(clone, env);
+  else (opts.sync ?? sync)(clone, env);
   if (git(clone, ['rev-list', '--count', 'origin/main..HEAD']).trim() !== '0') {
     throw new BoardError('local commits ahead of origin/main');
   }

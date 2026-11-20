@@ -10,6 +10,14 @@ function git(root, ...args) {
   return execFileSync('git', ['-c', 'user.name=Tester', '-c', 'user.email=t@example.com', ...args], { cwd: root, encoding: 'utf8' });
 }
 
+test('formatMessage puts a body paragraph between the subject and the trailers', () => {
+  assert.equal(
+    formatMessage({ kind: 'claim', subject: 'beta', body: 'Overlap warning:\n- beta shares api with alpha\n', trailers: { worker: 'lidorl-7f3a9c', effort: 'beta' } }),
+    'board(claim): beta\n\nOverlap warning:\n- beta shares api with alpha\n\nWorker: lidorl-7f3a9c\nSdlc-Event: claim\nEffort: beta\n',
+  );
+  assert.equal(formatMessage({ kind: 'stop', subject: 'w', body: '  ' }), 'board(stop): w\n\nSdlc-Event: stop\n');
+});
+
 test('formatMessage', () => {
   assert.equal(
     formatMessage({ kind: 'claim', subject: 'bulk-export', trailers: { worker: 'lidorl-7f3a9c', effort: 'bulk-export' } }),

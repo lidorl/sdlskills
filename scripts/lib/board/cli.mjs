@@ -1,24 +1,25 @@
 // `sdlc` board commands: a thin dispatcher over the board library. All protocol logic lives in
 // the sibling modules; this file parses argv, calls them, and renders results.
-import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
-import { join, posix } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parse } from 'yaml';
-import { assertOnMain, sync, boardWrite, identityEnv, fetchMain, snapshotMain } from './git.mjs';
-import { claim, release, committedFm, featReqPath, NOT_HOLDABLE } from './claims.mjs';
+import { assertOnMain, identityEnv, fetchMain, snapshotMain } from './git.mjs';
+import { claim, release, committedFm, featReqPath } from './claims.mjs';
 import { loadEfforts, rank, overlaps } from './queue.mjs';
 import { listRequests, validateRequest, answerRequest } from './requests.mjs';
 import { boardView, listWorkers } from './registry.mjs';
 import { parseLog } from './events.mjs';
 import { loadConfig, validateConfig, boardEnabled, parseDuration } from './config.mjs';
 import { safePath, SLUG_RE, REQUEST_ID_RE } from './safe-path.mjs';
-import { parseDoc, setFields } from './frontmatter.mjs';
 import { loadCatalog } from '../catalog.mjs';
+import { reportPaths } from './paths.mjs';
+import { reportEffort } from './report.mjs';
+
+export { reportPaths };
 import { createInterface } from 'node:readline/promises';
 
 const PHASES = ['ACCEPTED', 'DESIGNED', 'PLANNED', 'IN_PROGRESS', 'IMPLEMENTED'];
-const iso = (d) => d.toISOString().replace(/\.\d{3}Z$/, 'Z');
 
 class UsageError extends Error {}
 
@@ -81,46 +82,6 @@ const openRequestIds = (root) => new Set(listRequests(root).requests.filter((r) 
 
 function warnOverlaps(deps, slug, list) {
   for (const o of list) deps.err(`warning: ${slug} shares ${o.repos.join(', ')} with ${o.slug}\n`);
-}
-
-// Which docs belong to an effort: exact names only, so `bulk` never takes `bulk-export` files.
-function ownerPatterns(slug) {
-  return [
-    new RegExp(`^docs/feat-req/${slug}\\.md$`),
-    new RegExp(`^docs/design/${slug}\\.md$`),
-    new RegExp(`^docs/plans/${slug}(-\\d+)?\\.md$`),
-  ];
-}
-const historyRe = (slug) => new RegExp(`^docs/history/[^/]*_${slug}(-\\d+)?\\.md$`);
-
-// The files a report commits for an effort: its docs, history entries changed since origin/main, and extras.
-export function reportPaths(root, slug, extra = []) {
-  const out = [];
-  const add = (rel) => { if (!out.includes(rel) && existsSync(safePath(root, rel))) out.push(rel); };
-  const [featRe, designRe, planRe] = ownerPatterns(slug);
-  add(`docs/feat-req/${slug}.md`);
-  add(`docs/design/${slug}.md`);
-  const plans = join(root, 'docs/plans');
-  if (existsSync(plans)) {
-    for (const n of readdirSync(plans).sort()) if (planRe.test(`docs/plans/${n}`)) add(`docs/plans/${n}`);
-  }
-  const changed = new Set([
-    ...gitOut(root, ['ls-files', '--others', '--exclude-standard', '--', 'docs/history']).split('\n'),
-    ...gitOut(root, ['diff', '--name-only', 'origin/main', '--', 'docs/history']).split('\n'),
-  ].filter(Boolean));
-  const hist = historyRe(slug);
-  for (const rel of [...changed].sort()) if (hist.test(rel)) add(rel);
-  for (const p of extra) {
-    safePath(root, p);
-    const rel = posix.normalize(p.replaceAll('\\', '/'));
-    if (rel === 'board' || rel.startsWith('board/')) throw new Error(`--paths: ${p} is under board/; reports never write there`);
-    if (/^docs\/(feat-req|design|plans)\//.test(rel) && ![featRe, designRe, planRe].some((re) => re.test(rel))) {
-      throw new Error(`--paths: ${p} does not belong to ${slug}`);
-    }
-    if (!existsSync(join(root, rel))) throw new Error(`--paths: ${p} does not exist`);
-    add(rel);
-  }
-  return out;
 }
 
 const table = (head, rows) => {
@@ -240,11 +201,6 @@ async function cmdReport(root, { flags, positional: [slug] }, deps) {
   assertOnMain(root);
   const id = deps.whoami();
   const feat = featReqPath(slug);
-  // The holder is whoever main says. The working copy may already say IMPLEMENTED/PARKED: that is the report.
-  const refusal = (fm) => {
-    if (!fm || fm.claimed_by !== id.login) return 'not-holder';
-    return NOT_HOLDABLE.has(fm.status) ? 'closed' : null;
-  };
   const lost = (why, res = {}) => {
     const up = committedFm(root, slug, 'origin/main');
     if (why === 'closed') deps.err(`${slug} is ${up?.status} on main; nothing was pushed\n`);
@@ -260,32 +216,17 @@ async function cmdReport(root, { flags, positional: [slug] }, deps) {
     if (res.dropped) deps.err(`your edits to ${feat} were not kept (main's copy wins); redo them once you hold ${slug} again\n`);
     return 3;
   };
-  sync(root, identityEnv(id));
-  const pre = refusal(committedFm(root, slug));
-  if (pre) return lost(pre);
-  const stamp = iso(deps.now());
-  let refused = null;
-  const r = await boardWrite(root, {
-    kind: 'report', subject: slug, identity: id, onReject: 'rebase', onFailure: 'keep-work', hooks: deps.hooks, sleep: deps.sleep,
-    trailers: { effort: slug, phase },
-    mutate: (c) => {
-      const up = committedFm(c, slug);
-      refused = refusal(up);
-      if (refused) return [];
-      // Publish the working copy (the report), but the protocol fields are main's: only renewed_at moves.
-      const f = safePath(c, feat);
-      writeFileSync(f, setFields(readFileSync(f, 'utf8'), {
-        claimed_by: up.claimed_by, claimed_at: up.claimed_at ?? null, renewed_at: stamp, awaiting: up.awaiting ?? null,
-      }));
-      return reportPaths(c, slug, extra);
-    },
-    validate: (c) => committedFm(c, slug, 'origin/main')?.claimed_by === id.login,
+  const r = await reportEffort(root, slug, {
+    phase, claimant: id.login, identity: id, extraPaths: extra, now: deps.now(), sleep: deps.sleep, hooks: deps.hooks,
   });
   if (r.ok) { deps.out(`reported ${slug} at ${phase}\n`); return 0; }
-  if (refused) return lost(refused);
+  if (r.reason === 'not-holder' || r.reason === 'closed' || r.reason === 'landed') return lost(r.reason);
   if (r.reason === 'conflict') return lost('not-holder', { ...r, dropped: true });
-  if (r.reason === 'lost-race') return lost('race', { ...r, dropped: true });
-  if (r.reason === 'replaced') return lost('landed');
+  if (r.reason === 'race') return lost('race', { ...r, dropped: true });
+  if (r.reason === 'unmerged') {
+    deps.err(`your edits to ${r.paths.join(', ')} conflict with origin/main; nothing was pushed and your files are untouched\n`);
+    return 1;
+  }
   deps.err(`could not report ${slug} (${r.reason})\n`);
   return 1;
 }
