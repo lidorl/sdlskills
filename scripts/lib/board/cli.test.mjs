@@ -439,3 +439,15 @@ test('report and answer sync with the GitHub identity, not the clone config', as
   assert.equal((await cli(c, ['answer', id, '--choice', 'confirm'])).code, 0);
   assert.deepEqual([...new Set(merges())], ['Lidor L']);
 });
+
+test('report keeps main\'s protocol fields: a working copy that lost awaiting does not clear it on main', async () => {
+  const b = makeBoard({ featReqs: { 'bulk-export': feat({ status: 'IN_PROGRESS', awaiting: '202606010900-aaaaaa' }) } });
+  const c = b.clone('c');
+  assert.equal((await cli(c, ['claim', 'bulk-export'])).code, 0);
+  const f = join(c, 'docs/feat-req/bulk-export.md');
+  writeFileSync(f, readFileSync(f, 'utf8').replace(/awaiting: .*\n/, '').replace('status: IN_PROGRESS', 'status: IMPLEMENTED'));
+  const r = await cli(c, ['report', 'bulk-export', '--phase', 'IMPLEMENTED'], { now: hours(1) });
+  assert.equal(r.code, 0, r.err);
+  assert.equal(onMain(b, 'bulk-export').status, 'IMPLEMENTED');
+  assert.equal(onMain(b, 'bulk-export').awaiting, '202606010900-aaaaaa');
+});

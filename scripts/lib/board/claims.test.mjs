@@ -113,7 +113,7 @@ test('release restarts when raced and never clears a claim someone else took', a
   assert.deepEqual(r, { ok: false, reason: 'replaced' });
   assert.equal(fmOnRemote().claimed_by, 'b-w');
   assert.equal(fmOnRemote().renewed_at, '2026-11-20T11:30:00Z');
-  assert.equal(g(a, 'rev-parse', 'HEAD'), g(a, 'rev-parse', 'origin/main'));
+  assert.equal(g(a, 'rev-list', '--count', 'origin/main..HEAD'), '0'); // never ahead of origin/main
 });
 
 test('release retries after a non-conflicting race while we still hold', async () => {
@@ -137,7 +137,7 @@ test('renew raced by a takeover does not write onto the new claim', async () => 
   assert.deepEqual(r, { ok: false, reason: 'replaced' });
   assert.equal(fmOnRemote().claimed_by, 'b-w');
   assert.equal(fmOnRemote().renewed_at, '2026-11-20T11:30:00Z');
-  assert.equal(holds(a, 'bulk-export', 'a-w'), false);
+  assert.equal(holds(a, 'bulk-export', 'a-w', { ref: 'origin/main' }), false);
 });
 
 test('renew after the file is deleted is replaced and pushes nothing', async () => {
@@ -172,10 +172,11 @@ test('takeover decision changes between peek and write: record matches the state
   };
   const r = await claim(a, 'bulk-export', { ...base, claimant: 'a-w', hooks: { afterPeek } });
   assert.deepEqual(r, { ok: true, takeover: null });
-  const msg = g(a, 'log', '-1', '--format=%B');
+  // a protocol write that was raced leaves local main behind: read what landed on origin/main
+  const msg = g(a, 'log', '-1', '--format=%B', 'origin/main');
   assert.match(msg, /^board\(claim\): bulk-export/);
   assert.doesNotMatch(msg, /Replaces/);
-  assert.doesNotMatch(readFileSync(join(a, rel('bulk-export')), 'utf8'), /takeover/);
+  assert.doesNotMatch(g(a, 'show', `origin/main:${rel('bulk-export')}`), /takeover/);
   assert.equal(fmOnRemote().claimed_by, 'a-w');
 });
 
@@ -191,8 +192,8 @@ test('takeover decision changes between peek and write: stale X -> stale Y uses 
   };
   const r = await claim(a, 'bulk-export', { ...base, claimant: 'a-w', hooks: { afterPeek } });
   assert.deepEqual(r, { ok: true, takeover: 'y-w' });
-  assert.match(g(a, 'log', '-1', '--format=%B'), /Replaces: y-w/);
-  assert.match(readFileSync(join(a, rel('bulk-export')), 'utf8'), /took over from y-w/);
+  assert.match(g(a, 'log', '-1', '--format=%B', 'origin/main'), /Replaces: y-w/);
+  assert.match(g(a, 'show', `origin/main:${rel('bulk-export')}`), /took over from y-w/);
 });
 
 test('holds() is false once a person parks or deletes the feat-req', async () => {

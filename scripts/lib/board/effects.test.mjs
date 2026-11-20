@@ -284,11 +284,12 @@ test('applyAnswered after a lost race applies once: one Decisions line, one plan
   const r = await applyAnswered(clone, SLUG, { claimant: WHO, identity: IDENT, workerId: WHO, now: NOW, hooks });
   assert.equal(r.ok, true);
   assert.equal(raced, true);
-  const feat = read(clone, 'docs/feat-req/bulk-export.md');
+  // raced, so local main stays behind: check what landed on origin/main
+  const feat = g(clone, 'show', 'origin/main:docs/feat-req/bulk-export.md');
   assert.equal(feat.split(rv.id).length - 1, 1);
-  assert.equal(read(clone, 'docs/plans/bulk-export.md').split('Fix review finding F1').length - 1, 1);
-  assert.equal(existsSync(join(clone, `board/requests/${rv.id}.md`)), false);
-  assert.equal(g(clone, 'log', '--format=%s', '--grep=board(apply)').split('\n').length, 1);
+  assert.equal(g(clone, 'show', 'origin/main:docs/plans/bulk-export.md').split('Fix review finding F1').length - 1, 1);
+  assert.equal(g(clone, 'ls-tree', '--name-only', 'origin/main', `board/requests/${rv.id}.md`), '');
+  assert.equal(g(clone, 'log', '--format=%s', '--grep=board(apply)', 'origin/main').split('\n').length, 1);
 });
 
 test('path guards: unsafe effort or id never reaches the filesystem', () => {

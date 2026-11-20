@@ -271,35 +271,37 @@ function buildCommit(clone, { entries, pending }, parent, { message, env }) {
 
 const blob = (clone, sha) => git(clone, ['cat-file', 'blob', sha], { binary: true });
 
-// One path our landed commit changed: the working file follows only if the person never touched it
-// (still the old blob, or absent where there was none); the index entry follows only if it was still the old blob.
-function followPath(clone, { path, mode, old, new: next }, env) {
+const ZERO_SHA = '0'.repeat(40);
+
+// A touched path the person has not touched: index entry and working file both still the old blob
+// (or both absent where there was none). Anything unreadable counts as touched.
+function untouched(clone, { path, old }, env) {
   try {
-    const abs = safePath(clone, path); // a symlink on disk: leave it alone
-    const st = existsSync(abs) ? statSync(abs) : null;
-    const clean = old === null ? st === null : !!st?.isFile() && readFileSync(abs).equals(blob(clone, old));
-    if (clean && next === null) rmSync(abs, { force: true });
-    else if (clean) { mkdirSync(dirname(abs), { recursive: true }); writeFileSync(abs, blob(clone, next)); }
-  } catch { /* the person's copy stays as it is */ }
-  const entry = git(clone, ['ls-files', '-s', '-z', '--', path], { env, allowFail: true });
-  if (entry === null) return;
-  const staged = entry ? entry.split(' ')[1] : null;
-  if (staged !== old) return;
-  if (next === null) git(clone, ['update-index', '--force-remove', '--', path], { env, allowFail: true });
-  else git(clone, ['update-index', '--add', '--cacheinfo', `${mode},${next},${path}`], { env, allowFail: true });
+    const entry = git(clone, ['ls-files', '-s', '-z', '--', path], { env });
+    if ((entry ? entry.split(' ')[1] : null) !== old) return false;
+    const abs = safePath(clone, path);
+    if (!existsSync(abs)) return old === null;
+    return old !== null && statSync(abs).isFile() && readFileSync(abs).equals(blob(clone, old));
+  } catch { return false; }
 }
 
-// Bring local main up to our landed commit without overwriting anything the person changed.
+// Advance local main to our landed commit only when that changes nothing the person has: main is still the
+// commit we built on and every touched path is untouched. Otherwise main stays behind origin/main (never
+// ahead) and the next sync brings the protocol change in with git's own merge. Index and working files move
+// first and the ref last, so a failure part-way never leaves main showing a staged revert.
 function followLanded(clone, { sha, parent, changes }, env) {
   if (git(clone, ['symbolic-ref', '-q', 'HEAD'], { env, allowFail: true })?.trim() !== 'refs/heads/main') return;
-  const head = () => git(clone, ['rev-parse', 'HEAD'], { env }).trim();
-  // Rebuilt on a newer main after a lost push: catch up first (git refuses rather than overwrite edits).
-  if (head() !== parent) git(clone, ['merge', '--ff-only', parent], { env, allowFail: true });
-  if (head() !== parent) return; // the clone stays behind origin/main; the next sync catches up
-  if (git(clone, ['update-ref', 'refs/heads/main', sha, parent], { env, allowFail: true }) === null) return;
-  for (const c of changes) followPath(clone, c, env);
+  if (git(clone, ['rev-parse', 'HEAD'], { env }).trim() !== parent) return;
+  if (!changes.every((c) => untouched(clone, c, env))) return;
+  const info = changes.map((c) => (c.new === null ? `0 ${ZERO_SHA}\t${c.path}` : `${c.mode} ${c.new}\t${c.path}`)).join('\n');
+  if (changes.length && git(clone, ['update-index', '--index-info'], { input: `${info}\n`, env, allowFail: true }) === null) return;
+  for (const c of changes) {
+    const abs = safePath(clone, c.path);
+    if (c.new === null) rmSync(abs, { force: true });
+    else { mkdirSync(dirname(abs), { recursive: true }); writeFileSync(abs, blob(clone, c.new)); }
+  }
+  git(clone, ['update-ref', 'refs/heads/main', sha, parent], { env, allowFail: true });
   git(clone, ['update-index', '-q', '--refresh'], { env, allowFail: true });
-  git(clone, ['merge', '--ff-only', 'origin/main'], { env, allowFail: true });
 }
 
 // Identity for every commit-creating git call (commit, rebase, stash, autostash), never the clone's config.
@@ -314,11 +316,13 @@ export function identityEnv(identity) {
 // above and the commit is built in a temporary index, so the person's working tree and index are never
 // read or written while the write runs. validate(view) reads origin/main through the same API.
 // `sdlc report`, which publishes the working tree on purpose, uses mutate(clone) and validate(clone).
+// A protocol write only fetches: it never stashes, merges or resets the working tree.
 export async function boardWrite(clone, { commitFromHead = false, ...opts }) {
   const message = formatMessage({ kind: opts.kind, subject: opts.subject, trailers: opts.trailers ?? {} });
   const env = identityEnv(opts.identity);
   assertOnMain(clone);
-  sync(clone, env);
+  if (commitFromHead) fetchMain(clone, env);
+  else sync(clone, env);
   if (git(clone, ['rev-list', '--count', 'origin/main..HEAD']).trim() !== '0') {
     throw new BoardError('local commits ahead of origin/main');
   }

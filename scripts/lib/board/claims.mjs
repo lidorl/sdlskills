@@ -1,6 +1,6 @@
 // Claim protocol: a claim is a commit on main setting claimed_by/claimed_at/renewed_at in the feat-req
 // frontmatter. It counts only once it is on origin/main and validated (boardWrite does both).
-import { boardWrite, sync, identityEnv, showFile, BoardError } from './git.mjs';
+import { boardWrite, fetchMain, identityEnv, showFile, BoardError } from './git.mjs';
 import { parseDoc, setFields, appendToSection } from './frontmatter.mjs';
 import { dirTree, SLUG_RE } from './safe-path.mjs';
 
@@ -66,10 +66,10 @@ export async function claim(clone, slug, { claimant, identity, workerId, now, tt
   const stamp = iso(now);
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
     // The commit kind and Replaces trailer are fixed before boardWrite starts, so peek at the freshly
-    // synced commit first. mutate re-reads after boardWrite's own sync and refuses (mismatch) if the
+    // fetched origin/main first. mutate re-reads after boardWrite's own fetch and refuses (mismatch) if the
     // state it sees is not the one the kind/trailer describe; we then re-peek and retry.
-    sync(clone, identityEnv(identity));
-    const peek = committedFm(clone, slug);
+    fetchMain(clone, identityEnv(identity));
+    const peek = committedFm(clone, slug, 'origin/main');
     if (holdable(peek, claimant) && claimState(peek, now, ttlMs) === 'live') {
       // Already ours (a retry, or a restarted worker with the same id): refresh the lease instead.
       const r = await renew(clone, slug, { claimant, identity, workerId, now, hooks });

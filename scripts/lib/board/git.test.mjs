@@ -1,11 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { writeFileSync, readFileSync, statSync, appendFileSync, mkdirSync, mkdtempSync } from 'node:fs';
+import { writeFileSync, readFileSync, statSync, appendFileSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
 import { makeBoard, IDENT } from './fixtures.mjs';
-import { boardWrite, assertOnMain, BoardError } from './git.mjs';
+import { boardWrite, assertOnMain, BoardError, sync, identityEnv } from './git.mjs';
 import { renew } from './claims.mjs';
 
 const g = (cwd, ...args) => execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();
@@ -252,7 +252,7 @@ test('commitFromHead: an edit the person has not committed is never part of the 
   const mutate = (tree) => tree.write('docs/feat-req/s.md', tree.read('docs/feat-req/s.md').replace('ACCEPTED', 'DESIGNED'));
   const r = await boardWrite(a, { ...base, kind: 'apply', subject: 's', onReject: 'restart', commitFromHead: true, mutate });
   assert.equal(r.ok, true);
-  const committed = g(a, 'show', 'HEAD:docs/feat-req/s.md');
+  const committed = g(a, 'show', `${r.sha}:docs/feat-req/s.md`);
   assert.match(committed, /DESIGNED/);
   assert.doesNotMatch(committed, /private draft/);
   assert.equal(readFileSync(f, 'utf8'), draft); // the person's copy is theirs: left exactly as it was
@@ -279,6 +279,7 @@ test('process killed mid-push loses no uncommitted docs edit', () => {
     '  hooks: { beforePush: () => process.exit(7) } });',
   ].join('\n'));
   const r = spawnSync(process.execPath, [child, a], { encoding: 'utf8' });
+  rmSync(dirname(child), { recursive: true, force: true });
   assert.equal(r.status, 7, r.stderr);
   assert.equal(readFileSync(feat, 'utf8'), draft);
   assert.equal(readFileSync(join(a, 'docs/design/s.md'), 'utf8'), 'design draft\n');
@@ -309,25 +310,82 @@ test('protocol commit contains only the patched frontmatter, never working-tree 
   const diff = g(fx.remote, 'diff', '-U0', 'main~1', 'main').split('\n').filter((l) => /^[-+][^-+]/.test(l));
   assert.deepEqual(diff, ['-renewed_at: 2026-11-20T11:00:00Z', '+renewed_at: 2026-11-20T12:00:00Z']);
   assert.equal(g(a, 'diff', '--cached', '--name-only'), 'README.md');
-  assert.equal(g(a, 'rev-parse', 'HEAD'), r.sha ?? g(a, 'rev-parse', 'origin/main'));
 });
 
-test('clean working file is fast-forwarded to the new HEAD; dirty one is left as is', async () => {
-  const fx = held(); const a = fx.clone('a');
-  const feat = join(a, FEAT); const plan = join(a, 'docs/plans/s.md');
-  const mine = `${readFileSync(feat, 'utf8')}\ndraft line\n`;
-  writeFileSync(feat, mine);
-  const mutate = (tree) => {
-    tree.write(FEAT, tree.read(FEAT).replace('IN_PROGRESS', 'PARKED'));
-    tree.write('docs/plans/s.md', tree.read('docs/plans/s.md').replace('one', 'one (patched)'));
-    tree.write('board/requests/202611201200-aaaaaa.md', 'new\n');
-  };
-  const r = await boardWrite(a, { ...base, kind: 'apply', subject: 's', onReject: 'restart', commitFromHead: true, mutate });
+const patchAll = (tree) => {
+  tree.write(FEAT, tree.read(FEAT).replace('IN_PROGRESS', 'PARKED'));
+  tree.write('docs/plans/s.md', tree.read('docs/plans/s.md').replace('one', 'one (patched)'));
+  tree.write('board/requests/202611201200-aaaaaa.md', 'new\n');
+};
+const applyWrite = (a, extra = {}) => boardWrite(a, { ...base, kind: 'apply', subject: 's', onReject: 'restart', commitFromHead: true, mutate: patchAll, ...extra });
+const status = (a) => execFileSync('git', ['status', '--porcelain'], { cwd: a, encoding: 'utf8' });
+
+test('clean working files are fast-forwarded to the new HEAD and local main follows', async () => {
+  const a = held().clone('a');
+  const r = await applyWrite(a);
   assert.equal(r.ok, true);
   assert.equal(revParse(a, 'HEAD'), r.sha);
-  assert.equal(readFileSync(plan, 'utf8'), PLAN.replace('one', 'one (patched)'));
+  assert.equal(readFileSync(join(a, 'docs/plans/s.md'), 'utf8'), PLAN.replace('one', 'one (patched)'));
   assert.equal(readFileSync(join(a, 'board/requests/202611201200-aaaaaa.md'), 'utf8'), 'new\n');
+  assert.match(readFileSync(join(a, FEAT), 'utf8'), /PARKED/);
+  assert.equal(status(a), '');
+});
+
+test('a dirty touched path: local main is not advanced, nothing is touched, a later sync merges the change in', async () => {
+  const fx = held(); const a = fx.clone('a');
+  const before = revParse(a, 'HEAD');
+  const feat = join(a, FEAT);
+  const mine = `${readFileSync(feat, 'utf8')}\ndraft line\n`;
+  writeFileSync(feat, mine);
+  const r = await applyWrite(a);
+  assert.equal(r.ok, true);
+  assert.equal(revParse(a, 'HEAD'), before);
   assert.equal(readFileSync(feat, 'utf8'), mine);
-  assert.equal(execFileSync('git', ['status', '--porcelain'], { cwd: a, encoding: 'utf8' }), ` M ${FEAT}\n`);
-  assert.match(g(a, 'show', `HEAD:${FEAT}`), /PARKED/);
+  assert.equal(readFileSync(join(a, 'docs/plans/s.md'), 'utf8'), PLAN); // clean, but main did not move: untouched
+  assert.equal(status(a), ` M ${FEAT}\n`);
+  assert.equal(g(a, 'diff', '--cached'), '');
+  sync(a, identityEnv(IDENT)); // what `sdlc report` does first
+  assert.equal(revParse(a, 'HEAD'), r.sha);
+  const merged = readFileSync(feat, 'utf8');
+  assert.match(merged, /status: PARKED[\s\S]*draft line/);
+  assert.equal(g(a, 'stash', 'list'), '');
+});
+
+test('a staged edit to a touched path stays staged as the person left it; main is not advanced', async () => {
+  const a = held().clone('a');
+  const before = revParse(a, 'HEAD');
+  const plan = join(a, 'docs/plans/s.md');
+  writeFileSync(plan, `${PLAN}- [ ] staged step\n`); g(a, 'add', 'docs/plans/s.md');
+  const cached = g(a, 'diff', '--cached');
+  const r = await applyWrite(a);
+  assert.equal(r.ok, true);
+  assert.equal(revParse(a, 'HEAD'), before);
+  assert.equal(g(a, 'diff', '--cached'), cached);
+  assert.equal(readFileSync(plan, 'utf8'), `${PLAN}- [ ] staged step\n`);
+});
+
+test('index.lock held when the write lands: no staged revert and local main is not moved', async () => {
+  const a = held().clone('a');
+  const before = revParse(a, 'HEAD');
+  const lock = join(a, '.git/index.lock');
+  const r = await renew(a, 's', { claimant: 'a-w', identity: IDENT, now: RENEW_AT, hooks: { beforePush: () => writeFileSync(lock, '') } });
+  rmSync(lock);
+  assert.equal(r.ok, true);
+  assert.equal(revParse(a, 'HEAD'), before);
+  assert.equal(g(a, 'diff', '--cached'), '');
+  assert.equal(status(a), '');
+});
+
+test('origin/main moved under a dirty edit to the same lines: renew still lands, nothing is stashed or reset', async () => {
+  const fx = held(); const a = fx.clone('a');
+  const before = revParse(a, 'HEAD');
+  const plan = join(a, 'docs/plans/s.md');
+  writeFileSync(plan, '# plan\n\n- [ ] AGENT\n');
+  fx.seed('docs/plans/s.md', '# plan\n\n- [ ] PERSON\n');
+  const r = await renew(a, 's', { claimant: 'a-w', identity: IDENT, now: RENEW_AT });
+  assert.equal(r.ok, true);
+  assert.equal(readFileSync(plan, 'utf8'), '# plan\n\n- [ ] AGENT\n');
+  assert.equal(g(a, 'stash', 'list'), '');
+  assert.equal(revParse(a, 'HEAD'), before); // behind origin/main, never ahead
+  assert.match(g(fx.remote, 'show', `main:${FEAT}`), /renewed_at: 2026-11-20T12:00:00Z/);
 });

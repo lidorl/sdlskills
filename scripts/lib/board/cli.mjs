@@ -264,9 +264,11 @@ async function cmdReport(root, { flags, positional: [slug] }, deps) {
       const up = committedFm(c, slug);
       refused = refusal(up);
       if (refused) return [];
-      // Publish the working copy (the report), but the claim fields are main's: only renewed_at moves.
+      // Publish the working copy (the report), but the protocol fields are main's: only renewed_at moves.
       const f = safePath(c, feat);
-      writeFileSync(f, setFields(readFileSync(f, 'utf8'), { claimed_by: up.claimed_by, claimed_at: up.claimed_at ?? null, renewed_at: stamp }));
+      writeFileSync(f, setFields(readFileSync(f, 'utf8'), {
+        claimed_by: up.claimed_by, claimed_at: up.claimed_at ?? null, renewed_at: stamp, awaiting: up.awaiting ?? null,
+      }));
       return reportPaths(c, slug, extra);
     },
     validate: (c) => committedFm(c, slug, 'origin/main')?.claimed_by === id.login,
