@@ -184,3 +184,26 @@ test('a non-https/ssh url in repos.yml is refused (via loadCatalog)', () => {
   assert.throws(() => assemble({ rootDir: root, slug: 'thing', keys: ['api'] }), /https:\/\/ or git@/);
   rmSync(dir, { recursive: true });
 });
+
+test('hooks.workerId installs the commit-msg trailer hook on writable checkouts only', () => {
+  const { dir, root, catalog } = setup();
+  catalog.repos.web = entry(catalog.repos.web.url, { readonly: true });
+  const hooks = { workerId: 'lidor-abc123' };
+  assemble({ rootDir: root, slug: 'thing', keys: ['api', 'web'], catalog, hooks });
+  // second run exercises the fetched-existing path
+  assemble({ rootDir: root, slug: 'thing', keys: ['api', 'web'], catalog, hooks });
+  const api = join(root, 'workspace', 'api');
+  const web = join(root, 'workspace', 'web');
+  git(api, '-c', 'user.email=a@b.c', '-c', 'user.name=t', 'commit', '--allow-empty', '-m', 'work');
+  const msg = execFileSync('git', ['log', '-1', '--format=%B'], { cwd: api }).toString();
+  assert.equal(msg.match(/^Worker: lidor-abc123$/gm)?.length, 1);
+  assert.ok(!existsSync(join(web, '.git', 'hooks', 'commit-msg')));
+  rmSync(dir, { recursive: true });
+});
+
+test('without hooks, no commit-msg hook is installed', () => {
+  const { dir, root, catalog } = setup();
+  assemble({ rootDir: root, slug: 'thing', keys: ['api'], catalog });
+  assert.ok(!existsSync(join(root, 'workspace', 'api', '.git', 'hooks', 'commit-msg')));
+  rmSync(dir, { recursive: true });
+});

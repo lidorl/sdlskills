@@ -8,6 +8,7 @@ import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { loadCatalog } from './lib/catalog.mjs';
 import { isEntryPoint } from './lib/is-entry-point.mjs';
+import { installTrailerHook } from './lib/worker/home.mjs';
 
 // URL-scheme safety (refuse anything but https:// and git@) is enforced in
 // catalog.mjs → validateCatalog, which loadCatalog runs. Callers that pass an
@@ -87,7 +88,7 @@ function liftReadonlyGuards(dest) {
   if (existsSync(hook) && readFileSync(hook, 'utf8') === READONLY_HOOK) unlinkSync(hook);
 }
 
-export function assemble({ rootDir, slug, keys, catalog }) {
+export function assemble({ rootDir, slug, keys, catalog, hooks }) {
   const cat = catalog ?? loadCatalog(rootDir);
   const branch = `feat/${slug}`;
   const wsDir = join(rootDir, 'workspace');
@@ -126,6 +127,7 @@ export function assemble({ rootDir, slug, keys, catalog }) {
     } else {
       liftReadonlyGuards(dest);
       checkoutEffortBranch(dest, branch, entry.default_branch);
+      if (hooks?.workerId) installTrailerHook(dest, hooks.workerId);
     }
   }
 
