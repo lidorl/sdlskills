@@ -66,16 +66,20 @@ function restoreToOrigin(clone, env) {
   }
 }
 
+// Identity for every commit-creating git call (commit, rebase, stash, autostash), never the clone's config.
+export function identityEnv(identity) {
+  return {
+    GIT_AUTHOR_NAME: identity.name, GIT_AUTHOR_EMAIL: identity.email,
+    GIT_COMMITTER_NAME: identity.name, GIT_COMMITTER_EMAIL: identity.email,
+  };
+}
+
 export async function boardWrite(clone, {
   kind, subject, trailers = {}, identity, mutate, validate, onReject, hooks = {}, sleep = defaultSleep,
 }) {
   const message = formatMessage({ kind, subject, trailers });
   const emptyOk = EMPTY_COMMIT_KINDS.has(kind);
-  // Identity for every commit-creating git call (commit, rebase, stash), never the clone's config.
-  const env = {
-    GIT_AUTHOR_NAME: identity.name, GIT_AUTHOR_EMAIL: identity.email,
-    GIT_COMMITTER_NAME: identity.name, GIT_COMMITTER_EMAIL: identity.email,
-  };
+  const env = identityEnv(identity);
   assertOnMain(clone);
   sync(clone, env);
   if (git(clone, ['rev-list', '--count', 'origin/main..HEAD']).trim() !== '0') {

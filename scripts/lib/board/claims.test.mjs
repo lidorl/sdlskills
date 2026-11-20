@@ -100,20 +100,31 @@ function racerEdit(b, slug, edit) {
 }
 const SPREAD = { claimed_by: 'a-w', claimed_at: '2026-11-20T11:00:00Z', title: 't', status: 'APPROVED', p: 1, q: 2, r: 3, renewed_at: '2026-11-20T11:30:00Z' };
 
-test('rebase conflict on claim fields is never resolved in our favour', async () => {
+test('release restarts when raced and never clears a claim someone else took', async () => {
+  const { fx, fmOnRemote } = setup(SPREAD);
+  const a = fx.clone('a'); const b = fx.clone('b');
+  const r = await release(a, 'bulk-export', {
+    ...base, claimant: 'a-w',
+    hooks: { beforePush: racerEdit(b, 'bulk-export', (t) => t.replace(/claimed_by: .*\n/, 'claimed_by: b-w\n')) },
+  });
+  assert.deepEqual(r, { ok: false, reason: 'replaced' });
+  assert.equal(fmOnRemote().claimed_by, 'b-w');
+  assert.equal(fmOnRemote().renewed_at, '2026-11-20T11:30:00Z');
+  assert.equal(g(a, 'rev-parse', 'HEAD'), g(a, 'rev-parse', 'origin/main'));
+});
+
+test('release retries after a non-conflicting race while we still hold', async () => {
   const { fx, fmOnRemote } = setup(SPREAD);
   const a = fx.clone('a'); const b = fx.clone('b');
   const r = await release(a, 'bulk-export', {
     ...base, claimant: 'a-w',
     hooks: { beforePush: racerEdit(b, 'bulk-export', (t) => t.replace(/renewed_at: .*/, 'renewed_at: 2026-11-20T11:59:00Z')) },
   });
-  assert.deepEqual(r, { ok: false, reason: 'conflict' });
-  assert.equal(fmOnRemote().claimed_by, 'a-w');
-  assert.equal(fmOnRemote().renewed_at, '2026-11-20T11:59:00Z');
-  assert.equal(g(a, 'rev-parse', 'HEAD'), g(a, 'rev-parse', 'origin/main'));
+  assert.equal(r.ok, true);
+  assert.equal(fmOnRemote().claimed_by, undefined);
 });
 
-test('claim replaced between push and validate -> replaced, holds() false', async () => {
+test('renew raced by a takeover does not write onto the new claim', async () => {
   const { fx, fmOnRemote } = setup(SPREAD);
   const a = fx.clone('a'); const b = fx.clone('b');
   const r = await renew(a, 'bulk-export', {
@@ -122,15 +133,63 @@ test('claim replaced between push and validate -> replaced, holds() false', asyn
   });
   assert.deepEqual(r, { ok: false, reason: 'replaced' });
   assert.equal(fmOnRemote().claimed_by, 'b-w');
+  assert.equal(fmOnRemote().renewed_at, '2026-11-20T11:30:00Z');
   assert.equal(holds(a, 'bulk-export', 'a-w'), false);
 });
 
-test('renew by a non-holder fails replaced and writes no commit', async () => {
+test('renew after the file is deleted is replaced and pushes nothing', async () => {
   const { fx } = setup(SPREAD);
-  const a = fx.clone('a');
-  const before = g(a, 'rev-parse', 'origin/main');
-  assert.deepEqual(await renew(a, 'bulk-export', { ...base, claimant: 'zzz' }), { ok: false, reason: 'replaced' });
+  const a = fx.clone('a'); const b = fx.clone('b');
+  g(b, 'rm', '-q', rel('bulk-export')); g(b, 'commit', '-qm', 'rm'); g(b, 'push', '-q', 'origin', 'main');
+  const before = g(b, 'rev-parse', 'HEAD');
+  assert.deepEqual(await renew(a, 'bulk-export', { ...base, claimant: 'a-w' }), { ok: false, reason: 'replaced' });
+  g(a, 'fetch', '-q', 'origin', 'main');
   assert.equal(g(a, 'rev-parse', 'origin/main'), before);
+});
+
+test('release and renew work on a clone with no git identity and a dirty tree', async () => {
+  const { fx } = setup(SPREAD);
+  const a = fx.clone('a'); const b = fx.clone('b');
+  execFileSync('git', ['config', '--unset', 'user.name'], { cwd: a });
+  execFileSync('git', ['config', '--unset', 'user.email'], { cwd: a });
+  writeFileSync(join(a, 'README.md'), 'dirty\n');
+  writeFileSync(join(b, 'other.md'), 'x\n'); g(b, 'add', '.'); g(b, 'commit', '-qm', 'o'); g(b, 'push', '-q', 'origin', 'main');
+  assert.equal((await renew(a, 'bulk-export', { ...base, claimant: 'a-w' })).ok, true);
+});
+
+test('takeover decision changes between peek and write: record matches the state (stale -> unclaimed)', async () => {
+  const { fx, fmOnRemote } = setup({ title: 't', claimed_by: 'old-w', claimed_at: '2026-11-20T01:00:00Z', renewed_at: '2026-11-20T02:00:00Z' });
+  const a = fx.clone('a'); const b = fx.clone('b');
+  let done = false;
+  const afterPeek = () => {
+    if (done) return; done = true;
+    const f = join(b, rel('bulk-export'));
+    writeFileSync(f, readFileSync(f, 'utf8').replace(/claimed_by: .*\n/, '').replace(/claimed_at: .*\n/, '').replace(/renewed_at: .*\n/, ''));
+    g(b, 'commit', '-qam', 'released'); g(b, 'push', '-q', 'origin', 'main');
+  };
+  const r = await claim(a, 'bulk-export', { ...base, claimant: 'a-w', hooks: { afterPeek } });
+  assert.deepEqual(r, { ok: true, takeover: null });
+  const msg = g(a, 'log', '-1', '--format=%B');
+  assert.match(msg, /^board\(claim\): bulk-export/);
+  assert.doesNotMatch(msg, /Replaces/);
+  assert.doesNotMatch(readFileSync(join(a, rel('bulk-export')), 'utf8'), /takeover/);
+  assert.equal(fmOnRemote().claimed_by, 'a-w');
+});
+
+test('takeover decision changes between peek and write: stale X -> stale Y uses Y everywhere', async () => {
+  const { fx } = setup({ title: 't', claimed_by: 'x-w', claimed_at: '2026-11-20T01:00:00Z', renewed_at: '2026-11-20T02:00:00Z' });
+  const a = fx.clone('a'); const b = fx.clone('b');
+  let done = false;
+  const afterPeek = () => {
+    if (done) return; done = true;
+    const f = join(b, rel('bulk-export'));
+    writeFileSync(f, readFileSync(f, 'utf8').replace('x-w', 'y-w'));
+    g(b, 'commit', '-qam', 'y'); g(b, 'push', '-q', 'origin', 'main');
+  };
+  const r = await claim(a, 'bulk-export', { ...base, claimant: 'a-w', hooks: { afterPeek } });
+  assert.deepEqual(r, { ok: true, takeover: 'y-w' });
+  assert.match(g(a, 'log', '-1', '--format=%B'), /Replaces: y-w/);
+  assert.match(readFileSync(join(a, rel('bulk-export')), 'utf8'), /took over from y-w/);
 });
 
 test('holds() is false once a person parks or deletes the feat-req', async () => {
