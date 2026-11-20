@@ -1,6 +1,7 @@
 // The board write primitive: every board change goes through boardWrite.
 // pull -> mutate -> commit only touched paths -> push to main -> (on reject: restart | rebase-retry)
 // -> after push confirm the commit is on origin/main and validate() still holds. Never forces a push.
+// Protocol writes (commitFromHead) build their commit off the working tree entirely; see writeFromHead.
 import { execFileSync } from 'node:child_process';
 import {
   mkdirSync, writeFileSync, unlinkSync, readFileSync, existsSync, statSync, chmodSync, rmSync, mkdtempSync,
@@ -140,7 +141,7 @@ function discardToOrigin(clone, env) {
 
 const isProtocol = (path) => path.startsWith('docs/feat-req/') || path.startsWith('board/');
 
-// The docs a protocol write may patch. A person's uncommitted edits there are set aside while the write runs.
+// The docs a protocol write may patch; a failed report puts the person's copies of these back.
 const WORK_DIRS = ['docs/feat-req', 'docs/design', 'docs/plans', 'board'];
 
 // A committed file's text at `ref`, or null when it isn't there.
@@ -156,43 +157,21 @@ function dirtyWork(clone, env) {
   return out.split('\0').filter(Boolean).map((rec) => rec.slice(3));
 }
 
-// Remember each dirty work file: the person's copy (bytes and mode, null if deleted) and HEAD's copy.
+// Remember each dirty work file: the person's copy (bytes and mode), or null if they deleted it.
 function snapshotWork(clone, env) {
   return dirtyWork(clone, env).map((path) => {
     let abs;
     try { abs = safePath(clone, path); } catch (e) { throw new BoardError(e.message); }
     const working = existsSync(abs) ? { bytes: readFileSync(abs), mode: statSync(abs).mode & 0o777 } : null;
-    return { path, abs, working, base: headBytes(clone, path) };
+    return { abs, working };
   });
 }
 
-// Put HEAD's copy of each remembered file in the tree, so a protocol write patches only committed content.
-function resetWork(saved) {
-  for (const { abs, base } of saved) {
-    if (base === null) rmSync(abs, { force: true });
-    else { mkdirSync(dirname(abs), { recursive: true }); writeFileSync(abs, base); }
-  }
-}
-
-// Three-way merge of the person's copy onto HEAD's new copy; null when they conflict.
-function mergeBytes(mine, base, theirs) {
-  const dir = mkdtempSync(join(tmpdir(), 'board-merge-'));
-  try {
-    const [m, b, t] = ['mine', 'base', 'theirs'].map((n, i) => { const f = join(dir, n); writeFileSync(f, [mine, base, theirs][i]); return f; });
-    return execFileSync('git', ['merge-file', '-p', '-q', m, b, t], { encoding: 'buffer', stdio: ['ignore', 'pipe', 'ignore'] });
-  } catch { return null; } finally { rmSync(dir, { recursive: true, force: true }); }
-}
-
-// Give the person their copies back. Where the write (or upstream) changed the same file, their edits are
-// merged onto the new HEAD copy; if that conflicts, their copy is left exactly as it was.
-function putBackWork(clone, saved) {
-  for (const { path, abs, working, base } of saved) {
+function putBackWork(saved) {
+  for (const { abs, working } of saved) {
     if (working === null) { rmSync(abs, { force: true }); continue; }
-    let bytes = working.bytes;
-    const now = headBytes(clone, path);
-    if (base && now && !now.equals(base)) bytes = mergeBytes(working.bytes, base, now) ?? working.bytes;
     mkdirSync(dirname(abs), { recursive: true });
-    writeFileSync(abs, bytes);
+    writeFileSync(abs, working.bytes);
     chmodSync(abs, working.mode);
   }
 }
@@ -205,6 +184,124 @@ function rollbackWork(clone, env) {
   for (const p of changed.filter((x) => !tracked.includes(x))) rmSync(safePath(clone, p), { force: true });
 }
 
+// The board docs as committed at `ref`: what a protocol write's mutate patches and what validate reads.
+// read(path) -> text | null; exists(path); list(dir) -> names; write(path, text); remove(path).
+// Writes stay in memory. Paths must be under docs/ or board/, and a symlink anywhere on the path is refused.
+const TREE_ROOTS = ['docs', 'board'];
+
+function openTree(clone, ref, { readOnly = false } = {}) {
+  const entries = new Map(); // path -> { mode, sha }
+  const out = git(clone, ['ls-tree', '-r', '-z', '--full-tree', ref, '--', ...TREE_ROOTS]);
+  for (const rec of out.split('\0').filter(Boolean)) {
+    const tab = rec.indexOf('\t');
+    const [mode, , sha] = rec.slice(0, tab).split(' ');
+    entries.set(rec.slice(tab + 1), { mode, sha });
+  }
+  const pending = new Map(); // path -> text, or null for a removal
+  const live = () => {
+    const paths = new Set([...entries.keys()].filter((p) => !pending.has(p)));
+    for (const [p, text] of pending) if (text !== null) paths.add(p);
+    return paths;
+  };
+  const isDir = (rel) => [...live()].some((p) => p.startsWith(`${rel}/`));
+  const check = (rel) => {
+    const parts = String(rel).split('/');
+    if (parts.some((x) => x === '' || x === '.' || x === '..') || rel.includes('\\')) throw new BoardError(`path escapes the repository: ${rel}`);
+    if (!TREE_ROOTS.includes(parts[0])) throw new BoardError(`not a board path: ${rel}`);
+    for (let i = 1; i <= parts.length; i++) {
+      if (entries.get(parts.slice(0, i).join('/'))?.mode === '120000') throw new BoardError(`refusing symlinked path: ${rel}`);
+    }
+    return rel;
+  };
+  const read = (rel) => {
+    check(rel);
+    if (pending.has(rel)) return pending.get(rel);
+    const e = entries.get(rel);
+    if (e) return git(clone, ['cat-file', 'blob', e.sha]);
+    if (isDir(rel)) throw new BoardError(`is a directory: ${rel}`);
+    return null;
+  };
+  const writable = () => { if (readOnly) throw new BoardError('read-only view'); };
+  const tree = {
+    read,
+    exists: (rel) => { check(rel); return live().has(rel) || isDir(rel); },
+    list: (dir) => {
+      check(dir);
+      const names = new Set();
+      for (const p of live()) if (p.startsWith(`${dir}/`)) names.add(p.slice(dir.length + 1).split('/')[0]);
+      return [...names].sort();
+    },
+    write: (rel, text) => { writable(); check(rel); pending.set(rel, String(text)); },
+    remove: (rel) => { writable(); check(rel); pending.set(rel, null); },
+  };
+  return { tree, entries, pending };
+}
+
+const mainView = (clone) => openTree(clone, 'origin/main', { readOnly: true }).tree;
+
+// The commit for a protocol write, built in a throwaway index on `parent`; the real index and working
+// tree are never read or written. `changes` lists each path whose blob changed (old/new sha, null = absent).
+function buildCommit(clone, { entries, pending }, parent, { message, env }) {
+  const dir = mkdtempSync(join(tmpdir(), 'board-index-'));
+  const ienv = { ...env, GIT_INDEX_FILE: join(dir, 'index') };
+  try {
+    git(clone, ['read-tree', parent], { env: ienv });
+    const changes = [];
+    for (const [path, text] of pending) {
+      const before = entries.get(path) ?? null;
+      if (text === null) {
+        if (!before) continue;
+        git(clone, ['update-index', '--force-remove', '--', path], { env: ienv });
+        changes.push({ path, mode: before.mode, old: before.sha, new: null });
+        continue;
+      }
+      const sha = git(clone, ['hash-object', '-w', '--stdin'], { input: text, env: ienv }).trim();
+      if (before?.sha === sha) continue;
+      const mode = before?.mode ?? '100644';
+      git(clone, ['update-index', '--add', '--cacheinfo', `${mode},${sha},${path}`], { env: ienv });
+      changes.push({ path, mode, old: before?.sha ?? null, new: sha });
+    }
+    const tree = git(clone, ['write-tree'], { env: ienv }).trim();
+    const sha = git(clone, ['commit-tree', tree, '-p', parent, '-F', '-'], { input: message, env: ienv }).trim();
+    return { sha, changes };
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+const blob = (clone, sha) => git(clone, ['cat-file', 'blob', sha], { binary: true });
+
+// One path our landed commit changed: the working file follows only if the person never touched it
+// (still the old blob, or absent where there was none); the index entry follows only if it was still the old blob.
+function followPath(clone, { path, mode, old, new: next }, env) {
+  try {
+    const abs = safePath(clone, path); // a symlink on disk: leave it alone
+    const st = existsSync(abs) ? statSync(abs) : null;
+    const clean = old === null ? st === null : !!st?.isFile() && readFileSync(abs).equals(blob(clone, old));
+    if (clean && next === null) rmSync(abs, { force: true });
+    else if (clean) { mkdirSync(dirname(abs), { recursive: true }); writeFileSync(abs, blob(clone, next)); }
+  } catch { /* the person's copy stays as it is */ }
+  const entry = git(clone, ['ls-files', '-s', '-z', '--', path], { env, allowFail: true });
+  if (entry === null) return;
+  const staged = entry ? entry.split(' ')[1] : null;
+  if (staged !== old) return;
+  if (next === null) git(clone, ['update-index', '--force-remove', '--', path], { env, allowFail: true });
+  else git(clone, ['update-index', '--add', '--cacheinfo', `${mode},${next},${path}`], { env, allowFail: true });
+}
+
+// Bring local main up to our landed commit without overwriting anything the person changed.
+function followLanded(clone, { sha, parent, changes }, env) {
+  if (git(clone, ['symbolic-ref', '-q', 'HEAD'], { env, allowFail: true })?.trim() !== 'refs/heads/main') return;
+  const head = () => git(clone, ['rev-parse', 'HEAD'], { env }).trim();
+  // Rebuilt on a newer main after a lost push: catch up first (git refuses rather than overwrite edits).
+  if (head() !== parent) git(clone, ['merge', '--ff-only', parent], { env, allowFail: true });
+  if (head() !== parent) return; // the clone stays behind origin/main; the next sync catches up
+  if (git(clone, ['update-ref', 'refs/heads/main', sha, parent], { env, allowFail: true }) === null) return;
+  for (const c of changes) followPath(clone, c, env);
+  git(clone, ['update-index', '-q', '--refresh'], { env, allowFail: true });
+  git(clone, ['merge', '--ff-only', 'origin/main'], { env, allowFail: true });
+}
+
 // Identity for every commit-creating git call (commit, rebase, stash, autostash), never the clone's config.
 export function identityEnv(identity) {
   return {
@@ -213,9 +310,10 @@ export function identityEnv(identity) {
   };
 }
 
-// commitFromHead: mutate patches the committed (HEAD) copies of the docs, never a person's uncommitted edits;
-// those are set aside first and given back afterwards. Every protocol write uses it; `sdlc report`, which
-// publishes the working tree on purpose, does not.
+// commitFromHead (every protocol write): mutate(tree) patches the committed docs through the content API
+// above and the commit is built in a temporary index, so the person's working tree and index are never
+// read or written while the write runs. validate(view) reads origin/main through the same API.
+// `sdlc report`, which publishes the working tree on purpose, uses mutate(clone) and validate(clone).
 export async function boardWrite(clone, { commitFromHead = false, ...opts }) {
   const message = formatMessage({ kind: opts.kind, subject: opts.subject, trailers: opts.trailers ?? {} });
   const env = identityEnv(opts.identity);
@@ -224,18 +322,56 @@ export async function boardWrite(clone, { commitFromHead = false, ...opts }) {
   if (git(clone, ['rev-list', '--count', 'origin/main..HEAD']).trim() !== '0') {
     throw new BoardError('local commits ahead of origin/main');
   }
-  const saved = snapshotWork(clone, env);
-  if (commitFromHead) resetWork(saved);
-  try {
-    return await commitAndPush(clone, opts, { message, env, saved, commitFromHead });
-  } finally {
-    if (commitFromHead) putBackWork(clone, saved);
+  if (commitFromHead) return writeFromHead(clone, opts, { message, env });
+  return commitAndPush(clone, opts, { message, env, saved: snapshotWork(clone, env) });
+}
+
+// On a rejected push nothing local has moved: restart returns lost-race, rebase rebuilds on the new
+// origin/main and re-runs mutate (the same as a restart, since nothing of ours is in the working tree).
+async function writeFromHead(clone, {
+  kind, mutate, validate, onReject, hooks = {}, sleep = defaultSleep,
+}, { message, env }) {
+  const emptyOk = EMPTY_COMMIT_KINDS.has(kind);
+  const step = async (fn) => {
+    try { return await fn(); } catch (e) {
+      if (e instanceof BoardError) throw e;
+      throw new BoardError(`board write failed: ${String(e.message).split('\n')[0]}`);
+    }
+  };
+  for (let attempt = 1; ; attempt++) {
+    const parent = await step(() => git(clone, ['rev-parse', 'origin/main'], { env }).trim());
+    const opened = await step(() => openTree(clone, parent));
+    mutate(opened.tree); // its own errors (refusals, symlinks) go to the caller as they are
+    const built = await step(() => buildCommit(clone, opened, parent, { message, env }));
+    if (built.changes.length === 0 && !emptyOk) return { ok: false, reason: 'nothing-to-do' };
+    await step(() => hooks.beforePush?.());
+    if (git(clone, ['push', 'origin', `${built.sha}:refs/heads/main`], { env, allowFail: true }) !== null) {
+      return landed(clone, { ...built, parent }, { validate, env });
+    }
+    await step(() => git(clone, ['fetch', 'origin', 'main'], { env }));
+    if (onReject !== 'rebase' || attempt >= MAX_REBASE_ATTEMPTS) return { ok: false, reason: 'lost-race' };
+    await sleep(jitterMs());
   }
+}
+
+// The write is on origin. Confirm it, but never report a landed write as a plain failure.
+function landed(clone, built, { validate, env }) {
+  try {
+    git(clone, ['fetch', 'origin', 'main'], { env });
+  } catch (e) {
+    throw new BoardError(`pushed ${built.sha} but could not confirm it on origin/main: ${String(e.message).split('\n')[0]}`);
+  }
+  if (git(clone, ['merge-base', '--is-ancestor', built.sha, 'origin/main'], { env, allowFail: true }) === null) {
+    return { ok: false, reason: 'replaced' };
+  }
+  followLanded(clone, built, env);
+  if (validate && !validate(mainView(clone))) return { ok: false, reason: 'replaced' };
+  return { ok: true, sha: built.sha };
 }
 
 async function commitAndPush(clone, {
   kind, mutate, validate, onReject, onFailure = 'discard', hooks = {}, sleep = defaultSleep,
-}, { message, env, saved, commitFromHead }) {
+}, { message, env, saved }) {
   const keepWork = onFailure === 'keep-work';
   const emptyOk = EMPTY_COMMIT_KINDS.has(kind);
 
@@ -245,7 +381,7 @@ async function commitAndPush(clone, {
   } catch (e) {
     // Leave no half-written docs for the next write to read; the person's own copies come back.
     rollbackWork(clone, env);
-    if (!commitFromHead) putBackWork(clone, saved);
+    putBackWork(saved);
     throw e;
   }
   if (paths.length === 0) {

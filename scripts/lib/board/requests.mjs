@@ -1,11 +1,9 @@
 // Request files: board/requests/<id>.md. A headless worker posts one instead of asking a terminal;
 // a person answers by writing only that file; a later worker applies the answer.
-import { readFileSync, writeFileSync, existsSync, readdirSync, mkdirSync, unlinkSync } from 'node:fs';
-import { dirname } from 'node:path';
 import { stringify } from 'yaml';
 import { boardWrite, BoardError } from './git.mjs';
 import { release, checkSlug, featReqPath } from './claims.mjs';
-import { safePath, REQUEST_ID_RE } from './safe-path.mjs';
+import { dirTree, REQUEST_ID_RE } from './safe-path.mjs';
 import { parseDoc, setFields, appendToSection, locateSection, fenceTracker } from './frontmatter.mjs';
 import { safeExcerpt } from './redact.mjs';
 
@@ -155,24 +153,27 @@ export function validateRequest(text, filename) {
   return p;
 }
 
-function readRequest(file) {
-  const { data, body } = parseDoc(readFileSync(file, 'utf8'));
+function parseRequest(text) {
+  const { data, body } = parseDoc(text);
   return { fm: data, sections: parseSections(body) };
 }
 
+const asTree = (root) => (typeof root === 'string' ? dirTree(root) : root);
+
 // Only files named <request id>.md are requests; anything else in board/requests/ is reported.
+// `root` is a directory or a content tree (a protocol write's mutate tree); `path` is repo-relative.
 export function listRequests(root) {
+  const tree = asTree(root);
   const requests = [];
   const problems = [];
-  let dir;
-  try { dir = safePath(root, 'board/requests'); } catch (e) { return { requests, problems: [`board/requests: ${e.message}`] }; }
-  if (!existsSync(dir)) return { requests, problems };
-  for (const name of readdirSync(dir).filter((n) => n.endsWith('.md')).sort()) {
+  let names;
+  try { names = tree.list('board/requests'); } catch (e) { return { requests, problems: [`board/requests: ${e.message}`] }; }
+  for (const name of names.filter((n) => n.endsWith('.md'))) {
     const id = name.slice(0, -3);
     if (!ID_RE.test(id)) { problems.push(`${name}: not a request id (YYYYMMDDHHMM-xxxxxx)`); continue; }
     try {
-      const path = safePath(root, `board/requests/${name}`);
-      const { fm, sections } = readRequest(path);
+      const path = `board/requests/${name}`;
+      const { fm, sections } = parseRequest(tree.read(path));
       requests.push({ id: fm.id ?? id, path, fm, sections });
     } catch (e) {
       problems.push(`${name}: ${e.message}`);
@@ -197,21 +198,16 @@ export async function postRequest(clone, req, { identity, workerId, releaseFrom,
   const problems = validateRequest(text, `${id}.md`);
   if (problems.length) return { ok: false, reason: 'invalid', problems };
   const trailers = { request: id, ...(req.effort ? { effort: req.effort } : {}) };
-  const writeFile = (c) => {
-    const abs = safePath(c, reqPath(id));
-    mkdirSync(dirname(abs), { recursive: true });
-    writeFileSync(abs, text);
-    return reqPath(id);
-  };
+  const writeFile = (tree) => tree.write(reqPath(id), text);
 
   if (req.blocking && releaseFrom) {
     const { slug, claimant } = releaseFrom;
     const r = await release(clone, slug, {
       claimant, identity, workerId, hooks, kind: 'request', subject: id, trailers: { request: id },
-      extraMutate: (c) => {
-        const f = safePath(c, featReqPath(slug));
-        writeFileSync(f, setFields(readFileSync(f, 'utf8'), { awaiting: id }));
-        return [writeFile(c)];
+      extraMutate: (tree) => {
+        const f = featReqPath(slug);
+        tree.write(f, setFields(tree.read(f), { awaiting: id }));
+        writeFile(tree);
       },
     });
     return r.ok ? { ok: true, id } : { ok: false, reason: r.reason };
@@ -220,8 +216,8 @@ export async function postRequest(clone, req, { identity, workerId, releaseFrom,
   const r = await boardWrite(clone, {
     kind: 'request', subject: id, identity, onReject: 'rebase', commitFromHead: true, sleep, hooks,
     trailers: { ...(workerId ? { worker: workerId } : {}), ...trailers },
-    mutate: (c) => [writeFile(c)],
-    validate: (c) => existsSync(safePath(c, reqPath(id))),
+    mutate: writeFile,
+    validate: (view) => view.exists(reqPath(id)),
   });
   return r.ok ? { ok: true, id } : { ok: false, reason: r.reason };
 }
@@ -233,24 +229,23 @@ export async function answerRequest(clone, id, { answer, notes, by, via = 'cli',
   const r = await boardWrite(clone, {
     kind: 'answer', subject: id, identity, onReject: 'rebase', commitFromHead: true, sleep, hooks,
     trailers: { request: id, answeredBy: by },
-    mutate: (c) => {
+    mutate: (tree) => {
       refusal = null;
-      const file = safePath(c, reqPath(id));
-      if (!existsSync(file)) { refusal = 'missing'; return []; }
-      const { fm, sections } = readRequest(file);
-      if (fm.status !== 'open') { refusal = 'not-open'; return []; }
-      if (answerProblem(fm, sections, answer, notes)) { refusal = 'invalid-answer'; return []; }
-      let text = setFields(readFileSync(file, 'utf8'), {
+      const current = tree.read(reqPath(id));
+      if (current === null) { refusal = 'missing'; return; }
+      const { fm, sections } = parseRequest(current);
+      if (fm.status !== 'open') { refusal = 'not-open'; return; }
+      if (answerProblem(fm, sections, answer, notes)) { refusal = 'invalid-answer'; return; }
+      let text = setFields(current, {
         status: 'answered', answer, answered_by: by, answered_at: stamp, answered_via: via,
       });
       text = replaceSection(text, 'Answer', defang(notes?.trim() ?? ''));
-      writeFileSync(file, text);
-      return [reqPath(id)];
+      tree.write(reqPath(id), text);
     },
-    validate: (c) => {
-      const file = safePath(c, reqPath(id));
-      if (!existsSync(file)) return false;
-      const { fm } = readRequest(file);
+    validate: (view) => {
+      const text = view.read(reqPath(id));
+      if (text === null) return false;
+      const { fm } = parseRequest(text);
       return fm.answered_by === by && fm.answered_at === stamp;
     },
   });
@@ -266,24 +261,20 @@ export async function withdrawRequest(clone, id, { identity, workerId, slug, not
   const r = await boardWrite(clone, {
     kind: 'withdraw', subject: id, identity, onReject: 'rebase', commitFromHead: true, sleep, hooks,
     trailers: { ...(workerId ? { worker: workerId } : {}), ...(slug ? { effort: slug } : {}), request: id },
-    mutate: (c) => {
+    mutate: (tree) => {
       refusal = null;
-      const file = safePath(c, reqPath(id));
-      if (!existsSync(file)) { refusal = 'missing'; return []; }
-      if (readRequest(file).fm.status !== 'open') { refusal = 'not-open'; return []; }
-      unlinkSync(file);
-      const paths = [reqPath(id)];
-      const f = slug ? safePath(c, featReqPath(slug)) : null;
-      if (f && existsSync(f)) {
-        let text = readFileSync(f, 'utf8');
+      const current = tree.read(reqPath(id));
+      if (current === null) { refusal = 'missing'; return; }
+      if (parseRequest(current).fm.status !== 'open') { refusal = 'not-open'; return; }
+      tree.remove(reqPath(id));
+      let text = slug ? tree.read(featReqPath(slug)) : null;
+      if (text !== null) {
         if (parseDoc(text).data.awaiting === id) text = setFields(text, { awaiting: null });
         if (note) text = appendToSection(text, 'Decisions', note);
-        writeFileSync(f, text);
-        paths.push(featReqPath(slug));
+        tree.write(featReqPath(slug), text);
       }
-      return paths;
     },
-    validate: (c) => !existsSync(safePath(c, reqPath(id))),
+    validate: (view) => !view.exists(reqPath(id)),
   });
   if (r.ok) return { ok: true };
   if (r.reason === 'nothing-to-do' && refusal) return { ok: false, reason: refusal };

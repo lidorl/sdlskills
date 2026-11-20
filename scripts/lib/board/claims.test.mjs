@@ -60,7 +60,8 @@ test('race: two clones claim the same effort, exactly one holds it on origin/mai
   assert.equal(rB.ok, true);
   assert.equal(fmOnRemote().claimed_by, 'b-worker1');
   assert.equal(holds(a, 'bulk-export', 'a-worker1'), false);
-  assert.equal(g(a, 'rev-parse', 'HEAD'), g(a, 'rev-parse', 'origin/main'));
+  // A's lost write moved nothing local: main is not ahead of origin/main (the next sync catches up).
+  assert.equal(g(a, 'rev-list', '--count', 'origin/main..HEAD'), '0');
 });
 
 test('live claim by someone else is held; awaiting open is awaiting; missing file is gone', async () => {
@@ -211,7 +212,7 @@ test('release clears claimed_by/claimed_at/renewed_at, leaves other fields, and 
   const a = fx.clone('a');
   const r = await release(a, 'bulk-export', {
     ...base, claimant: 'a-w', workerId: 'a-w',
-    extraMutate: (c) => { writeFileSync(join(c, 'board/requests/x.md'), 'req\n'); return ['board/requests/x.md']; },
+    extraMutate: (tree) => tree.write('board/requests/x.md', 'req\n'),
   });
   assert.equal(r.ok, true);
   const fm = fmOnRemote();
@@ -288,15 +289,14 @@ test('renew does not publish an uncommitted edit to the feat-req; the edit survi
   const { fx } = setup(SPREAD);
   const a = fx.clone('a');
   const f = join(a, rel('bulk-export'));
-  writeFileSync(f, `${readFileSync(f, 'utf8')}\nMy local draft note.\n`);
+  const draft = `${readFileSync(f, 'utf8')}\nMy local draft note.\n`;
+  writeFileSync(f, draft);
   const r = await renew(a, 'bulk-export', { ...base, claimant: 'a-w' });
   assert.equal(r.ok, true);
   const onMain = g(fx.remote, 'show', 'main:' + rel('bulk-export'));
   assert.doesNotMatch(onMain, /local draft/);
   assert.equal(parseDoc(onMain).data.renewed_at, '2026-11-20T12:00:00Z');
-  const local = readFileSync(f, 'utf8');
-  assert.match(local, /My local draft note\./);
-  assert.equal(parseDoc(local).data.renewed_at, '2026-11-20T12:00:00Z', 'the person keeps the new lease too');
+  assert.equal(readFileSync(f, 'utf8'), draft, 'the person\'s copy is left exactly as it was');
 });
 
 test('a person\'s conflicting uncommitted frontmatter edit is left exactly as it was', async () => {
@@ -315,7 +315,7 @@ test('a mutate that throws leaves no half-written protocol files: the next renew
   const a = fx.clone('a');
   await assert.rejects(release(a, 'bulk-export', {
     ...base, claimant: 'a-w',
-    extraMutate: (c) => { writeFileSync(join(c, 'board/requests/202611201200-aaaaaa.md'), 'half\n'); throw new Error('boom'); },
+    extraMutate: (tree) => { tree.write('board/requests/202611201200-aaaaaa.md', 'half\n'); throw new Error('boom'); },
   }), /boom/);
   assert.equal(g(a, 'status', '--porcelain'), '');
   assert.equal(parseDoc(readFileSync(join(a, rel('bulk-export')), 'utf8')).data.claimed_by, 'a-w');

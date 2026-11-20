@@ -398,7 +398,8 @@ test('apply patches the committed docs: a person\'s uncommitted feat-req and pla
   const fx = setup({ fm: { title: 'Bulk export', status: 'IN_PROGRESS' }, files: { 'docs/plans/bulk-export.md': PLAN }, reqs: [rv] });
   const clone = await claimed(fx);
   writeFileSync(join(clone, 'docs/feat-req/bulk-export.md'), `${read(clone, 'docs/feat-req/bulk-export.md')}\nfeat draft\n`);
-  writeFileSync(join(clone, 'docs/plans/bulk-export.md'), PLAN.replace('# Plan', '# Plan\n\nplan draft'));
+  const planDraft = PLAN.replace('# Plan', '# Plan\n\nplan draft');
+  writeFileSync(join(clone, 'docs/plans/bulk-export.md'), planDraft);
   const r = await apply(clone);
   assert.equal(r.ok, true);
   const featOnMain = g(fx.remote, 'show', 'main:docs/feat-req/bulk-export.md');
@@ -408,5 +409,5 @@ test('apply patches the committed docs: a person\'s uncommitted feat-req and pla
   assert.doesNotMatch(featOnMain, /feat draft/);
   assert.doesNotMatch(planOnMain, /plan draft/);
   assert.match(read(clone, 'docs/feat-req/bulk-export.md'), /feat draft/);
-  assert.match(read(clone, 'docs/plans/bulk-export.md'), /plan draft[\s\S]*Fix review finding F1/);
+  assert.equal(read(clone, 'docs/plans/bulk-export.md'), planDraft); // dirty copies are left exactly as they were
 });

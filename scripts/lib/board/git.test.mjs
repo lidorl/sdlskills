@@ -1,10 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
-import { writeFileSync, readFileSync, statSync } from 'node:fs';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { writeFileSync, readFileSync, statSync, appendFileSync, mkdirSync, mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { makeBoard, IDENT } from './fixtures.mjs';
 import { boardWrite, assertOnMain, BoardError } from './git.mjs';
+import { renew } from './claims.mjs';
 
 const g = (cwd, ...args) => execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();
 const revParse = (cwd, ref) => g(cwd, 'rev-parse', ref);
@@ -246,11 +248,86 @@ test('commitFromHead: an edit the person has not committed is never part of the 
   const fx = makeBoard({ featReqs: { s: { status: 'ACCEPTED' } } }); const a = fx.clone('a');
   const f = join(a, 'docs/feat-req/s.md');
   writeFileSync(f, readFileSync(f, 'utf8').replace('# s', '# s\n\nprivate draft'));
-  const mutate = (clone) => { writeFileSync(f, readFileSync(join(clone, 'docs/feat-req/s.md'), 'utf8').replace('ACCEPTED', 'DESIGNED')); return ['docs/feat-req/s.md']; };
+  const draft = readFileSync(f, 'utf8');
+  const mutate = (tree) => tree.write('docs/feat-req/s.md', tree.read('docs/feat-req/s.md').replace('ACCEPTED', 'DESIGNED'));
   const r = await boardWrite(a, { ...base, kind: 'apply', subject: 's', onReject: 'restart', commitFromHead: true, mutate });
   assert.equal(r.ok, true);
   const committed = g(a, 'show', 'HEAD:docs/feat-req/s.md');
   assert.match(committed, /DESIGNED/);
   assert.doesNotMatch(committed, /private draft/);
-  assert.match(readFileSync(f, 'utf8'), /DESIGNED[\s\S]*private draft/);
+  assert.equal(readFileSync(f, 'utf8'), draft); // the person's copy is theirs: left exactly as it was
+});
+
+// Protocol writes (commitFromHead) build their commit in a temporary index and never touch the working tree.
+const LEASE = { status: 'IN_PROGRESS', claimed_by: 'a-w', claimed_at: '2026-11-20T11:00:00Z', renewed_at: '2026-11-20T11:00:00Z' };
+const PLAN = '# plan\n\n- [ ] one\n';
+const held = () => makeBoard({ featReqs: { s: LEASE }, files: { 'docs/plans/s.md': PLAN } });
+const FEAT = 'docs/feat-req/s.md';
+const RENEW_AT = new Date('2026-11-20T12:00:00.000Z');
+
+test('process killed mid-push loses no uncommitted docs edit', () => {
+  const a = held().clone('a');
+  const feat = join(a, FEAT);
+  const draft = `${readFileSync(feat, 'utf8')}\ndraft line\n`;
+  writeFileSync(feat, draft);
+  mkdirSync(join(a, 'docs/design'), { recursive: true });
+  writeFileSync(join(a, 'docs/design/s.md'), 'design draft\n');
+  const child = join(mkdtempSync(join(tmpdir(), 'board-kill-')), 'kill.mjs');
+  writeFileSync(child, [
+    `import { renew } from ${JSON.stringify(new URL('./claims.mjs', import.meta.url).href)};`,
+    `await renew(process.argv[2], 's', { claimant: 'a-w', identity: ${JSON.stringify(IDENT)}, now: new Date('${RENEW_AT.toISOString()}'),`,
+    '  hooks: { beforePush: () => process.exit(7) } });',
+  ].join('\n'));
+  const r = spawnSync(process.execPath, [child, a], { encoding: 'utf8' });
+  assert.equal(r.status, 7, r.stderr);
+  assert.equal(readFileSync(feat, 'utf8'), draft);
+  assert.equal(readFileSync(join(a, 'docs/design/s.md'), 'utf8'), 'design draft\n');
+});
+
+test('a file written during the push survives', async () => {
+  const a = held().clone('a');
+  const feat = join(a, FEAT); const plan = join(a, 'docs/plans/s.md');
+  writeFileSync(feat, `${readFileSync(feat, 'utf8')}\ndraft line\n`);
+  writeFileSync(plan, `${PLAN}- [ ] two\n`);
+  const hooks = { beforePush: () => { appendFileSync(plan, 'written during push\n'); appendFileSync(feat, 'also during push\n'); } };
+  const r = await renew(a, 's', { claimant: 'a-w', identity: IDENT, now: RENEW_AT, hooks });
+  assert.equal(r.ok, true);
+  assert.equal(readFileSync(plan, 'utf8'), `${PLAN}- [ ] two\nwritten during push\n`);
+  assert.match(readFileSync(feat, 'utf8'), /draft line\nalso during push\n$/);
+});
+
+test('protocol commit contains only the patched frontmatter, never working-tree edits', async () => {
+  const fx = held(); const a = fx.clone('a');
+  const feat = join(a, FEAT);
+  writeFileSync(feat, `${readFileSync(feat, 'utf8')}\ndraft line\n`);
+  writeFileSync(join(a, 'README.md'), 'staged edit\n'); g(a, 'add', 'README.md');
+  mkdirSync(join(a, 'docs/design'), { recursive: true });
+  writeFileSync(join(a, 'docs/design/s.md'), 'design draft\n');
+  const r = await renew(a, 's', { claimant: 'a-w', identity: IDENT, now: RENEW_AT });
+  assert.equal(r.ok, true);
+  assert.equal(g(fx.remote, 'show', '--name-only', '--format=', 'main'), FEAT);
+  const diff = g(fx.remote, 'diff', '-U0', 'main~1', 'main').split('\n').filter((l) => /^[-+][^-+]/.test(l));
+  assert.deepEqual(diff, ['-renewed_at: 2026-11-20T11:00:00Z', '+renewed_at: 2026-11-20T12:00:00Z']);
+  assert.equal(g(a, 'diff', '--cached', '--name-only'), 'README.md');
+  assert.equal(g(a, 'rev-parse', 'HEAD'), r.sha ?? g(a, 'rev-parse', 'origin/main'));
+});
+
+test('clean working file is fast-forwarded to the new HEAD; dirty one is left as is', async () => {
+  const fx = held(); const a = fx.clone('a');
+  const feat = join(a, FEAT); const plan = join(a, 'docs/plans/s.md');
+  const mine = `${readFileSync(feat, 'utf8')}\ndraft line\n`;
+  writeFileSync(feat, mine);
+  const mutate = (tree) => {
+    tree.write(FEAT, tree.read(FEAT).replace('IN_PROGRESS', 'PARKED'));
+    tree.write('docs/plans/s.md', tree.read('docs/plans/s.md').replace('one', 'one (patched)'));
+    tree.write('board/requests/202611201200-aaaaaa.md', 'new\n');
+  };
+  const r = await boardWrite(a, { ...base, kind: 'apply', subject: 's', onReject: 'restart', commitFromHead: true, mutate });
+  assert.equal(r.ok, true);
+  assert.equal(revParse(a, 'HEAD'), r.sha);
+  assert.equal(readFileSync(plan, 'utf8'), PLAN.replace('one', 'one (patched)'));
+  assert.equal(readFileSync(join(a, 'board/requests/202611201200-aaaaaa.md'), 'utf8'), 'new\n');
+  assert.equal(readFileSync(feat, 'utf8'), mine);
+  assert.equal(execFileSync('git', ['status', '--porcelain'], { cwd: a, encoding: 'utf8' }), ` M ${FEAT}\n`);
+  assert.match(g(a, 'show', `HEAD:${FEAT}`), /PARKED/);
 });

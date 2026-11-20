@@ -1,5 +1,7 @@
 // The one path guard, plus the id validators every board path is built from.
-import { existsSync, lstatSync, realpathSync } from 'node:fs';
+import {
+  existsSync, lstatSync, realpathSync, readFileSync, readdirSync, writeFileSync, mkdirSync, unlinkSync,
+} from 'node:fs';
 import { join, dirname, resolve, relative, isAbsolute, sep } from 'node:path';
 
 export const SLUG_RE = /^[a-z0-9][a-z0-9-]*$/;
@@ -23,4 +25,17 @@ export function safePath(root, rel) {
   const real = relative(realpathSync(root), realpathSync(anc));
   if (real.startsWith('..') || isAbsolute(real)) throw new Error(`path escapes the repository: ${rel}`);
   return abs;
+}
+
+// A directory on disk behind the same content API a protocol write's mutate gets (see git.mjs):
+// read(path) -> text | null, exists, list(dir) -> names, write, remove. Every path goes through safePath.
+export function dirTree(root) {
+  const at = (rel) => safePath(root, rel);
+  return {
+    read: (rel) => { const abs = at(rel); return existsSync(abs) ? readFileSync(abs, 'utf8') : null; },
+    exists: (rel) => existsSync(at(rel)),
+    list: (rel) => { const abs = at(rel); return existsSync(abs) ? readdirSync(abs).sort() : []; },
+    write: (rel, text) => { const abs = at(rel); mkdirSync(dirname(abs), { recursive: true }); writeFileSync(abs, text); },
+    remove: (rel) => unlinkSync(at(rel)),
+  };
 }
