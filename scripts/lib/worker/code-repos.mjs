@@ -30,9 +30,10 @@ export function pushCodeBranches(clone, slug, keys) {
 }
 
 // On a fresh claim (Ruling P2-11): an existing checkout's feat/<slug> must start from what was last pushed,
-// not from a branch this worker left behind. origin/feat/<slug> present → local branch reset to it; absent →
-// a stale local branch is renamed aside so assemble-env branches from the default branch. Checkouts must be
-// clean (salvaged) first. Returns log lines.
+// not from a branch this worker left behind. origin/feat/<slug> present → a local branch that only adds
+// commits on top is kept (a resume after a crash), otherwise it is kept aside as salvaged/… and reset to
+// origin's; absent → a stale local branch is renamed aside so assemble-env branches from the default branch.
+// Checkouts must be clean (salvaged) first. Returns log lines.
 export function prepareCheckouts(clone, slug, keys, stamp) {
   const branch = `feat/${slug}`;
   const notes = [];
@@ -40,12 +41,20 @@ export function prepareCheckouts(clone, slug, keys, stamp) {
     const dir = join(clone, 'workspace', key);
     if (!existsSync(join(dir, '.git'))) continue;
     const local = (() => { try { git(dir, ['rev-parse', '--verify', '-q', `refs/heads/${branch}`]); return true; } catch { return false; } })();
+    const aside = `salvaged/${branch}-${stamp}`;
     if (git(dir, ['ls-remote', '--heads', 'origin', branch]).trim()) {
       git(dir, ['fetch', '-q', 'origin', branch]);
+      const ahead = local && (() => {
+        try { git(dir, ['merge-base', '--is-ancestor', 'FETCH_HEAD', `refs/heads/${branch}`]); return true; } catch { return false; }
+      })();
+      if (ahead) continue; // our own unpushed commits on top of origin's: keep them
+      if (local) {
+        git(dir, ['branch', '-f', aside, `refs/heads/${branch}`]);
+        notes.push(`workspace/${key}: local ${branch} diverged from origin; kept as ${aside}`);
+      }
       git(dir, ['checkout', '-q', '-B', branch, 'FETCH_HEAD']);
       notes.push(`workspace/${key}: ${branch} reset to origin/${branch}`);
     } else if (local) {
-      const aside = `salvaged/${branch}-${stamp}`;
       git(dir, ['branch', '-m', branch, aside]);
       notes.push(`workspace/${key}: unpushed local ${branch} renamed to ${aside}`);
     }

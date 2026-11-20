@@ -692,6 +692,9 @@ test('re-claim after another holder pushed feat/<slug>: workspace reset to origi
   assert.equal(atRun, bobs);
   assert.equal(git(code.remote, 'rev-parse', 'feat/alpha~1').trim(), bobs);
   assert.ok(salvaged(w).some((d) => existsSync(join(d, 'workspace/api/dirty.txt'))));
+  const aside = git(join(w.meta, 'workspace/api'), 'branch', '--list', 'salvaged/*', '--format=%(refname:short)').trim();
+  assert.match(aside, /^salvaged\/feat\/alpha-/, 'the diverged local commit is kept on a side branch');
+  assert.equal(git(join(w.meta, 'workspace/api'), 'log', '-1', '--format=%s', aside).trim(), 'mine.txt');
 });
 
 test('a blocking request whose code push is rejected becomes an effort error (I5)', async () => {
