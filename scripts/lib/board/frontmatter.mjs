@@ -8,12 +8,12 @@ export class FrontmatterError extends Error {
   }
 }
 
-const FM = /^---\r?\n([\s\S]*?)\r?\n---(?=\r?\n|$)/;
+const FM = /^---\r?\n(?:---|([\s\S]*?)\r?\n---)(?=\r?\n|$)/;
 
 function split(text) {
   const m = FM.exec(text);
   if (!m) return { yaml: null, rest: text };
-  return { yaml: m[1], rest: text.slice(m[0].length) };
+  return { yaml: m[1] ?? '', rest: text.slice(m[0].length) };
 }
 
 function parseYaml(src) {

@@ -38,3 +38,8 @@ test('appendToSection ignores headings inside code fences', () => {
   const t = appendToSection(src, 'Decisions', '- one');
   assert.equal(t, '# T\n\n```\n## Decisions\n```\n\n## Decisions\n- one\n');
 });
+test('deleting every key leaves a block that round-trips', () => {
+  const emptied = setFields('---\na: 1\n---\nB\n---\nmore\n', { a: null });
+  assert.deepEqual(parseDoc(emptied), { data: {}, body: 'B\n---\nmore\n' });
+  assert.equal(setFields(emptied, { b: 1 }), '---\nb: 1\n---\nB\n---\nmore\n');
+});
