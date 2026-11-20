@@ -207,3 +207,37 @@ test('without hooks, no commit-msg hook is installed', () => {
   assert.ok(!existsSync(join(root, 'workspace', 'api', '.git', 'hooks', 'commit-msg')));
   rmSync(dir, { recursive: true });
 });
+
+test('hooks without a valid workerId throws before touching the workspace', () => {
+  const { dir, root, catalog } = setup();
+  for (const hooks of [{}, { workerId: undefined }, { workerId: '' }, { workerId: '../x' }]) {
+    assert.throws(() => assemble({ rootDir: root, slug: 'thing', keys: ['api'], catalog, hooks }), /workerId/);
+  }
+  assert.ok(!existsSync(join(root, 'workspace')));
+  rmSync(dir, { recursive: true });
+});
+
+test('trailer hook is removed when the repo turns readonly', () => {
+  const { dir, root, catalog } = setup();
+  const hooks = { workerId: 'lidor-abc123' };
+  assemble({ rootDir: root, slug: 'thing', keys: ['api'], catalog, hooks });
+  const hook = join(root, 'workspace', 'api', '.git', 'hooks', 'commit-msg');
+  assert.ok(existsSync(hook));
+  catalog.repos.api = entry(catalog.repos.api.url, { readonly: true });
+  assemble({ rootDir: root, slug: 'thing', keys: ['api'], catalog, hooks });
+  assert.ok(!existsSync(hook));
+  rmSync(dir, { recursive: true });
+});
+
+test('assembling without hooks removes the trailer hook and restores a chained foreign hook', () => {
+  const { dir, root, catalog } = setup();
+  assemble({ rootDir: root, slug: 'thing', keys: ['api'], catalog });
+  const hook = join(root, 'workspace', 'api', '.git', 'hooks', 'commit-msg');
+  writeFileSync(hook, '#!/bin/sh\n# foreign\nexit 0\n');
+  assemble({ rootDir: root, slug: 'thing', keys: ['api'], catalog, hooks: { workerId: 'lidor-abc123' } });
+  assert.match(readFileSync(hook, 'utf8'), /sdlc-worker-trailer/);
+  assemble({ rootDir: root, slug: 'thing', keys: ['api'], catalog });
+  assert.match(readFileSync(hook, 'utf8'), /# foreign/);
+  assert.ok(!existsSync(`${hook}.orig`));
+  rmSync(dir, { recursive: true });
+});

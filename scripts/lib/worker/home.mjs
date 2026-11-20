@@ -88,3 +88,15 @@ export function installTrailerHook(repoDir, workerId) {
   writeFileSync(hook, script);
   chmodSync(hook, 0o755);
 }
+
+// Removes our trailer hook (only if it carries the marker) and restores a chained foreign hook.
+export function uninstallTrailerHook(repoDir) {
+  const dir = join(repoDir, '.git', 'hooks');
+  const hook = join(dir, 'commit-msg');
+  const kept = join(dir, 'commit-msg.orig');
+  if (existsSync(hook)) {
+    if (!readFileSync(hook, 'utf8').includes(MARK)) return;
+    unlinkSync(hook);
+  }
+  if (existsSync(kept)) renameSync(kept, hook);
+}

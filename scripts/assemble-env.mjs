@@ -8,7 +8,8 @@ import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { loadCatalog } from './lib/catalog.mjs';
 import { isEntryPoint } from './lib/is-entry-point.mjs';
-import { installTrailerHook } from './lib/worker/home.mjs';
+import { WORKER_ID_RE } from './lib/board/safe-path.mjs';
+import { installTrailerHook, uninstallTrailerHook } from './lib/worker/home.mjs';
 
 // URL-scheme safety (refuse anything but https:// and git@) is enforced in
 // catalog.mjs → validateCatalog, which loadCatalog runs. Callers that pass an
@@ -88,7 +89,11 @@ function liftReadonlyGuards(dest) {
   if (existsSync(hook) && readFileSync(hook, 'utf8') === READONLY_HOOK) unlinkSync(hook);
 }
 
+/** `hooks: { workerId }` installs the Worker commit trailer on writable checkouts; without it any such hook is removed. */
 export function assemble({ rootDir, slug, keys, catalog, hooks }) {
+  if (hooks && !(typeof hooks.workerId === 'string' && WORKER_ID_RE.test(hooks.workerId))) {
+    throw new Error(`assemble: hooks.workerId is missing or invalid: ${hooks.workerId}`);
+  }
   const cat = catalog ?? loadCatalog(rootDir);
   const branch = `feat/${slug}`;
   const wsDir = join(rootDir, 'workspace');
@@ -123,11 +128,13 @@ export function assemble({ rootDir, slug, keys, catalog, hooks }) {
     }
     if (entry.readonly) {
       checkoutReadonly(dest, entry.default_branch);
+      uninstallTrailerHook(dest);
       readonly.push(key);
     } else {
       liftReadonlyGuards(dest);
       checkoutEffortBranch(dest, branch, entry.default_branch);
-      if (hooks?.workerId) installTrailerHook(dest, hooks.workerId);
+      if (hooks) installTrailerHook(dest, hooks.workerId);
+      else uninstallTrailerHook(dest);
     }
   }
 
