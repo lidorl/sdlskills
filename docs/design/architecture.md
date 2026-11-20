@@ -43,9 +43,29 @@ skills (markdown, agent-executed)
 
 Multi-repo is the default; a solo project is N=1 (one catalog entry, one checkout). The effort's repo set is resolved during Design, locked at approval into the design doc's `repos:` frontmatter, and carried into the plan. `classify-change` runs per repo; `close-out` verifies a merged PR per repo. See `docs/decisions/001`–`004` and `docs/design/execution-environment.md`.
 
+## Workers and the board (opt-in)
+
+When `board/` exists on the meta repo's main, main becomes a **work board** shared by many workers and interactive sessions:
+
+```
+<meta-root>/board/
+├── config.yml           board settings: lease TTL, poll intervals, timeouts
+├── workers/<id>.yml     worker registry: durable identity, never deleted
+└── requests/<id>.md     open requests to people: gates, questions, clarifications, errors
+```
+
+- Claims (`claimed_by`, `claimed_at`, `renewed_at`) and `awaiting` live in feature-request frontmatter. A claim counts only once it's on `origin/main` and validated after a fresh pull.
+- Each worker runs from its own home, `~/.sdlc/workers/<id>/`, with its own clone of the meta repo (`meta/`, and `meta/workspace/` inside it). Workers share no files.
+- Board commits use a fixed subject and trailers (`Worker:`, `Sdlc-Event:`, …). `git log` of main is the event stream that `sdlc watch` and `render-status.mjs` read.
+- `scripts/sdlc.mjs` is the CLI. `scripts/lib/board/` is the protocol, and `scripts/lib/worker/` is the runtime.
+
+See `docs/design/workers.md` and `docs/decisions/005`.
+
 ## Key invariants
 
 - One feature request → one design doc → one (or more) plan(s), all filename-matched.
 - `status` lives only in feature-request frontmatter. No filename prefixes.
 - Section anchors in design docs and plans (`## Open Items`, `## Repositories`, `## Pull Requests`, `### Merge order`) are a format contract — skills and `render-status.mjs` parse them.
 - Generated files (`docs/STATUS.md`, `docs/.status.json`) are never hand-edited.
+- Only the worker runtime or the `sdlc` CLI writes to the board. An agent run edits files and writes a result file, but never pushes the meta repo.
+- Nothing ever force-pushes main.
