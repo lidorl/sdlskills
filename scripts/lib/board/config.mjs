@@ -23,7 +23,9 @@ const UNITS = { s: 1e3, m: 60e3, h: 3600e3, d: 86400e3 };
 export function parseDuration(s) {
   const m = typeof s === 'string' ? /^(\d+)([smhd])$/.exec(s) : null;
   if (!m) throw new Error(`invalid duration ${JSON.stringify(s)} (use <int>s|m|h|d, e.g. 4h)`);
-  return Number(m[1]) * UNITS[m[2]];
+  const ms = Number(m[1]) * UNITS[m[2]];
+  if (ms <= 0) throw new Error(`invalid duration ${JSON.stringify(s)} (must be greater than 0)`);
+  return ms;
 }
 
 function durationProblem(key, v) {

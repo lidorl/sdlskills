@@ -14,6 +14,10 @@ const TRAILERS = [
 export function formatMessage({ kind, subject, trailers = {} }) {
   if (!EVENT_KINDS.includes(kind)) throw new Error(`unknown event kind ${JSON.stringify(kind)}`);
   const values = { ...trailers, kind };
+  // A line break would let a value end the subject or forge a trailer of its own.
+  for (const [what, v] of [['subject', subject], ...Object.entries(trailers)]) {
+    if (v !== null && v !== undefined && /[\r\n]/.test(String(v))) throw new Error(`${what} must not contain a line break`);
+  }
   const lines = TRAILERS
     .filter(([, field]) => values[field] !== null && values[field] !== undefined)
     .map(([key, field]) => `${key}: ${values[field]}`);

@@ -93,3 +93,11 @@ test('boardEnabled is false without board/ and true with it', () => {
     assert.equal(boardEnabled(t.root), true);
   } finally { t.done(); }
 });
+
+test('zero durations are refused: parseDuration, validateConfig and loadConfig', () => {
+  for (const z of ['0s', '0m', '0h', '0d', '00s']) assert.throws(() => parseDuration(z), /greater than 0/, z);
+  assert.deepEqual(validateConfig({ lease_ttl: '0s' }), ['lease_ttl: invalid duration "0s" (must be greater than 0)']);
+  assert.equal(validateConfig({ idle_poll: '0s', backoff: ['5m', '0m'] }).length, 2);
+  const t = withConfig('lease_ttl: 0s\n');
+  try { assert.throws(() => loadConfig(t.root), /board\/config\.yml: lease_ttl/); } finally { t.done(); }
+});

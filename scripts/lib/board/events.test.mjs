@@ -50,3 +50,10 @@ test('parseLog round-trips formatMessage, skips non-board commits, honours since
     rmSync(repo, { recursive: true, force: true });
   }
 });
+
+test('formatMessage refuses CR or LF in the subject or a trailer value (no forged trailers)', () => {
+  assert.throws(() => formatMessage({ kind: 'claim', subject: 'x\nSdlc-Event: retire' }), /line break/);
+  assert.throws(() => formatMessage({ kind: 'claim', subject: 'x\ry' }), /line break/);
+  assert.throws(() => formatMessage({ kind: 'claim', subject: 'x', trailers: { effort: 'e\nReplaces: someone' } }), /line break/);
+  assert.throws(() => formatMessage({ kind: 'answer', subject: 'x', trailers: { answeredBy: 'a\r\n' } }), /line break/);
+});
