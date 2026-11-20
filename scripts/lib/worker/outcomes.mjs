@@ -71,7 +71,7 @@ function effortDirty(clone, slug) {
   return execFileSync('git', ['status', '--porcelain', '--', ...paths], { cwd: clone, encoding: 'utf8' }).trim() !== '';
 }
 
-// Push the code branches, then report. -> { ok: true } or { ok: false, ret: <step result> }
+// Push the code branches, then report. -> { ok: true, codeAdvanced } or { ok: false, ret: <step result> }
 async function report(ctx, slug, status, phase, { keys, summary }) {
   const { cfg, deps, clone, identity } = ctx;
   const code = pushCodeBranches(clone, slug, keys);
@@ -82,7 +82,10 @@ async function report(ctx, slug, status, phase, { keys, summary }) {
   const r = await reportEffort(clone, slug, {
     phase, claimant: cfg.id, identity, workerId: cfg.id, now: deps.now(), sleep: deps.sleep, hooks: deps.hooks, body, fetched: true,
   });
-  if (r.ok || r.reason === 'nothing-to-do') { deps.log(`reported ${slug} at ${phase}${r.ok ? '' : ' (nothing new)'}`); return { ok: true }; }
+  if (r.ok || r.reason === 'nothing-to-do') {
+    deps.log(`reported ${slug} at ${phase}${r.ok ? '' : ' (nothing new)'}`);
+    return { ok: true, codeAdvanced: code.advanced.length > 0 };
+  }
   if (['not-holder', 'closed', 'landed'].includes(r.reason)) return { ok: false, ret: lose(ctx, slug) };
   const what = r.reason === 'unmerged'
     ? `the edits to ${r.paths.join(', ')} conflict with origin/main`
@@ -109,7 +112,7 @@ async function handleCompleted(ctx, slug, status, result, keys) {
     return { action: 'done', effort: slug };
   }
   const done = result.development_done === true;
-  const progressed = changed || result.phase !== status || (done && !ctx.holding.developmentDone);
+  const progressed = changed || rep.codeAdvanced || result.phase !== status || (done && !ctx.holding.developmentDone);
   ctx.holding.stalls = progressed ? 0 : (ctx.holding.stalls ?? 0) + 1;
   ctx.holding.developmentDone = done;
   if (ctx.holding.stalls >= STALL_LIMIT) {

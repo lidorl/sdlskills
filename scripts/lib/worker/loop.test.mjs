@@ -37,8 +37,8 @@ const reg = (id) => workerYaml({
   id, owner: 'alice', name: id, host: 'h', agent: 'claude', model: 'opus', created_at: '2026-01-01T00:00:00Z',
 });
 
-function setup({ featReqs = {}, files = {}, config, workers = [IDA] } = {}) {
-  const all = { '.gitignore': 'workspace/\n', ...files };
+function setup({ featReqs = {}, files = {}, config, workers = [IDA], gitignore = 'workspace/\n' } = {}) {
+  const all = { ...(gitignore ? { '.gitignore': gitignore } : {}), ...files };
   for (const id of workers) all[`board/workers/${id}.yml`] = reg(id);
   if (config) all['board/config.yml'] = config;
   return makeBoard({ featReqs, files: all });
@@ -746,4 +746,83 @@ test('three board failures in a row on a held effort → effort error instead of
   const err = requestsOnMain(b).map((r) => r.text).find((t) => /kind: error/.test(t));
   assert.match(err, /3 board writes in a row failed/);
   assert.equal(fmOnMain(b, 'alpha').claimed_by, undefined);
+});
+
+const codeCommit = (file) => ({
+  writes: { [`workspace/api/${file}`]: `${file}\n` },
+  exec: [['workspace/api', 'git', 'add', file], ['workspace/api', 'git', 'commit', '-q', '-m', file]],
+});
+const remoteLog = (code) => git(code.remote, 'log', '--format=%s', 'feat/alpha').trim().split('\n');
+
+test('a commit left from a taken-over run is not pushed by a later new claim; it is kept aside (P2-13)', async () => {
+  const b = setup({ featReqs: { alpha: feat({ status: 'DESIGNED' }) }, files: { 'docs/design/alpha.md': design(['api']) } });
+  const code = codeRepo(b);
+  const w = worker(b, { catalog: code.catalog, script: { ...codeCommit('first.txt'), result: completed('PLANNED') } });
+  assert.equal((await w.step()).action, 'reported');
+  w.script({ ...codeCommit('abandoned.txt'), result: null });
+  w.beforeRun = () => {
+    const f = onMain(b, 'docs/feat-req/alpha.md');
+    b.seed('docs/feat-req/alpha.md', f.replace(`claimed_by: ${IDA}`, 'claimed_by: bob-zzzzzz'), 'board(takeover): alpha');
+  };
+  assert.equal((await w.step()).action, 'lost');
+  w.beforeRun = null;
+  const f = onMain(b, 'docs/feat-req/alpha.md'); // bob pushes no code and lets go
+  b.seed('docs/feat-req/alpha.md', f.replace(/claimed_by: .*\n/, '').replace(/claimed_at: .*\n/, '').replace(/renewed_at: .*\n/, ''), 'board(release): alpha');
+  w.now = at(10 * MIN);
+  w.script({ result: completed('PLANNED') });
+  assert.deepEqual(await w.step(), { action: 'reported', effort: 'alpha' });
+  assert.ok(!remoteLog(code).includes('abandoned.txt'), remoteLog(code).join(', '));
+  const api = join(w.meta, 'workspace/api');
+  const aside = git(api, 'branch', '--list', 'salvaged/*', '--format=%(refname:short)').trim();
+  assert.match(aside, /^salvaged\/feat\/alpha-/);
+  assert.equal(git(api, 'log', '-1', '--format=%s', aside).trim(), 'abandoned.txt');
+});
+
+test('a restart that continues our own live claim keeps and pushes the unpushed code commits (P2-13)', async () => {
+  const b = setup({ featReqs: { alpha: feat({ status: 'DESIGNED' }) }, files: { 'docs/design/alpha.md': design(['api']) } });
+  const code = codeRepo(b);
+  const w = worker(b, { catalog: code.catalog, script: { ...codeCommit('first.txt'), result: completed('PLANNED') } });
+  assert.equal((await w.step()).action, 'reported');
+  w.beforeRun = (opts) => { // the agent commits, then the worker dies before the result is handled
+    const api = join(opts.cwd, 'workspace/api');
+    writeFileSync(join(api, 'second.txt'), 'second\n');
+    git(api, 'add', 'second.txt');
+    execFileSync('git', ['commit', '-q', '-m', 'second.txt'], { cwd: api, env: { ...process.env, ...opts.env } });
+    throw new Error('worker crashed');
+  };
+  await assert.rejects(w.step(), /worker crashed/);
+  w.beforeRun = null;
+  w.restart();
+  w.script({ result: completed('PLANNED') });
+  assert.deepEqual(await w.step(), { action: 'reported', effort: 'alpha' });
+  assert.deepEqual(remoteLog(code).slice(0, 2), ['second.txt', 'first.txt']);
+  assert.ok(w.logs.some((l) => /kept our unpushed feat\/alpha commits/.test(l)), w.logs.join('\n'));
+});
+
+test('salvage never deletes a code checkout when workspace/ is not ignored in the meta repo', async () => {
+  const b = setup({ featReqs: { alpha: feat({ status: 'DESIGNED' }) }, files: { 'docs/design/alpha.md': design(['api']) }, gitignore: null });
+  const code = codeRepo(b);
+  const w = worker(b, { catalog: code.catalog, script: { ...codeCommit('local.txt'), result: null } });
+  w.beforeRun = () => {
+    const f = onMain(b, 'docs/feat-req/alpha.md');
+    b.seed('docs/feat-req/alpha.md', f.replace(`claimed_by: ${IDA}`, 'claimed_by: bob-zzzzzz'), 'board(takeover): alpha');
+  };
+  assert.equal((await w.step()).action, 'lost');
+  const api = join(w.meta, 'workspace/api');
+  assert.ok(existsSync(join(api, '.git')), 'the checkout survives');
+  assert.equal(git(api, 'log', '-1', '--format=%s', 'feat/alpha').trim(), 'local.txt');
+});
+
+test('development runs that only push code commits are progress, not stalls', async () => {
+  const b = setup({
+    featReqs: { alpha: feat({ status: 'IN_PROGRESS' }) },
+    files: { 'docs/design/alpha.md': design(['api']), 'docs/plans/alpha.md': '---\nstatus: IN_PROGRESS\n---\n\n- [ ] one\n' },
+  });
+  const code = codeRepo(b);
+  const w = worker(b, { catalog: code.catalog });
+  for (const f of ['a.txt', 'b.txt', 'c.txt']) {
+    w.script({ ...codeCommit(f), result: completed('IN_PROGRESS') });
+    assert.deepEqual(await w.step(), { action: 'reported', effort: 'alpha' }, f);
+  }
+  assert.equal(requestsOnMain(b).length, 0);
 });

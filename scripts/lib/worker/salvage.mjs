@@ -8,10 +8,14 @@ import { dirname, join } from 'node:path';
 const git = (cwd, args) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
 const stampOf = (d) => d.toISOString().replace(/\.\d{3}Z$/, 'Z').replace(/[-:]/g, '');
 
-// Dirty paths of a repo: [{ path, inHead }]; `only` limits them to those paths.
-function dirtyPaths(repo, only) {
+// Dirty files of a repo: [{ path, inHead }]; `only` limits them to those paths. Directory entries (a nested
+// repository shows up as `?? dir/`) and, in the meta clone, anything under workspace/ are never touched:
+// the code checkouts are salvaged on their own, and deleting one would lose its unpushed commits.
+function dirtyPaths(repo, only, { skipWorkspace = false } = {}) {
   const recs = git(repo, ['status', '--porcelain=v1', '-z', '--no-renames', '--untracked-files=all']).split('\0').filter(Boolean);
-  const paths = recs.map((r) => r.slice(3)).filter((p) => !only || only.includes(p));
+  const paths = recs.map((r) => r.slice(3))
+    .filter((p) => !p.endsWith('/') && !(skipWorkspace && (p === 'workspace' || p.startsWith('workspace/'))))
+    .filter((p) => !only || only.includes(p));
   return paths.map((path) => ({ path, inHead: git(repo, ['ls-tree', '--name-only', 'HEAD', '--', path]).trim() !== '' }));
 }
 
@@ -45,7 +49,7 @@ export function salvage(ctx, { paths, code = true, reason }) {
   for (let n = 2; existsSync(dir); n++) dir = join(home, 'salvage', `${stampOf(deps.now())}-${n}`);
   const log = (m) => deps.log(`${m} (${reason})`);
   let any = false;
-  const meta = dirtyPaths(clone, paths);
+  const meta = dirtyPaths(clone, paths, { skipWorkspace: true });
   if (meta.length) { moveAside(clone, meta, join(dir, 'meta'), log, ''); any = true; }
   if (code) {
     const ws = join(clone, 'workspace');

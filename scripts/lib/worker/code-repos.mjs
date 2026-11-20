@@ -8,10 +8,11 @@ const git = (cwd, args) => execFileSync('git', args, { cwd, encoding: 'utf8', st
 const firstLine = (e) => String(e?.stderr || e?.message || e).trim().split('\n').pop();
 
 // For each key checked out on feat/<slug> (readonly checkouts are detached and skipped): push the branch,
-// and note uncommitted changes, which are never pushed. -> { pushed, dirty, failed: [{ key, error }] }
+// and note uncommitted changes, which are never pushed. `advanced` lists the keys whose remote branch moved.
+// -> { pushed, advanced, dirty, failed: [{ key, error }] }
 export function pushCodeBranches(clone, slug, keys) {
   const branch = `feat/${slug}`;
-  const out = { pushed: [], dirty: [], failed: [] };
+  const out = { pushed: [], advanced: [], dirty: [], failed: [] };
   for (const key of keys) {
     const dir = join(clone, 'workspace', key);
     if (!existsSync(join(dir, '.git'))) continue;
@@ -20,8 +21,10 @@ export function pushCodeBranches(clone, slug, keys) {
     } catch { continue; }
     if (git(dir, ['status', '--porcelain']).trim()) out.dirty.push(key);
     try {
+      const before = git(dir, ['ls-remote', 'origin', `refs/heads/${branch}`]).split('\t')[0].trim();
       git(dir, ['push', '-q', '-u', 'origin', `refs/heads/${branch}:refs/heads/${branch}`]);
       out.pushed.push(key);
+      if (before !== git(dir, ['rev-parse', 'HEAD']).trim()) out.advanced.push(key);
     } catch (e) {
       out.failed.push({ key, error: firstLine(e) });
     }
@@ -29,32 +32,39 @@ export function pushCodeBranches(clone, slug, keys) {
   return out;
 }
 
-// On a fresh claim (Ruling P2-11): an existing checkout's feat/<slug> must start from what was last pushed,
-// not from a branch this worker left behind. origin/feat/<slug> present → a local branch that only adds
-// commits on top is kept (a resume after a crash), otherwise it is kept aside as salvaged/… and reset to
-// origin's; absent → a stale local branch is renamed aside so assemble-env branches from the default branch.
-// Checkouts must be clean (salvaged) first. Returns log lines.
-export function prepareCheckouts(clone, slug, keys, stamp) {
+// On a fresh hold (Rulings P2-11, P2-13): an existing checkout's feat/<slug> must start from what was last
+// pushed, not from a branch this worker left behind. Only when the hold continues our own live claim
+// (`continued`) are local commits ours to keep: a local branch ahead of origin's (or the only branch, when
+// origin has none) stays. Otherwise a local branch that differs from origin's is kept aside as
+// salvaged/feat/<slug>-<stamp> and the checkout restarts from origin/feat/<slug>, or, when origin has none,
+// from the default branch (assemble-env's case 3). Checkouts must be clean (salvaged) first. Returns log lines.
+export function prepareCheckouts(clone, slug, keys, stamp, { continued = false } = {}) {
   const branch = `feat/${slug}`;
   const notes = [];
+  const rev = (dir, ref) => { try { return git(dir, ['rev-parse', '--verify', '-q', ref]).trim(); } catch { return null; } };
   for (const key of keys) {
     const dir = join(clone, 'workspace', key);
     if (!existsSync(join(dir, '.git'))) continue;
-    const local = (() => { try { git(dir, ['rev-parse', '--verify', '-q', `refs/heads/${branch}`]); return true; } catch { return false; } })();
+    const local = rev(dir, `refs/heads/${branch}`);
     const aside = `salvaged/${branch}-${stamp}`;
     if (git(dir, ['ls-remote', '--heads', 'origin', branch]).trim()) {
       git(dir, ['fetch', '-q', 'origin', branch]);
-      const ahead = local && (() => {
-        try { git(dir, ['merge-base', '--is-ancestor', 'FETCH_HEAD', `refs/heads/${branch}`]); return true; } catch { return false; }
-      })();
-      if (ahead) continue; // our own unpushed commits on top of origin's: keep them
-      if (local) {
-        git(dir, ['branch', '-f', aside, `refs/heads/${branch}`]);
-        notes.push(`workspace/${key}: local ${branch} diverged from origin; kept as ${aside}`);
+      const remote = rev(dir, 'FETCH_HEAD');
+      if (local === remote) continue;
+      if (local && continued) {
+        try {
+          git(dir, ['merge-base', '--is-ancestor', remote, local]);
+          notes.push(`workspace/${key}: kept our unpushed ${branch} commits (continuing our claim)`);
+          continue;
+        } catch { /* diverged: set aside below */ }
       }
-      git(dir, ['checkout', '-q', '-B', branch, 'FETCH_HEAD']);
+      if (local) {
+        git(dir, ['branch', '-f', aside, local]);
+        notes.push(`workspace/${key}: local ${branch} set aside as ${aside}`);
+      }
+      git(dir, ['checkout', '-q', '-B', branch, remote]);
       notes.push(`workspace/${key}: ${branch} reset to origin/${branch}`);
-    } else if (local) {
+    } else if (local && !continued) {
       git(dir, ['branch', '-m', branch, aside]);
       notes.push(`workspace/${key}: unpushed local ${branch} renamed to ${aside}`);
     }

@@ -266,7 +266,7 @@ test('re-claiming your own live claim renews it: ok, no takeover, renewed_at ref
   const { fx, fmOnRemote } = setup(SPREAD);
   const a = fx.clone('a');
   const r = await claim(a, 'bulk-export', { ...base, claimant: 'a-w', workerId: 'a-w' });
-  assert.deepEqual(r, { ok: true, takeover: null });
+  assert.deepEqual(r, { ok: true, takeover: null, renewed: true });
   assert.equal(fmOnRemote().claimed_by, 'a-w');
   assert.equal(fmOnRemote().claimed_at, SPREAD.claimed_at);
   assert.equal(fmOnRemote().renewed_at, '2026-11-20T12:00:00Z');

@@ -27,7 +27,9 @@ const CANDIDATE = new Set(['ACCEPTED', 'DESIGNED', 'PLANNED', 'IN_PROGRESS']);
 const iso = (d) => d.toISOString().replace(/\.\d{3}Z$/, 'Z');
 const firstLine = (e) => String(e?.message ?? e).split('\n')[0];
 export const BOARD_ERROR_LIMIT = 3; // board failures in a row on a held effort before an effort error
-const held = (slug, fresh) => ({ slug, fresh, developmentDone: false, stalls: 0, boardErrors: 0 });
+// `continued`: this hold carries on our own live claim (claim took its renew branch, or a restart resumes it),
+// so local code commits ahead of origin are ours to keep (Ruling P2-13). Any new claim or takeover is not.
+const held = (slug, continued) => ({ slug, fresh: true, continued, developmentDone: false, stalls: 0, boardErrors: 0 });
 
 export function makeContext({ home, deps = {} }) {
   const cfg = readConfig(home);
@@ -96,12 +98,13 @@ async function stepOn(ctx, board) {
 
   const now = deps.now();
   const resumable = savedSlugs(home).find((s) => holds(clone, s, cfg.id, { ref: 'origin/main' }));
+  const liveOurs = (s) => claimState(committedFm(clone, s, 'origin/main'), now, bcfg.leaseTtlMs) === 'live';
   let slug = ctx.holding?.slug ?? null;
   if (slug) {
     if (!holds(clone, slug, cfg.id, { ref: 'origin/main' })) return lose(ctx, slug);
   } else if (resumable) {
     slug = resumable;
-    ctx.holding = held(slug, true);
+    ctx.holding = held(slug, liveOurs(slug));
     deps.log(`resuming ${slug} with its saved agent input`);
   } else {
     const { backoff_until: until } = readState(home);
@@ -109,12 +112,13 @@ async function stepOn(ctx, board) {
       deps.log(`backing off until ${until}`);
       return { action: 'idle' };
     }
-    slug = await pickAndClaim(ctx, board, bcfg, now);
-    if (!slug) {
+    const picked = await pickAndClaim(ctx, board, bcfg, now);
+    if (!picked) {
       await applyOnClosed(ctx, now);
       return { action: 'idle' };
     }
-    ctx.holding = held(slug, true);
+    slug = picked.slug;
+    ctx.holding = held(slug, picked.continued);
   }
   return runHeld(ctx, slug, bcfg);
 }
@@ -141,7 +145,7 @@ function readonlyKeys(clone) {
   } catch { return new Set(); }
 }
 
-// In-flight before new: our own live claims first, then the ranked queue. Returns the claimed slug or null.
+// In-flight before new: our own live claims first, then the ranked queue. -> { slug, continued } or null
 async function pickAndClaim(ctx, board, bcfg, now) {
   const { cfg, deps, clone, identity } = ctx;
   const ttlMs = bcfg.leaseTtlMs;
@@ -159,8 +163,8 @@ async function pickAndClaim(ctx, board, bcfg, now) {
       body: warnings.length ? `Overlap warning:\n${warnings.map((w) => `- ${w}`).join('\n')}` : undefined,
     });
     if (r.ok) {
-      deps.log(r.takeover ? `took over ${e.slug} from ${r.takeover}` : `claimed ${e.slug}`);
-      return e.slug;
+      deps.log(r.takeover ? `took over ${e.slug} from ${r.takeover}` : r.renewed ? `continuing our claim on ${e.slug}` : `claimed ${e.slug}`);
+      return { slug: e.slug, continued: r.renewed === true };
     }
     deps.log(`could not claim ${e.slug} (${r.reason})`);
     fetched = false;
@@ -219,7 +223,8 @@ async function runHeld(ctx, slug, bcfg) {
     try {
       if (ctx.holding.fresh) { // a new hold starts from what was pushed (Ruling P2-11)
         salvage(ctx, { paths: [], reason: `fresh claim of ${slug}` });
-        for (const n of prepareCheckouts(clone, slug, keys, iso(deps.now()).replace(/[-:]/g, ''))) deps.log(n);
+        const stamp = iso(deps.now()).replace(/[-:]/g, '');
+        for (const n of prepareCheckouts(clone, slug, keys, stamp, { continued: ctx.holding.continued })) deps.log(n);
       }
       deps.assemble({ rootDir: clone, slug, keys, hooks: { workerId: cfg.id } });
     } catch (e) {

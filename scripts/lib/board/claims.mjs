@@ -84,8 +84,9 @@ export async function claim(clone, slug, { claimant, identity, workerId, now, tt
     const peek = committedFm(clone, slug, 'origin/main');
     if (holdable(peek, claimant) && claimState(peek, now, ttlMs) === 'live') {
       // Already ours (a retry, or a restarted worker with the same id): refresh the lease instead.
+      // `renewed: true` tells the caller this continues a live claim rather than starting a new one.
       const r = await renew(clone, slug, { claimant, identity, workerId, now, hooks });
-      if (r.ok) return { ok: true, takeover: null };
+      if (r.ok) return { ok: true, takeover: null, renewed: true };
       if (r.reason === 'replaced') continue;
       return { ok: false, reason: r.reason };
     }
