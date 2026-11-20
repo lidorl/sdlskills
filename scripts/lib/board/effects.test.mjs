@@ -4,7 +4,7 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { makeBoard, IDENT } from './fixtures.mjs';
-import { applyAnswer, applyAnswered } from './effects.mjs';
+import { applyAnswer, applyAnswered, applyClosed } from './effects.mjs';
 import { buildRequest, listRequests } from './requests.mjs';
 import { parseDoc, setFields } from './frontmatter.mjs';
 import { claim } from './claims.mjs';
@@ -189,7 +189,7 @@ test('applyAnswered: a park answer lands even though it ends the claim holdabili
   const fx = setup({ fm: { title: 'Bulk export', status: 'IN_PROGRESS', awaiting: e.id }, reqs: [e] });
   const clone = await claimed(fx);
   const r = await applyAnswered(clone, SLUG, { claimant: WHO, identity: IDENT, workerId: WHO, now: NOW });
-  assert.deepEqual(r, { ok: true, agentInput: [] });
+  assert.deepEqual(r, { ok: true, agentInput: [], problems: [] });
   assert.equal(fmOf(clone, 'docs/feat-req/bulk-export.md').status, 'PARKED');
 });
 
@@ -199,7 +199,7 @@ test('applyAnswered pushes nothing if the claim is no longer held', async () => 
   const clone = fx.clone('a');
   const head = g(clone, 'rev-parse', 'HEAD');
   const r = await applyAnswered(clone, SLUG, { claimant: WHO, identity: IDENT, workerId: WHO, now: NOW });
-  assert.deepEqual(r, { ok: false, reason: 'replaced', agentInput: [] });
+  assert.deepEqual(r, { ok: false, reason: 'replaced', agentInput: [], problems: [] });
   assert.equal(g(clone, 'rev-parse', 'HEAD'), head);
   g(clone, 'fetch', 'origin', 'main');
   assert.equal(g(clone, 'rev-parse', 'origin/main'), head);
@@ -210,6 +210,125 @@ test('applyAnswered with no answered requests is ok and commits nothing', async 
   const fx = setup({ fm: { title: 'Bulk export', status: 'IN_PROGRESS' } });
   const clone = await claimed(fx);
   const head = g(clone, 'rev-parse', 'HEAD');
-  assert.deepEqual(await applyAnswered(clone, SLUG, { claimant: WHO, identity: IDENT, workerId: WHO, now: NOW }), { ok: true, agentInput: [] });
+  assert.deepEqual(await applyAnswered(clone, SLUG, { claimant: WHO, identity: IDENT, workerId: WHO, now: NOW }), { ok: true, agentInput: [], problems: [] });
+  assert.equal(g(clone, 'rev-parse', 'HEAD'), head);
+});
+
+const apply = (clone) => applyAnswered(clone, SLUG, { claimant: WHO, identity: IDENT, workerId: WHO, now: NOW });
+const dirty = (clone) => g(clone, 'status', '--porcelain');
+
+test('applyAnswered is all-or-nothing: a throw on the second request leaves a clean tree and no commit', async () => {
+  const q = answered({ kind: 'question', sections: { Options: '- **A** one' }, answer: 'A' });
+  const d = answered({ kind: 'gate', gate: 'design-approval', answer: 'approve' });
+  // docs/design/bulk-export.md is a directory, so reading it throws after the first request was applied
+  const fx = setup({ fm: { title: 'Bulk export', status: 'IN_PROGRESS' }, files: { 'docs/design/bulk-export.md/x': 'x' }, reqs: [q, d] });
+  const clone = await claimed(fx);
+  const head = g(clone, 'rev-parse', 'HEAD');
+  await assert.rejects(apply(clone));
+  assert.equal(dirty(clone), '');
+  assert.equal(g(clone, 'rev-parse', 'HEAD'), head);
+  assert.equal(existsSync(join(clone, `board/requests/${q.id}.md`)), true);
+  assert.ok(!read(clone, 'docs/feat-req/bulk-export.md').includes(q.id));
+});
+
+test('applyAnswered skips invalid answers, keeps their files and awaiting, and reports them', async () => {
+  const bad = [
+    answered({ kind: 'gate', gate: 'triage', answer: 'maybe' }),
+    answered({ kind: 'gate', gate: 'merge', answer: 'aprove' }),
+    answered({ kind: 'gate', gate: 'review-findings', answer: {}, sections: { Findings: '### F1: x' } }),
+  ];
+  const good = answered({ kind: 'question', sections: { Options: '- **A** one' }, answer: 'A' });
+  const fx = setup({ fm: { title: 'Bulk export', status: 'IN_PROGRESS', awaiting: bad[0].id }, reqs: [...bad, good] });
+  const clone = await claimed(fx);
+  const r = await apply(clone);
+  assert.equal(r.ok, true);
+  assert.deepEqual(r.problems.map((p) => p.id), bad.map((b) => b.id));
+  assert.ok(r.agentInput.some((l) => l.startsWith(`Request ${bad[1].id} could not be applied: `)));
+  assert.ok(r.agentInput.includes(`Request ${good.id} (question): Option A`));
+  for (const b of bad) assert.equal(existsSync(join(clone, `board/requests/${b.id}.md`)), true);
+  assert.equal(existsSync(join(clone, `board/requests/${good.id}.md`)), false);
+  const fm = fmOf(clone, 'docs/feat-req/bulk-export.md');
+  assert.equal(fm.status, 'IN_PROGRESS');
+  assert.equal(fm.awaiting, bad[0].id);
+});
+
+test('applyAnswered ignores worker-scope requests that carry an effort', async () => {
+  const w = answered({ kind: 'error', scope: 'worker', sections: { Error: 'x' }, answer: 'resolved' });
+  const fx = setup({ fm: { title: 'Bulk export', status: 'IN_PROGRESS' }, reqs: [w] });
+  const clone = await claimed(fx);
+  const head = g(clone, 'rev-parse', 'HEAD');
+  assert.deepEqual(await apply(clone), { ok: true, agentInput: [], problems: [] });
+  assert.equal(g(clone, 'rev-parse', 'HEAD'), head);
+  assert.equal(existsSync(join(clone, `board/requests/${w.id}.md`)), true);
+});
+
+test('applyAnswered after a lost race applies once: one Decisions line, one plan step, files deleted', async () => {
+  const rv = answered({
+    kind: 'gate', gate: 'review-findings', answer: { F1: 'fix' }, sections: { Findings: '### F1: Missing check' },
+  });
+  const fx = setup({ fm: { title: 'Bulk export', status: 'IN_PROGRESS' }, files: { 'docs/plans/bulk-export.md': PLAN }, reqs: [rv] });
+  const clone = await claimed(fx);
+  let raced = false;
+  const hooks = { beforePush: () => { if (!raced) { raced = true; fx.seed('unrelated.txt', 'x'); } } };
+  const r = await applyAnswered(clone, SLUG, { claimant: WHO, identity: IDENT, workerId: WHO, now: NOW, hooks });
+  assert.equal(r.ok, true);
+  assert.equal(raced, true);
+  const feat = read(clone, 'docs/feat-req/bulk-export.md');
+  assert.equal(feat.split(rv.id).length - 1, 1);
+  assert.equal(read(clone, 'docs/plans/bulk-export.md').split('Fix review finding F1').length - 1, 1);
+  assert.equal(existsSync(join(clone, `board/requests/${rv.id}.md`)), false);
+  assert.equal(g(clone, 'log', '--format=%s', '--grep=board(apply)').split('\n').length, 1);
+});
+
+test('path guards: unsafe effort or id never reaches the filesystem', () => {
+  const root = setup().clone('a');
+  const req = (over) => ({ id: '202611201000-abcde1', path: 'x', fm: { id: '202611201000-abcde1', kind: 'question', scope: 'effort', effort: SLUG, answer: 'A', ...over }, sections: { Answer: '' } });
+  assert.throws(() => applyAnswer(root, req({ effort: '../../evil' }), ctx), /unsafe/);
+  assert.throws(() => applyAnswer(root, { ...req({}), id: '../../x' }, ctx), /unsafe/);
+});
+
+test('applyClosed skips an answered request whose effort is a path, and reports it', async () => {
+  const evil = answered({ kind: 'question', effort: '../evil', sections: { Options: '- **A** one' }, answer: 'A' });
+  const fx = setup({ fm: { title: 'Bulk export', status: 'IMPLEMENTED' }, reqs: [evil] });
+  const clone = fx.clone('a');
+  const head = g(clone, 'rev-parse', 'HEAD');
+  const r = await applyClosed(clone, { identity: IDENT, workerId: WHO, now: NOW });
+  assert.equal(r.ok, true);
+  assert.deepEqual(r.applied, []);
+  assert.equal(r.problems[0].id, evil.id);
+  assert.equal(g(clone, 'rev-parse', 'HEAD'), head);
+});
+
+test('applyClosed: clarification corrected after IMPLEMENTED files a follow-up and its triage gate in one commit', async () => {
+  const c = answered({ kind: 'clarification', sections: { Assumption: 'x' }, answer: 'correct', notes: 'Use UTC' });
+  const k = answered({ kind: 'clarification', sections: { Assumption: 'y' }, answer: 'confirm' });
+  const fx = setup({ fm: { title: 'Bulk export', status: 'IMPLEMENTED' }, reqs: [c, k] });
+  const clone = fx.clone('a');
+  const before = g(clone, 'rev-list', '--count', 'HEAD');
+  const r = await applyClosed(clone, { identity: IDENT, workerId: WHO, now: NOW });
+  assert.deepEqual(r, { ok: true, applied: [c.id, k.id], problems: [] });
+  assert.equal(Number(g(clone, 'rev-list', '--count', 'HEAD')) - Number(before), 1);
+  assert.match(g(clone, 'log', '-1', '--format=%B'), /^board\(apply\): closed[^]*Worker: a-worker1/);
+  g(clone, 'fetch', 'origin', 'main');
+  assert.equal(g(clone, 'rev-parse', 'HEAD'), g(clone, 'rev-parse', 'origin/main'));
+  const fslug = `bulk-export-followup-${c.id}`;
+  const f = fmOf(clone, `docs/feat-req/${fslug}.md`);
+  assert.equal(f.status, 'ACCEPTED');
+  const gate = listRequests(clone).requests;
+  assert.equal(gate.length, 1);
+  assert.equal(gate[0].fm.gate, 'triage');
+  assert.equal(gate[0].fm.effort, fslug);
+  assert.equal(f.awaiting, gate[0].id);
+  assert.equal(existsSync(join(clone, `board/requests/${c.id}.md`)), false);
+  assert.equal(existsSync(join(clone, `board/requests/${k.id}.md`)), false);
+  const feat = read(clone, 'docs/feat-req/bulk-export.md');
+  assert.ok(feat.includes(c.id) && feat.includes(k.id));
+});
+
+test('applyClosed with nothing to do commits nothing', async () => {
+  const fx = setup({ fm: { title: 'Bulk export', status: 'IN_PROGRESS' } });
+  const clone = fx.clone('a');
+  const head = g(clone, 'rev-parse', 'HEAD');
+  assert.deepEqual(await applyClosed(clone, { identity: IDENT, workerId: WHO, now: NOW }), { ok: true, applied: [], problems: [] });
   assert.equal(g(clone, 'rev-parse', 'HEAD'), head);
 });

@@ -1,12 +1,12 @@
 // Answer effects: what happens, in the docs, once a request has been answered. Answering only writes
 // the request file; the next claimant of the effort applies it all in one `apply` commit.
-import { readFileSync, writeFileSync, existsSync, readdirSync, mkdirSync, unlinkSync } from 'node:fs';
-import { join, dirname } from 'node:path';
+import { readFileSync, writeFileSync, existsSync, readdirSync, mkdirSync, unlinkSync, rmSync } from 'node:fs';
+import { join, dirname, resolve, relative, isAbsolute, basename } from 'node:path';
 import { stringify } from 'yaml';
 import { boardWrite } from './git.mjs';
 import { holds } from './claims.mjs';
 import { parseDoc, setFields, appendToSection } from './frontmatter.mjs';
-import { buildRequest, newRequestId, validateRequest, answeredFor } from './requests.mjs';
+import { buildRequest, newRequestId, validateRequest, answeredFor, listRequests } from './requests.mjs';
 
 const LIFECYCLE = ['ACCEPTED', 'DESIGNED', 'PLANNED', 'IN_PROGRESS'];
 const featRel = (slug) => `docs/feat-req/${slug}.md`;
@@ -18,14 +18,44 @@ class NotHolder extends Error {}
 const oneLine = (s) => String(s ?? '').replace(/\s+/g, ' ').trim();
 const firstLine = (s) => String(s ?? '').split('\n').map((l) => l.trim()).find(Boolean) ?? '';
 
-function readText(root, rel) {
-  return readFileSync(join(root, rel), 'utf8');
+const SLUG_RE = /^[a-z0-9][a-z0-9-]*$/;
+const ID_RE = /^\d{12}-[a-z0-9]{6}$/;
+
+function inside(root, rel) {
+  const abs = resolve(root, rel);
+  const r = relative(resolve(root), abs);
+  if (r === '' || r.startsWith('..') || isAbsolute(r)) throw new Error(`path escapes the repository: ${rel}`);
+  return abs;
 }
 
-function writeText(root, rel, text) {
-  const abs = join(root, rel);
+function readText(root, rel) {
+  return readFileSync(inside(root, rel), 'utf8');
+}
+
+// Every write and delete records the file's original content first, so a failure can undo them all.
+function remember(abs, rel, journal) {
+  if (journal && !journal.has(rel)) journal.set(rel, existsSync(abs) ? readFileSync(abs, 'utf8') : null);
+}
+
+function writeText(root, rel, text, journal) {
+  const abs = inside(root, rel);
+  remember(abs, rel, journal);
   mkdirSync(dirname(abs), { recursive: true });
   writeFileSync(abs, text);
+}
+
+function deleteFile(root, rel, journal) {
+  const abs = inside(root, rel);
+  remember(abs, rel, journal);
+  unlinkSync(abs);
+}
+
+function restore(root, journal) {
+  for (const [rel, original] of journal) {
+    const abs = join(root, rel);
+    if (original === null) rmSync(abs, { force: true });
+    else writeFileSync(abs, original);
+  }
 }
 
 // docs/plans/<slug>.md, else the highest-numbered <slug>-N.md that isn't IMPLEMENTED.
@@ -80,7 +110,7 @@ const stripFences = (text = '') => text.split('\n').filter((l) => !/^\s*(`{3,}|~
 
 const GATE_LABEL = { 'design-approval': 'design', 'review-findings': 'review' };
 
-export function applyAnswer(root, request, { now, claimant, rand }) {
+export function applyAnswer(root, request, { now, claimant, rand, journal }) {
   const { fm, sections } = request;
   const notes = (sections.Answer ?? '').trim();
   const answer = fm.answer;
@@ -88,6 +118,7 @@ export function applyAnswer(root, request, { now, claimant, rand }) {
   const id = request.id ?? fm.id;
   const none = { paths: [], agentInput: null, newRequests: [] };
   if (fm.scope === 'worker') return none;
+  if (!SLUG_RE.test(String(slug)) || !ID_RE.test(String(id))) throw new Error(`unsafe request ${id} or effort ${slug}`);
 
   const date = now.toISOString().slice(0, 10);
   const paths = new Set([featRel(slug)]);
@@ -99,7 +130,7 @@ export function applyAnswer(root, request, { now, claimant, rand }) {
     const tail = note ? ` \u2014 ${oneLine(note)}` : '';
     feat = appendToSection(feat, 'Decisions', `- ${date} \u00b7 ${id} \u00b7 ${label}: ${ans}${tail} (applied by ${claimant})`);
   };
-  const touch = (rel, text) => { writeText(root, rel, text); paths.add(rel); };
+  const touch = (rel, text) => { writeText(root, rel, text, journal); paths.add(rel); };
   const label = fm.kind === 'gate' ? (GATE_LABEL[fm.gate] ?? fm.gate) : fm.kind;
 
   if (fm.kind === 'gate' && fm.gate === 'design-approval') {
@@ -171,58 +202,122 @@ export function applyAnswer(root, request, { now, claimant, rand }) {
     }
   }
 
-  writeText(root, featRel(slug), feat);
+  writeText(root, featRel(slug), feat, journal);
   return { paths: [...paths], agentInput, newRequests };
 }
 
-export async function applyAnswered(clone, slug, opts) {
+// Validate each answered request, then apply the valid ones all-or-nothing. Invalid ones are skipped
+// (file and `awaiting` stay) and reported. `candidates` are already limited to scope-effort requests.
+function applyRequests(c, candidates, { claimant, now, rand }) {
+  const ordered = [...candidates].sort((a, b) => (a.id < b.id ? -1 : 1));
+  const problems = [];
+  const agentInput = [];
+  const valid = [];
+  for (const req of ordered) {
+    let bad = [];
+    try {
+      bad = validateRequest(readFileSync(req.path, 'utf8'), basename(req.path));
+    } catch (e) { bad = [e.message]; }
+    if (!bad.length && !SLUG_RE.test(String(req.fm.effort))) bad = [`effort "${req.fm.effort}" is not a valid slug`];
+    if (bad.length) {
+      problems.push({ id: req.id, problems: bad });
+      agentInput.push(`Request ${req.id} could not be applied: ${bad.join('; ')}`);
+    } else valid.push(req);
+  }
+  const paths = new Set();
+  const applied = [];
+  const journal = new Map();
+  try {
+    for (const req of valid) {
+      const eff = applyAnswer(c, req, { now, claimant, rand, journal });
+      eff.paths.forEach((p) => paths.add(p));
+      if (eff.agentInput) agentInput.push(`Request ${req.id} (${req.fm.kind}): ${eff.agentInput}`);
+      for (const nr of eff.newRequests) {
+        const text = buildRequest(nr);
+        const bad = validateRequest(text, `${nr.id}.md`);
+        if (bad.length) throw new Error(`follow-up triage gate invalid: ${bad.join('; ')}`);
+        writeText(c, requestRel(nr.id), text, journal);
+        paths.add(requestRel(nr.id));
+        const f = featRel(nr.effort);
+        writeText(c, f, setFields(readText(c, f), { awaiting: nr.id }), journal);
+        paths.add(f);
+      }
+      const f = featRel(req.fm.effort);
+      if (parseDoc(readText(c, f)).data.awaiting === req.id) {
+        writeText(c, f, setFields(readText(c, f), { awaiting: null }), journal);
+        paths.add(f);
+      }
+      deleteFile(c, requestRel(req.id), journal);
+      paths.add(requestRel(req.id));
+      applied.push(req.id);
+    }
+  } catch (e) {
+    restore(c, journal);
+    throw e;
+  }
+  return { paths: [...paths], agentInput, problems, applied };
+}
+
+async function retrying(run) {
   for (let attempt = 0; attempt < 3; attempt++) {
-    const r = await applyOnce(clone, slug, opts);
+    const r = await run();
     if (r.reason !== 'lost-race') return r;
   }
-  return { ok: false, reason: 'lost-race', agentInput: [] };
+  return { ok: false, reason: 'lost-race' };
+}
+
+export function applyAnswered(clone, slug, opts) {
+  return retrying(() => applyOnce(clone, slug, opts)).then((r) => ({ agentInput: [], problems: [], ...r }));
 }
 
 async function applyOnce(clone, slug, { claimant, identity, workerId, now, rand, hooks }) {
-  let agentInput = [];
+  let result = { agentInput: [], problems: [] };
   const r = await boardWrite(clone, {
     kind: 'apply', subject: slug, identity, onReject: 'restart', hooks,
     trailers: { ...(workerId ? { worker: workerId } : {}), effort: slug },
     mutate: (c) => {
-      agentInput = [];
+      result = { agentInput: [], problems: [] };
       if (!holds(c, slug, claimant)) throw new NotHolder(); // mutate runs before any commit
-      const answered = answeredFor(c, slug).sort((a, b) => (a.id < b.id ? -1 : 1));
+      const answered = answeredFor(c, slug).filter((q) => q.fm.scope === 'effort');
       if (answered.length === 0) return [];
-      const paths = new Set();
-      for (const req of answered) {
-        const eff = applyAnswer(c, req, { now, claimant, rand });
-        eff.paths.forEach((p) => paths.add(p));
-        if (eff.agentInput) agentInput.push(`Request ${req.id} (${req.fm.kind}): ${eff.agentInput}`);
-        for (const nr of eff.newRequests) {
-          const text = buildRequest(nr);
-          const bad = validateRequest(text, `${nr.id}.md`);
-          if (bad.length) throw new Error(`follow-up triage gate invalid: ${bad.join('; ')}`);
-          writeText(c, requestRel(nr.id), text);
-          paths.add(requestRel(nr.id));
-          const f = featRel(nr.effort);
-          writeText(c, f, setFields(readText(c, f), { awaiting: nr.id }));
-          paths.add(f);
-        }
-        unlinkSync(req.path);
-        paths.add(requestRel(req.id));
-      }
-      const f = featRel(slug);
-      const awaiting = parseDoc(readText(c, f)).data.awaiting;
-      if (awaiting && answered.some((q) => q.id === awaiting)) {
-        writeText(c, f, setFields(readText(c, f), { awaiting: null }));
-        paths.add(f);
-      }
-      return [...paths];
+      const out = applyRequests(c, answered, { claimant, now, rand });
+      result = { agentInput: out.agentInput, problems: out.problems };
+      return out.paths;
     },
     // Applying may park or reject the effort, which `holds` would then refuse; only the claimant matters here.
     validate: (c) => parseDoc(readText(c, featRel(slug))).data.claimed_by === claimant,
   }).catch((e) => { if (e instanceof NotHolder) return { ok: false, reason: 'replaced' }; throw e; });
-  if (r.ok) return { ok: true, agentInput };
-  if (r.reason === 'nothing-to-do') return { ok: true, agentInput: [] };
-  return { ok: false, reason: r.reason, agentInput: [] };
+  if (r.ok) return { ok: true, ...result };
+  if (r.reason === 'nothing-to-do') return { ok: true, ...result };
+  return { ok: false, reason: r.reason };
+}
+
+// Claim-free apply for answered requests whose effort is already IMPLEMENTED (nobody can hold it).
+export async function applyClosed(clone, { identity, workerId, now, rand, hooks }) {
+  const claimant = workerId ?? identity.name;
+  let result = { applied: [], problems: [] };
+  const r = await retrying(() => boardWrite(clone, {
+    kind: 'apply', subject: 'closed', identity, onReject: 'restart', hooks,
+    trailers: workerId ? { worker: workerId } : {},
+    mutate: (c) => {
+      result = { applied: [], problems: [] };
+      const closed = [];
+      const bad = [];
+      for (const req of listRequests(c).requests) {
+        if (req.fm.status !== 'answered' || req.fm.scope !== 'effort') continue;
+        if (!SLUG_RE.test(String(req.fm.effort))) {
+          bad.push({ id: req.id, problems: [`effort "${req.fm.effort}" is not a valid slug`] });
+          continue;
+        }
+        const f = join(c, featRel(req.fm.effort));
+        if (existsSync(f) && parseDoc(readFileSync(f, 'utf8')).data.status === 'IMPLEMENTED') closed.push(req);
+      }
+      const out = closed.length ? applyRequests(c, closed, { claimant, now, rand }) : { paths: [], applied: [], problems: [] };
+      result = { applied: out.applied, problems: [...bad, ...out.problems] };
+      return out.paths;
+    },
+    validate: (c) => result.applied.every((id) => !existsSync(join(c, requestRel(id)))),
+  }));
+  if (r.ok || r.reason === 'nothing-to-do') return { ok: true, ...result };
+  return { ok: false, reason: r.reason, applied: [], problems: [] };
 }
