@@ -33,6 +33,11 @@ test('gh logged out is a worker problem', () => {
   });
 });
 
+test('gh not installed is a worker problem, checked before auth', () => {
+  const r = run(board(), { gh: { installed: () => false, authOk: () => false } });
+  assert.deepEqual(r, { ok: false, kind: 'worker', problem: 'gh is not installed; install the GitHub CLI' });
+});
+
 test('missing agent CLI is a worker problem; agent_cmd wins over agent', () => {
   const seen = [];
   const r = run(board(), { which: (c) => { seen.push(c); return false; } }, { ...cfg, agent_cmd: 'my-claude' });
@@ -69,5 +74,8 @@ test('realDeps exposes gh.authOk and which', () => {
   const d = realDeps();
   assert.equal(typeof d.gh.authOk, 'function');
   assert.equal(typeof d.which, 'function');
+  assert.equal(typeof d.gh.installed, 'function');
+  assert.equal(d.which('sh'), true);
+  assert.equal(d.which('node'), true);
   assert.equal(d.which('definitely-not-a-real-cmd-xyz'), false);
 });
