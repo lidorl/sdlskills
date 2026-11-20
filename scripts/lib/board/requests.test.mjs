@@ -1,9 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, mkdtempSync, symlinkSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { makeBoard, IDENT } from './fixtures.mjs';
+import { BoardError } from './git.mjs';
 import { parseDoc } from './frontmatter.mjs';
 import {
   newRequestId, buildRequest, validateRequest, listRequests, postRequest, answerRequest, withdrawRequest, answeredFor,
@@ -267,4 +269,76 @@ test('log lines and notes that look like headings cannot corrupt the file', asyn
   assert.match(requests[0].sections.Answer, /do this/);
   assert.match(requests[0].sections.Error, /## Answer/);
   assert.equal(requests[0].sections.X, undefined);
+});
+
+test('a design-approval reject needs notes (validateRequest and answerRequest)', async () => {
+  const mk = (notes) => buildRequest({ ...base, ...variants.gate }).replace('status: open', 'status: answered').replace('answer: null', 'answer: reject')
+    .replace('answered_by: null', 'answered_by: lidorl').replace('answered_at: null', 'answered_at: 2026-11-20T13:00:00Z')
+    .replace(/## Answer\n*$/, `## Answer\n\n${notes}\n`);
+  assert.ok(validateRequest(mk(''), `${ID}.md`).some((p) => /reject.*requires notes/.test(p)));
+  assert.deepEqual(validateRequest(mk('Rethink the schema'), `${ID}.md`), []);
+  const { fx } = await posted(variants.gate);
+  const b = fx.clone('b');
+  const o = { by: 'lidorl', via: 'cli', identity: IDENT, now: NOW };
+  assert.deepEqual(await answerRequest(b, ID, { ...o, answer: 'reject' }), { ok: false, reason: 'invalid-answer' });
+  assert.deepEqual(await answerRequest(b, ID, { ...o, answer: 'reject', notes: 'Rethink the schema' }), { ok: true });
+});
+
+test('library refuses an invalid request id or effort slug before touching anything', async () => {
+  const fx = makeBoard({ featReqs: feat() });
+  const a = fx.clone('a');
+  const before = g(fx.remote, 'rev-parse', 'main');
+  const o = { by: 'lidorl', via: 'cli', identity: IDENT, now: NOW };
+  const isBoardError = (e) => e instanceof BoardError && /invalid/.test(e.message);
+  await assert.rejects(answerRequest(a, '../../etc/passwd', { ...o, answer: 'A' }), isBoardError);
+  await assert.rejects(withdrawRequest(a, '../x', { identity: IDENT }), isBoardError);
+  await assert.rejects(withdrawRequest(a, ID, { identity: IDENT, slug: '../evil' }), isBoardError);
+  await assert.rejects(postRequest(a, { ...base, ...variants.clarification, id: '../x' }, { identity: IDENT }), isBoardError);
+  await assert.rejects(postRequest(a, { ...base, ...variants.clarification, effort: '../evil' }, { identity: IDENT }), isBoardError);
+  assert.equal(g(fx.remote, 'rev-parse', 'main'), before);
+  assert.equal(g(a, 'status', '--porcelain'), '');
+});
+
+test('listRequests reports request files whose names are not request ids, and a symlinked one', () => {
+  const root = mkdtempSync(join(tmpdir(), 'requests-'));
+  mkdirSync(join(root, 'board/requests'), { recursive: true });
+  writeFileSync(join(root, `board/requests/${ID}.md`), buildRequest({ ...base, ...variants.question }));
+  writeFileSync(join(root, 'board/requests/notes.md'), '# not a request\n');
+  const outside = join(mkdtempSync(join(tmpdir(), 'outside-')), 'x.md');
+  writeFileSync(outside, buildRequest({ ...base, ...variants.question, id: '202611201201-zzzzzz' }));
+  symlinkSync(outside, join(root, 'board/requests/202611201201-zzzzzz.md'));
+  const { requests, problems } = listRequests(root);
+  assert.deepEqual(requests.map((r) => r.id), [ID]);
+  assert.equal(problems.length, 2);
+  assert.ok(problems.some((p) => /notes\.md: .*not a request id/.test(p)));
+  assert.ok(problems.some((p) => /202611201201-zzzzzz\.md: .*symlink/.test(p)));
+});
+
+test('the injected sleep is used between rebase retries (post, answer, withdraw)', async () => {
+  const fx = makeBoard({ featReqs: feat() });
+  const a = fx.clone('a'); const b = fx.clone('b');
+  let n = 0;
+  const raceOnce = () => { let done = false; return () => { if (!done) { done = true; fx.seed(`unrelated-${n}.md`, 'x'); } }; };
+  const sleep = async () => { n += 1; };
+  const req = { ...base, ...variants.clarification };
+  assert.deepEqual(await postRequest(a, req, { identity: IDENT, sleep, hooks: { beforePush: raceOnce() } }), { ok: true, id: ID });
+  assert.equal(n, 1);
+  assert.deepEqual(await answerRequest(b, ID, { answer: 'confirm', by: 'lidorl', identity: IDENT, now: NOW, sleep, hooks: { beforePush: raceOnce() } }), { ok: true });
+  assert.equal(n, 2);
+  const id2 = '202611201201-bbbbbb';
+  assert.equal((await postRequest(a, { ...req, id: id2 }, { identity: IDENT, sleep })).ok, true);
+  assert.deepEqual(await withdrawRequest(a, id2, { identity: IDENT, slug: 'bulk-export', sleep, hooks: { beforePush: raceOnce() } }), { ok: true });
+  assert.equal(n, 3);
+});
+
+test('posting a request does not publish the person\'s uncommitted feat-req edits', async () => {
+  const { fx, a } = await posted(variants.clarification, { post: {} });
+  const f = join(a, 'docs/feat-req/bulk-export.md');
+  writeFileSync(f, `${readFileSync(f, 'utf8')}\nlocal only\n`);
+  const r = await postRequest(a, { ...base, ...variants.question, id: '202611201202-cccccc' }, { identity: IDENT, releaseFrom: { slug: 'bulk-export', claimant: 'a-worker1' } });
+  assert.equal(r.ok, true);
+  const onMainText = g(fx.remote, 'show', 'main:docs/feat-req/bulk-export.md');
+  assert.equal(parseDoc(onMainText).data.awaiting, '202611201202-cccccc');
+  assert.doesNotMatch(onMainText, /local only/);
+  assert.match(readFileSync(f, 'utf8'), /local only/);
 });

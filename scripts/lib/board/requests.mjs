@@ -1,10 +1,11 @@
 // Request files: board/requests/<id>.md. A headless worker posts one instead of asking a terminal;
 // a person answers by writing only that file; a later worker applies the answer.
 import { readFileSync, writeFileSync, existsSync, readdirSync, mkdirSync, unlinkSync } from 'node:fs';
-import { join, dirname } from 'node:path';
+import { dirname } from 'node:path';
 import { stringify } from 'yaml';
-import { boardWrite } from './git.mjs';
-import { release } from './claims.mjs';
+import { boardWrite, BoardError } from './git.mjs';
+import { release, checkSlug, featReqPath } from './claims.mjs';
+import { safePath, REQUEST_ID_RE } from './safe-path.mjs';
 import { parseDoc, setFields, appendToSection, locateSection, fenceTracker } from './frontmatter.mjs';
 import { safeExcerpt } from './redact.mjs';
 
@@ -12,12 +13,15 @@ const KINDS = ['gate', 'question', 'clarification', 'error'];
 const SCOPES = ['effort', 'worker'];
 const STATUSES = ['open', 'answered', 'withdrawn'];
 const VIA = ['cli', 'file', 'slack'];
-const ID_RE = /^\d{12}-[a-z0-9]{6}$/;
+const ID_RE = REQUEST_ID_RE;
 const SECTION_ORDER = ['Request', 'Context', 'Options', 'Assumption', 'Findings', 'Error'];
 
 const iso = (d) => d.toISOString().replace(/\.\d{3}Z$/, 'Z');
-const reqPath = (id) => `board/requests/${id}.md`;
-const featPath = (slug) => `docs/feat-req/${slug}.md`;
+function checkId(id) {
+  if (!ID_RE.test(String(id))) throw new BoardError(`invalid request id "${id}"`);
+  return id;
+}
+const reqPath = (id) => `board/requests/${checkId(id)}.md`;
 
 export function newRequestId(now, rand = Math.random) {
   const stamp = iso(now).replace(/[-:TZ]/g, '').slice(0, 12);
@@ -95,7 +99,9 @@ function answerProblem(fm, sections, answer, notes) {
         if (keys.length !== ids.length || !ids.every((i) => i in answer)) return `answer must cover exactly the findings ${ids.join(', ')}`;
         return keys.every((k) => answer[k] === 'fix' || answer[k] === 'accept') ? null : 'each finding answer must be fix or accept';
       }
-      return oneOf(fm.gate === 'triage' ? ['accept', 'park', 'reject'] : ['approve', 'reject']);
+      const p = oneOf(fm.gate === 'triage' ? ['accept', 'park', 'reject'] : ['approve', 'reject']);
+      if (!p && fm.gate === 'design-approval' && answer === 'reject' && !hasNotes) return 'answer "reject" requires notes';
+      return p;
     }
     case 'question': {
       if (answer === 'text') return hasNotes ? null : 'answer "text" requires notes';
@@ -154,16 +160,20 @@ function readRequest(file) {
   return { fm: data, sections: parseSections(body) };
 }
 
+// Only files named <request id>.md are requests; anything else in board/requests/ is reported.
 export function listRequests(root) {
-  const dir = join(root, 'board/requests');
   const requests = [];
   const problems = [];
+  let dir;
+  try { dir = safePath(root, 'board/requests'); } catch (e) { return { requests, problems: [`board/requests: ${e.message}`] }; }
   if (!existsSync(dir)) return { requests, problems };
   for (const name of readdirSync(dir).filter((n) => n.endsWith('.md')).sort()) {
-    const path = join(dir, name);
+    const id = name.slice(0, -3);
+    if (!ID_RE.test(id)) { problems.push(`${name}: not a request id (YYYYMMDDHHMM-xxxxxx)`); continue; }
     try {
+      const path = safePath(root, `board/requests/${name}`);
       const { fm, sections } = readRequest(path);
-      requests.push({ id: fm.id ?? name.replace(/\.md$/, ''), path, fm, sections });
+      requests.push({ id: fm.id ?? id, path, fm, sections });
     } catch (e) {
       problems.push(`${name}: ${e.message}`);
     }
@@ -175,10 +185,12 @@ export function answeredFor(root, slug) {
   return listRequests(root).requests.filter((r) => r.fm.status === 'answered' && r.fm.effort === slug);
 }
 
-export async function postRequest(clone, req, { identity, workerId, releaseFrom }) {
+export async function postRequest(clone, req, { identity, workerId, releaseFrom, sleep, hooks }) {
+  const id = checkId(req.id);
+  if (req.effort != null) checkSlug(req.effort);
+  if (releaseFrom) checkSlug(releaseFrom.slug);
   const sections = { ...req.sections };
   if (sections.Error != null) sections.Error = fenced(safeExcerpt(String(sections.Error)).text);
-  const id = req.id;
   const slugOk = releaseFrom?.slug === req.effort;
   if (req.blocking && req.scope === 'effort' && !(releaseFrom && slugOk)) return { ok: false, reason: 'needs-release' };
   const text = buildRequest({ ...req, sections });
@@ -186,7 +198,7 @@ export async function postRequest(clone, req, { identity, workerId, releaseFrom 
   if (problems.length) return { ok: false, reason: 'invalid', problems };
   const trailers = { request: id, ...(req.effort ? { effort: req.effort } : {}) };
   const writeFile = (c) => {
-    const abs = join(c, reqPath(id));
+    const abs = safePath(c, reqPath(id));
     mkdirSync(dirname(abs), { recursive: true });
     writeFileSync(abs, text);
     return reqPath(id);
@@ -195,9 +207,9 @@ export async function postRequest(clone, req, { identity, workerId, releaseFrom 
   if (req.blocking && releaseFrom) {
     const { slug, claimant } = releaseFrom;
     const r = await release(clone, slug, {
-      claimant, identity, workerId, kind: 'request', subject: id, trailers: { request: id },
+      claimant, identity, workerId, hooks, kind: 'request', subject: id, trailers: { request: id },
       extraMutate: (c) => {
-        const f = join(c, featPath(slug));
+        const f = safePath(c, featReqPath(slug));
         writeFileSync(f, setFields(readFileSync(f, 'utf8'), { awaiting: id }));
         return [writeFile(c)];
       },
@@ -206,23 +218,24 @@ export async function postRequest(clone, req, { identity, workerId, releaseFrom 
   }
 
   const r = await boardWrite(clone, {
-    kind: 'request', subject: id, identity, onReject: 'rebase',
+    kind: 'request', subject: id, identity, onReject: 'rebase', commitFromHead: true, sleep, hooks,
     trailers: { ...(workerId ? { worker: workerId } : {}), ...trailers },
     mutate: (c) => [writeFile(c)],
-    validate: (c) => existsSync(join(c, reqPath(id))),
+    validate: (c) => existsSync(safePath(c, reqPath(id))),
   });
   return r.ok ? { ok: true, id } : { ok: false, reason: r.reason };
 }
 
-export async function answerRequest(clone, id, { answer, notes, by, via = 'cli', identity, now }) {
+export async function answerRequest(clone, id, { answer, notes, by, via = 'cli', identity, now, sleep, hooks }) {
+  checkId(id);
   const stamp = iso(now);
   let refusal = null;
   const r = await boardWrite(clone, {
-    kind: 'answer', subject: id, identity, onReject: 'rebase',
+    kind: 'answer', subject: id, identity, onReject: 'rebase', commitFromHead: true, sleep, hooks,
     trailers: { request: id, answeredBy: by },
     mutate: (c) => {
       refusal = null;
-      const file = join(c, reqPath(id));
+      const file = safePath(c, reqPath(id));
       if (!existsSync(file)) { refusal = 'missing'; return []; }
       const { fm, sections } = readRequest(file);
       if (fm.status !== 'open') { refusal = 'not-open'; return []; }
@@ -235,7 +248,7 @@ export async function answerRequest(clone, id, { answer, notes, by, via = 'cli',
       return [reqPath(id)];
     },
     validate: (c) => {
-      const file = join(c, reqPath(id));
+      const file = safePath(c, reqPath(id));
       if (!existsSync(file)) return false;
       const { fm } = readRequest(file);
       return fm.answered_by === by && fm.answered_at === stamp;
@@ -246,29 +259,31 @@ export async function answerRequest(clone, id, { answer, notes, by, via = 'cli',
   return { ok: false, reason: r.reason };
 }
 
-export async function withdrawRequest(clone, id, { identity, workerId, slug, note }) {
+export async function withdrawRequest(clone, id, { identity, workerId, slug, note, sleep, hooks }) {
+  checkId(id);
+  if (slug != null) checkSlug(slug);
   let refusal = null;
   const r = await boardWrite(clone, {
-    kind: 'withdraw', subject: id, identity, onReject: 'rebase',
+    kind: 'withdraw', subject: id, identity, onReject: 'rebase', commitFromHead: true, sleep, hooks,
     trailers: { ...(workerId ? { worker: workerId } : {}), ...(slug ? { effort: slug } : {}), request: id },
     mutate: (c) => {
       refusal = null;
-      const file = join(c, reqPath(id));
+      const file = safePath(c, reqPath(id));
       if (!existsSync(file)) { refusal = 'missing'; return []; }
       if (readRequest(file).fm.status !== 'open') { refusal = 'not-open'; return []; }
       unlinkSync(file);
       const paths = [reqPath(id)];
-      const f = join(c, featPath(slug ?? ''));
-      if (slug && existsSync(f)) {
+      const f = slug ? safePath(c, featReqPath(slug)) : null;
+      if (f && existsSync(f)) {
         let text = readFileSync(f, 'utf8');
         if (parseDoc(text).data.awaiting === id) text = setFields(text, { awaiting: null });
         if (note) text = appendToSection(text, 'Decisions', note);
         writeFileSync(f, text);
-        paths.push(featPath(slug));
+        paths.push(featReqPath(slug));
       }
       return paths;
     },
-    validate: (c) => !existsSync(join(c, reqPath(id))),
+    validate: (c) => !existsSync(safePath(c, reqPath(id))),
   });
   if (r.ok) return { ok: true };
   if (r.reason === 'nothing-to-do' && refusal) return { ok: false, reason: refusal };

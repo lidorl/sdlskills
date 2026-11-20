@@ -268,7 +268,7 @@ export function applyAnswered(clone, slug, opts) {
 async function applyOnce(clone, slug, { claimant, identity, workerId, now, rand, hooks }) {
   let result = { agentInput: [], problems: [] };
   const r = await boardWrite(clone, {
-    kind: 'apply', subject: slug, identity, onReject: 'restart', hooks,
+    kind: 'apply', subject: slug, identity, onReject: 'restart', hooks, commitFromHead: true,
     trailers: { ...(workerId ? { worker: workerId } : {}), effort: slug },
     mutate: (c) => {
       result = { agentInput: [], problems: [] };
@@ -292,7 +292,7 @@ export async function applyClosed(clone, { identity, workerId, now, rand, hooks 
   const claimant = workerId ?? identity.name;
   let result = { applied: [], problems: [] };
   const r = await retrying(() => boardWrite(clone, {
-    kind: 'apply', subject: 'closed', identity, onReject: 'restart', hooks,
+    kind: 'apply', subject: 'closed', identity, onReject: 'restart', hooks, commitFromHead: true,
     trailers: workerId ? { worker: workerId } : {},
     mutate: (c) => {
       result = { applied: [], problems: [] };

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { loadEfforts, rank, overlaps } from './queue.mjs';
@@ -105,4 +105,25 @@ test('overlaps names the other effort and only shared writable repos', () => {
   const g = e('g', { repos: ['docs'], fm: live }); // only readonly shared
   const opts = { now: NOW, ttlMs: TTL, readonlyKeys: new Set(['docs']) };
   assert.deepEqual(overlaps(a, [a, b, c, d, f, g], opts), [{ slug: 'b', repos: ['api'] }]);
+});
+
+test('loadEfforts reports feat-req filenames that are not slugs and skips them', () => {
+  const root = tree({
+    'docs/feat-req/good.md': '---\nstatus: ACCEPTED\n---\n# g\n',
+    'docs/feat-req/Bad Name.md': '---\nstatus: ACCEPTED\n---\n# b\n',
+    'docs/feat-req/-dash.md': '---\nstatus: ACCEPTED\n---\n# d\n',
+  });
+  const { efforts, problems } = loadEfforts(root);
+  assert.deepEqual(efforts.map((x) => x.slug), ['good']);
+  assert.deepEqual(problems.map((p) => p.file).sort(), ['docs/feat-req/-dash.md', 'docs/feat-req/Bad Name.md']);
+  assert.match(problems[0].message, /not a valid slug/);
+});
+
+test('loadEfforts refuses a symlinked feat-req (reported, not read)', () => {
+  const outside = tree({ 'secret.md': '---\nstatus: ACCEPTED\n---\n# secret\n' });
+  const root = tree({ 'docs/feat-req/good.md': '---\nstatus: ACCEPTED\n---\n# g\n' });
+  symlinkSync(join(outside, 'secret.md'), join(root, 'docs/feat-req/evil.md'));
+  const { efforts, problems } = loadEfforts(root);
+  assert.deepEqual(efforts.map((x) => x.slug), ['good']);
+  assert.match(problems[0].message, /symlink/);
 });

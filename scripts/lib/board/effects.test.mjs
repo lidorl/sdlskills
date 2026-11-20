@@ -392,3 +392,21 @@ test('applyClosed applies only clarifications: an error park on an IMPLEMENTED e
   assert.equal(existsSync(join(clone, `board/requests/${e.id}.md`)), true);
   assert.equal(g(clone, 'rev-parse', 'HEAD'), head);
 });
+
+test('apply patches the committed docs: a person\'s uncommitted feat-req and plan edits stay local', async () => {
+  const rv = answered({ kind: 'gate', gate: 'review-findings', answer: { F1: 'fix' }, sections: { Findings: '### F1: Missing check' } });
+  const fx = setup({ fm: { title: 'Bulk export', status: 'IN_PROGRESS' }, files: { 'docs/plans/bulk-export.md': PLAN }, reqs: [rv] });
+  const clone = await claimed(fx);
+  writeFileSync(join(clone, 'docs/feat-req/bulk-export.md'), `${read(clone, 'docs/feat-req/bulk-export.md')}\nfeat draft\n`);
+  writeFileSync(join(clone, 'docs/plans/bulk-export.md'), PLAN.replace('# Plan', '# Plan\n\nplan draft'));
+  const r = await apply(clone);
+  assert.equal(r.ok, true);
+  const featOnMain = g(fx.remote, 'show', 'main:docs/feat-req/bulk-export.md');
+  const planOnMain = g(fx.remote, 'show', 'main:docs/plans/bulk-export.md');
+  assert.ok(featOnMain.includes(rv.id));
+  assert.match(planOnMain, /Fix review finding F1/);
+  assert.doesNotMatch(featOnMain, /feat draft/);
+  assert.doesNotMatch(planOnMain, /plan draft/);
+  assert.match(read(clone, 'docs/feat-req/bulk-export.md'), /feat draft/);
+  assert.match(read(clone, 'docs/plans/bulk-export.md'), /plan draft[\s\S]*Fix review finding F1/);
+});

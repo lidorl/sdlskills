@@ -1,9 +1,9 @@
 // Queue ranking: the code version of select-next-task Step 3 rules 2-5 (rule 1, user override, stays in
-// the skill). Pure functions over the working tree; no git calls.
+// the skill). Pure functions over a docs tree; no git calls. Problem files are repo-relative.
 import { readdirSync, readFileSync, existsSync } from 'node:fs';
-import { join } from 'node:path';
 import { parseDoc } from './frontmatter.mjs';
 import { claimState } from './claims.mjs';
+import { safePath, SLUG_RE } from './safe-path.mjs';
 
 const CANDIDATE = new Set(['ACCEPTED', 'DESIGNED', 'PLANNED', 'IN_PROGRESS']);
 const IN_FLIGHT = new Set(['DESIGNED', 'PLANNED', 'IN_PROGRESS']);
@@ -18,27 +18,30 @@ const normDate = (d) => {
 export function loadEfforts(root) {
   const efforts = [];
   const problems = [];
-  const dir = join(root, 'docs', 'feat-req');
+  const read = (rel) => readFileSync(safePath(root, rel), 'utf8'); // the path guard throws on a symlink
+  let dir;
+  try { dir = safePath(root, 'docs/feat-req'); } catch (err) { return { efforts, problems: [{ file: 'docs/feat-req', message: err.message }] }; }
   if (!existsSync(dir)) return { efforts, problems };
   for (const name of readdirSync(dir).filter((f) => f.endsWith('.md')).sort()) {
     const slug = name.slice(0, -3);
-    const file = join(dir, name);
+    const file = `docs/feat-req/${name}`;
+    if (!SLUG_RE.test(slug)) { problems.push({ file, message: `"${slug}" is not a valid slug (lowercase letters, digits, dashes)` }); continue; }
     let fm;
     try {
-      fm = parseDoc(readFileSync(file, 'utf8')).data ?? {};
+      fm = parseDoc(read(file)).data ?? {};
     } catch (err) {
       problems.push({ file, message: err.message });
       continue;
     }
     let repos = [];
-    const designFile = join(root, 'docs', 'design', name);
-    if (existsSync(designFile)) {
-      try {
-        const r = parseDoc(readFileSync(designFile, 'utf8')).data?.repos;
+    const designFile = `docs/design/${name}`;
+    try {
+      if (existsSync(safePath(root, designFile))) {
+        const r = parseDoc(read(designFile)).data?.repos;
         if (Array.isArray(r)) repos = r.map(String);
-      } catch (err) {
-        problems.push({ file: designFile, message: err.message });
       }
+    } catch (err) {
+      problems.push({ file: designFile, message: err.message });
     }
     efforts.push({
       slug, status: fm.status, priority: fm.priority, severity: fm.severity, date: normDate(fm.date), fm, repos,
