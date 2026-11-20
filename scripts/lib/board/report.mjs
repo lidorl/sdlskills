@@ -6,7 +6,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
-import { assertOnMain, boardWrite, identityEnv, BoardError } from './git.mjs';
+import { assertOnMain, boardWrite, BoardError } from './git.mjs';
 import { committedFm, featReqPath, NOT_HOLDABLE } from './claims.mjs';
 import { parseDoc, setFields } from './frontmatter.mjs';
 import { reportPaths } from './paths.mjs';
@@ -60,8 +60,9 @@ function mergeTexts(clone, ours, base, theirs) {
 // origin/main also changed is merged 3-way here; in a feat-req the protocol fields are main's (they only
 // ever change through protocol writes), so a renew next to the agent's status edit is not a conflict.
 // Any real conflict throws SyncConflict before anything is touched: the edits stay exactly as they were.
-export function syncKeepingWork(clone, env) {
-  git(clone, ['fetch', 'origin', 'main'], { env });
+// `fetch: false` when the caller has just fetched.
+export function syncKeepingWork(clone, env, { fetch = true } = {}) {
+  if (fetch) git(clone, ['fetch', 'origin', 'main'], { env });
   const head = git(clone, ['rev-parse', 'HEAD'], { env }).trim();
   if (head === git(clone, ['rev-parse', 'origin/main'], { env }).trim()) return;
   if (git(clone, ['merge-base', '--is-ancestor', 'HEAD', 'origin/main'], { env, allowFail: true }) === null) {
@@ -77,7 +78,7 @@ export function syncKeepingWork(clone, env) {
     const ours = existsSync(abs) && statSync(abs).isFile() ? readFileSync(abs) : null;
     const base = show(clone, 'HEAD', path);
     const theirs = show(clone, 'origin/main', path);
-    if (ours && theirs && ours.equals(theirs)) { merged.set(path, ours); continue; }
+    if (ours && theirs && ours.equals(theirs)) { merged.set(path, { bytes: ours, inHead: !!base }); continue; }
     if (!ours || !base || !theirs) { conflicts.push(path); continue; }
     let o = ours.toString('utf8');
     let b = base.toString('utf8');
@@ -85,7 +86,7 @@ export function syncKeepingWork(clone, env) {
     if (FEAT_REQ_RE.test(path)) { o = withProtocolFields(o, t); b = withProtocolFields(b, t); }
     const m = mergeTexts(clone, o, b, t);
     if (m === null) conflicts.push(path);
-    else merged.set(path, Buffer.from(m, 'utf8'));
+    else merged.set(path, { bytes: Buffer.from(m, 'utf8'), inHead: true });
   }
   if (conflicts.length) throw new SyncConflict(conflicts);
 
@@ -100,24 +101,30 @@ export function syncKeepingWork(clone, env) {
       chmodSync(s.abs, s.mode);
     }
   };
-  if (saved.length) git(clone, ['checkout', 'HEAD', '--', ...saved.map((s) => s.path)], { env });
+  // Clear the way for the fast-forward: tracked files back to HEAD, files HEAD lacks out of the tree.
+  const tracked = saved.filter((x) => merged.get(x.path).inHead).map((x) => x.path);
+  const untracked = saved.filter((x) => !merged.get(x.path).inHead).map((x) => x.path);
+  if (tracked.length) git(clone, ['checkout', 'HEAD', '--', ...tracked], { env });
+  if (untracked.length) git(clone, ['rm', '-q', '--cached', '--ignore-unmatch', '--', ...untracked], { env, allowFail: true });
+  for (const s of saved) if (untracked.includes(s.path)) rmSync(s.abs, { force: true });
   if (git(clone, ['merge', '--ff-only', 'origin/main'], { env, allowFail: true }) === null) {
-    git(clone, ['reset', '-q', '--', ...saved.map((s) => s.path)], { env, allowFail: true });
+    if (tracked.length) git(clone, ['reset', '-q', '--', ...tracked], { env, allowFail: true });
     putBack((s) => s.bytes);
     throw new BoardError('cannot fast-forward to origin/main');
   }
-  putBack((s) => merged.get(s.path));
+  putBack((s) => merged.get(s.path).bytes);
 }
 
 // Publish the effort's working docs as `claimant`. The holder is whoever main says; the working copy may
 // already say IMPLEMENTED/PARKED, which is the report. Returns { ok: true, sha } or { ok: false, reason }:
-//   not-holder | closed  — nothing was pushed (pre-check or in-write check)
+//   not-holder | closed  — nothing was pushed
 //   unmerged             — the edits conflict with main; nothing pushed, the working tree is untouched (paths)
 //   conflict | race      — the push lost; non-protocol files kept per keep-work (kept, conflicted), feat-req edits dropped
 //   landed               — the report landed but the claim was replaced right after
-// `workerId` adds the Worker trailer; `body` adds a paragraph to the commit message.
+// `workerId` adds the Worker trailer; `body` adds a paragraph to the commit message; `fetched` skips the
+// first fetch when the caller has just fetched.
 export async function reportEffort(clone, slug, {
-  phase, claimant, identity, workerId, extraPaths = [], now, sleep, hooks, body,
+  phase, claimant, identity, workerId, extraPaths = [], now, sleep, hooks, body, fetched = false,
 }) {
   assertOnMain(clone);
   const feat = featReqPath(slug);
@@ -125,21 +132,13 @@ export async function reportEffort(clone, slug, {
     if (!fm || fm.claimed_by !== claimant) return 'not-holder';
     return NOT_HOLDABLE.has(fm.status) ? 'closed' : null;
   };
-  try {
-    syncKeepingWork(clone, identityEnv(identity));
-  } catch (e) {
-    if (e instanceof SyncConflict) return { ok: false, reason: 'unmerged', paths: e.paths };
-    throw e;
-  }
-  const pre = refusal(committedFm(clone, slug));
-  if (pre) return { ok: false, reason: pre };
   const stamp = iso(now);
   let refused = null;
   let r;
   try {
     r = await boardWrite(clone, {
       kind: 'report', subject: slug, body, identity, onReject: 'rebase', onFailure: 'keep-work', hooks, sleep,
-      sync: syncKeepingWork,
+      sync: (c, env) => syncKeepingWork(c, env, { fetch: !fetched }), // the holder check is in mutate
       trailers: { ...(workerId ? { worker: workerId } : {}), effort: slug, phase },
       mutate: (c) => {
         const up = committedFm(c, slug);

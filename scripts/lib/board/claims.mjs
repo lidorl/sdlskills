@@ -71,15 +71,16 @@ const trailersFor = (slug, workerId, extra = {}) => ({
 const MAX_ATTEMPTS = 3;
 class NotHolder extends Error {}
 
-// `body` (optional) goes into the claim or takeover commit message, e.g. overlap warnings.
-export async function claim(clone, slug, { claimant, identity, workerId, now, ttlMs, hooks, body }) {
+// `body` (optional) goes into the claim or takeover commit message, e.g. overlap warnings. `fetched`: the
+// caller has just fetched origin/main, so the first attempt does not fetch again.
+export async function claim(clone, slug, { claimant, identity, workerId, now, ttlMs, hooks, body, fetched = false }) {
   checkSlug(slug);
   const stamp = iso(now);
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
     // The commit kind and Replaces trailer are fixed before boardWrite starts, so peek at the freshly
     // fetched origin/main first. mutate re-reads after boardWrite's own fetch and refuses (mismatch) if the
     // state it sees is not the one the kind/trailer describe; we then re-peek and retry.
-    fetchMain(clone, identityEnv(identity));
+    if (attempt > 0 || !fetched) fetchMain(clone, identityEnv(identity));
     const peek = committedFm(clone, slug, 'origin/main');
     if (holdable(peek, claimant) && claimState(peek, now, ttlMs) === 'live') {
       // Already ours (a retry, or a restarted worker with the same id): refresh the lease instead.
