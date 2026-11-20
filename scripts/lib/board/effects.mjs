@@ -1,7 +1,7 @@
 // Answer effects: what happens, in the docs, once a request has been answered. Answering only writes
 // the request file; the next claimant of the effort applies it all in one `apply` commit.
-import { readFileSync, writeFileSync, existsSync, readdirSync, mkdirSync, unlinkSync, rmSync } from 'node:fs';
-import { join, dirname, resolve, relative, isAbsolute, basename } from 'node:path';
+import { readFileSync, writeFileSync, existsSync, readdirSync, mkdirSync, unlinkSync, rmSync, lstatSync, realpathSync } from 'node:fs';
+import { join, dirname, resolve, relative, isAbsolute, basename, sep } from 'node:path';
 import { stringify } from 'yaml';
 import { boardWrite } from './git.mjs';
 import { holds } from './claims.mjs';
@@ -21,12 +21,26 @@ const firstLine = (s) => String(s ?? '').split('\n').map((l) => l.trim()).find(B
 const SLUG_RE = /^[a-z0-9][a-z0-9-]*$/;
 const ID_RE = /^\d{12}-[a-z0-9]{6}$/;
 
+// The one path guard: stays inside the repo, lexically and for real (no symlinked component, no escape).
 function inside(root, rel) {
   const abs = resolve(root, rel);
   const r = relative(resolve(root), abs);
   if (r === '' || r.startsWith('..') || isAbsolute(r)) throw new Error(`path escapes the repository: ${rel}`);
+  let cur = resolve(root);
+  for (const part of r.split(sep)) {
+    cur = join(cur, part);
+    let st;
+    try { st = lstatSync(cur); } catch (e) { if (e.code === 'ENOENT') break; throw e; }
+    if (st.isSymbolicLink()) throw new Error(`refusing symlinked path: ${rel}`);
+  }
+  let anc = abs;
+  while (!existsSync(anc)) anc = dirname(anc);
+  const real = relative(realpathSync(root), realpathSync(anc));
+  if (real.startsWith('..') || isAbsolute(real)) throw new Error(`path escapes the repository: ${rel}`);
   return abs;
 }
+
+const exists = (root, rel) => existsSync(inside(root, rel));
 
 function readText(root, rel) {
   return readFileSync(inside(root, rel), 'utf8');
@@ -52,7 +66,7 @@ function deleteFile(root, rel, journal) {
 
 function restore(root, journal) {
   for (const [rel, original] of journal) {
-    const abs = join(root, rel);
+    const abs = inside(root, rel);
     if (original === null) rmSync(abs, { force: true });
     else writeFileSync(abs, original);
   }
@@ -60,16 +74,15 @@ function restore(root, journal) {
 
 // docs/plans/<slug>.md, else the highest-numbered <slug>-N.md that isn't IMPLEMENTED.
 function planFor(root, slug) {
-  const dir = join(root, 'docs/plans');
-  if (!existsSync(dir)) return null;
-  if (existsSync(join(dir, `${slug}.md`))) return `docs/plans/${slug}.md`;
+  if (!exists(root, 'docs/plans')) return null;
+  if (exists(root, `docs/plans/${slug}.md`)) return `docs/plans/${slug}.md`;
   const esc = slug.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const numbered = readdirSync(dir)
+  const numbered = readdirSync(inside(root, 'docs/plans'))
     .map((n) => ({ n, m: new RegExp(`^${esc}-(\\d+)\\.md$`).exec(n) }))
     .filter((x) => x.m)
     .sort((a, b) => Number(b.m[1]) - Number(a.m[1]));
   for (const { n } of numbered) {
-    if (parseDoc(readFileSync(join(dir, n), 'utf8')).data.status !== 'IMPLEMENTED') return `docs/plans/${n}`;
+    if (parseDoc(readText(root, `docs/plans/${n}`)).data.status !== 'IMPLEMENTED') return `docs/plans/${n}`;
   }
   return null;
 }
@@ -136,7 +149,7 @@ export function applyAnswer(root, request, { now, claimant, rand, journal }) {
   if (fm.kind === 'gate' && fm.gate === 'design-approval') {
     decide(label, answer);
     if (answer === 'approve') {
-      if (existsSync(join(root, designRel(slug)))) touch(designRel(slug), setFields(readText(root, designRel(slug)), { status: 'APPROVED' }));
+      if (exists(root, designRel(slug))) touch(designRel(slug), setFields(readText(root, designRel(slug)), { status: 'APPROVED' }));
       feat = setFields(feat, { status: 'DESIGNED' });
     } else {
       agentInput = notes || 'design rejected without notes';
@@ -216,7 +229,7 @@ function applyRequests(c, candidates, { claimant, now, rand }) {
   for (const req of ordered) {
     let bad = [];
     try {
-      bad = validateRequest(readFileSync(req.path, 'utf8'), basename(req.path));
+      bad = validateRequest(readText(c, `board/requests/${basename(req.path)}`), basename(req.path));
     } catch (e) { bad = [e.message]; }
     if (!bad.length && !SLUG_RE.test(String(req.fm.effort))) bad = [`effort "${req.fm.effort}" is not a valid slug`];
     if (bad.length) {
@@ -309,14 +322,22 @@ export async function applyClosed(clone, { identity, workerId, now, rand, hooks 
           bad.push({ id: req.id, problems: [`effort "${req.fm.effort}" is not a valid slug`] });
           continue;
         }
-        const f = join(c, featRel(req.fm.effort));
-        if (existsSync(f) && parseDoc(readFileSync(f, 'utf8')).data.status === 'IMPLEMENTED') closed.push(req);
+        let implemented = false;
+        try {
+          implemented = exists(c, featRel(req.fm.effort)) && parseDoc(readText(c, featRel(req.fm.effort))).data.status === 'IMPLEMENTED';
+        } catch (e) { bad.push({ id: req.id, problems: [e.message] }); continue; }
+        if (!implemented) continue;
+        if (req.fm.kind !== 'clarification') {
+          bad.push({ id: req.id, problems: [`a ${req.fm.kind} answer cannot be applied to an IMPLEMENTED effort`] });
+          continue;
+        }
+        closed.push(req);
       }
       const out = closed.length ? applyRequests(c, closed, { claimant, now, rand }) : { paths: [], applied: [], problems: [] };
       result = { applied: out.applied, problems: [...bad, ...out.problems] };
       return out.paths;
     },
-    validate: (c) => result.applied.every((id) => !existsSync(join(c, requestRel(id)))),
+    validate: (c) => result.applied.every((id) => !exists(c, requestRel(id))),
   }));
   if (r.ok || r.reason === 'nothing-to-do') return { ok: true, ...result };
   return { ok: false, reason: r.reason, applied: [], problems: [] };

@@ -1,7 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, symlinkSync, mkdirSync, writeFileSync, mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { makeBoard, IDENT } from './fixtures.mjs';
 import { applyAnswer, applyAnswered, applyClosed } from './effects.mjs';
@@ -330,5 +331,54 @@ test('applyClosed with nothing to do commits nothing', async () => {
   const clone = fx.clone('a');
   const head = g(clone, 'rev-parse', 'HEAD');
   assert.deepEqual(await applyClosed(clone, { identity: IDENT, workerId: WHO, now: NOW }), { ok: true, applied: [], problems: [] });
+  assert.equal(g(clone, 'rev-parse', 'HEAD'), head);
+});
+
+test('symlinked plan file: the write is refused, the outside file is untouched, the tree is clean', async () => {
+  const rv = answered({ kind: 'gate', gate: 'review-findings', answer: { F1: 'fix' }, sections: { Findings: '### F1: x' } });
+  const fx = setup({ fm: { title: 'Bulk export', status: 'IN_PROGRESS' }, reqs: [rv] });
+  const outside = join(mkdtempSync(join(tmpdir(), 'outside-')), 'target.md');
+  writeFileSync(outside, '# outside\n');
+  const pusher = fx.clone('pusher');
+  mkdirSync(join(pusher, 'docs/plans'), { recursive: true });
+  symlinkSync(outside, join(pusher, 'docs/plans/bulk-export.md'));
+  g(pusher, 'add', '-A'); g(pusher, 'commit', '-m', 'symlink'); g(pusher, 'push', 'origin', 'main');
+  const clone = await claimed(fx);
+  const head = g(clone, 'rev-parse', 'HEAD');
+  await assert.rejects(apply(clone), /symlink/);
+  assert.equal(readFileSync(outside, 'utf8'), '# outside\n');
+  assert.equal(dirty(clone), '');
+  assert.equal(g(clone, 'rev-parse', 'HEAD'), head);
+});
+
+test('symlinked docs/feat-req directory: applyClosed refuses and reports', async () => {
+  const c = answered({ kind: 'clarification', sections: { Assumption: 'x' }, answer: 'confirm' });
+  const fx = setup({ fm: { title: 'Bulk export', status: 'IMPLEMENTED' }, reqs: [c] });
+  const outsideDir = mkdtempSync(join(tmpdir(), 'outside-'));
+  writeFileSync(join(outsideDir, 'bulk-export.md'), '---\nstatus: IMPLEMENTED\n---\n');
+  const pusher = fx.clone('pusher');
+  g(pusher, 'rm', '-rq', 'docs/feat-req');
+  mkdirSync(join(pusher, 'docs'), { recursive: true });
+  symlinkSync(outsideDir, join(pusher, 'docs/feat-req'));
+  g(pusher, 'add', '-A'); g(pusher, 'commit', '-m', 'symlink dir'); g(pusher, 'push', 'origin', 'main');
+  const clone = fx.clone('a');
+  const r = await applyClosed(clone, { identity: IDENT, workerId: WHO, now: NOW });
+  assert.deepEqual(r.applied, []);
+  assert.match(r.problems[0].problems[0], /symlink/);
+  assert.equal(readFileSync(join(outsideDir, 'bulk-export.md'), 'utf8'), '---\nstatus: IMPLEMENTED\n---\n');
+  assert.equal(dirty(clone), '');
+  assert.equal(existsSync(join(clone, `board/requests/${c.id}.md`)), true);
+});
+
+test('applyClosed applies only clarifications: an error park on an IMPLEMENTED effort is reported and kept', async () => {
+  const e = answered({ kind: 'error', sections: { Error: 'boom' }, answer: 'park' });
+  const fx = setup({ fm: { title: 'Bulk export', status: 'IMPLEMENTED' }, reqs: [e] });
+  const clone = fx.clone('a');
+  const head = g(clone, 'rev-parse', 'HEAD');
+  const r = await applyClosed(clone, { identity: IDENT, workerId: WHO, now: NOW });
+  assert.deepEqual(r.applied, []);
+  assert.equal(r.problems[0].id, e.id);
+  assert.equal(fmOf(clone, 'docs/feat-req/bulk-export.md').status, 'IMPLEMENTED');
+  assert.equal(existsSync(join(clone, `board/requests/${e.id}.md`)), true);
   assert.equal(g(clone, 'rev-parse', 'HEAD'), head);
 });
