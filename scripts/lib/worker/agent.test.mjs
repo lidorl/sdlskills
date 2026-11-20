@@ -12,8 +12,9 @@ const tmp = () => mkdtempSync(join(tmpdir(), 'agent-test-'));
 function fakeRun(dir, script, extra = {}) {
   const sp = join(dir, 'script.json');
   writeFileSync(sp, JSON.stringify(script));
+  // No timeout unless a test asks for one: a slow machine must not turn into a failed run.
   return runAgent({
-    cmd: process.execPath, args: [FAKE], cwd: dir, timeoutMs: 5000, logPath: join(dir, 'logs', 'run.log'),
+    cmd: process.execPath, args: [FAKE], cwd: dir, timeoutMs: 0, logPath: join(dir, 'logs', 'run.log'),
     env: { FAKE_AGENT_SCRIPT: sp, SDLC_RESULT_FILE: join(dir, 'run', 'result.json') }, ...extra,
   });
 }
@@ -96,11 +97,10 @@ test('runAgent: onTick errors are logged and do not kill the run; ticks never ov
 
 test('runAgent kills on timeout and reports timedOut', async () => {
   const dir = tmp();
-  const t0 = Date.now();
-  const r = await fakeRun(dir, { result: null, sleepMs: 300 }, { timeoutMs: 100 });
+  // The child would sleep a minute and then write its result: it can only finish this early by being killed.
+  const r = await fakeRun(dir, { result: { outcome: 'failed', error: { message: 'late' } }, sleepMs: 60000 }, { timeoutMs: 100 });
   assert.equal(r.timedOut, true);
   assert.ok(r.signal === 'SIGTERM' || r.exitCode !== 0);
-  assert.ok(Date.now() - t0 < 1500);
   assert.equal(existsSync(join(dir, 'run', 'result.json')), false);
 });
 

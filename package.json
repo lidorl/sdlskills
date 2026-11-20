@@ -4,7 +4,7 @@
   "type": "module",
   "license": "MIT",
   "scripts": {
-    "test": "node --test \"scripts/**/*.test.mjs\"",
+    "test": "node --import ./scripts/test-setup.mjs --test \"scripts/**/*.test.mjs\"",
     "status": "node scripts/render-status.mjs"
   },
   "dependencies": {

@@ -57,6 +57,7 @@ export const SKILLS = [
 const INSTALLER_ONLY_LIB = ['choose-tool', 'code-repo', 'complete-path', 'guide', 'prereqs', 'prompter', 'report', 'style', 'ui'];
 const INSTALLER_ONLY_FILES = [
   'install-guided.test.mjs',
+  'test-setup.mjs', // the kit's own npm test harness
   ...INSTALLER_ONLY_LIB.flatMap((m) => [`lib/${m}.mjs`, `lib/${m}.test.mjs`]),
 ];
 
