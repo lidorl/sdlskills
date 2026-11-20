@@ -29,4 +29,28 @@ export function pushCodeBranches(clone, slug, keys) {
   return out;
 }
 
+// On a fresh claim (Ruling P2-11): an existing checkout's feat/<slug> must start from what was last pushed,
+// not from a branch this worker left behind. origin/feat/<slug> present → local branch reset to it; absent →
+// a stale local branch is renamed aside so assemble-env branches from the default branch. Checkouts must be
+// clean (salvaged) first. Returns log lines.
+export function prepareCheckouts(clone, slug, keys, stamp) {
+  const branch = `feat/${slug}`;
+  const notes = [];
+  for (const key of keys) {
+    const dir = join(clone, 'workspace', key);
+    if (!existsSync(join(dir, '.git'))) continue;
+    const local = (() => { try { git(dir, ['rev-parse', '--verify', '-q', `refs/heads/${branch}`]); return true; } catch { return false; } })();
+    if (git(dir, ['ls-remote', '--heads', 'origin', branch]).trim()) {
+      git(dir, ['fetch', '-q', 'origin', branch]);
+      git(dir, ['checkout', '-q', '-B', branch, 'FETCH_HEAD']);
+      notes.push(`workspace/${key}: ${branch} reset to origin/${branch}`);
+    } else if (local) {
+      const aside = `salvaged/${branch}-${stamp}`;
+      git(dir, ['branch', '-m', branch, aside]);
+      notes.push(`workspace/${key}: unpushed local ${branch} renamed to ${aside}`);
+    }
+  }
+  return notes;
+}
+
 export const dirtyNote = (dirty) => dirty.map((k) => `workspace/${k} has uncommitted changes (not pushed)`).join('\n');

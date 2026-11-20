@@ -1,5 +1,5 @@
 // The worker loop step: one iteration of docs/design/workers.md "The worker loop". A step holds at most one
-// effort; between steps that is ctx.holding (memory) plus <home>/run/agent-input.json (Ruling P2-3).
+// effort; between steps that is ctx.holding (memory) plus <home>/run/agent-input/<slug>.json (Ruling P2-3).
 // What follows the agent run (report, request, errors) is in outcomes.mjs.
 import { join, dirname } from 'node:path';
 import { writeFileSync, existsSync, mkdirSync } from 'node:fs';
@@ -15,9 +15,10 @@ import { assemble as realAssemble, resolveRepoKeys } from '../../assemble-env.mj
 import { readConfig, readState } from './home.mjs';
 import { route, buildPrompt, agentCommand, runAgent as realRunAgent } from './agent.mjs';
 import { preflight, realDeps as preflightDeps } from './preflight.mjs';
-import {
-  readInput, writeInput, clearInput, lose, letGo, effortError, workerError, handleResult,
-} from './outcomes.mjs';
+import { lose, letGo, effortError, workerError, handleResult } from './outcomes.mjs';
+import { readInput, writeInput, savedSlugs } from './agent-input.mjs';
+import { salvage } from './salvage.mjs';
+import { prepareCheckouts } from './code-repos.mjs';
 
 // A problem the worker must not write past (unregistered, retired, config/registry mismatch): stop.
 export class WorkerFatal extends Error {}
@@ -25,6 +26,8 @@ export class WorkerFatal extends Error {}
 const CANDIDATE = new Set(['ACCEPTED', 'DESIGNED', 'PLANNED', 'IN_PROGRESS']);
 const iso = (d) => d.toISOString().replace(/\.\d{3}Z$/, 'Z');
 const firstLine = (e) => String(e?.message ?? e).split('\n')[0];
+export const BOARD_ERROR_LIMIT = 3; // board failures in a row on a held effort before an effort error
+const held = (slug, fresh) => ({ slug, fresh, developmentDone: false, stalls: 0, boardErrors: 0 });
 
 export function makeContext({ home, deps = {} }) {
   const cfg = readConfig(home);
@@ -53,10 +56,22 @@ export async function step(ctx) {
   }
   const snap = snapshotMain(ctx.clone);
   try {
-    return await stepOn(ctx, snap.dir);
+    const r = await stepOn(ctx, snap.dir);
+    if (ctx.holding) ctx.holding.boardErrors = 0;
+    return r;
   } catch (e) {
     if (!(e instanceof BoardError)) throw e;
     ctx.deps.log(`board write failed: ${firstLine(e)}; staying idle`);
+    const h = ctx.holding;
+    if (h && ++h.boardErrors >= BOARD_ERROR_LIMIT && ctx.board) {
+      // The lease would rot while we idle: hand the effort to a person instead.
+      const status = committedFm(ctx.clone, h.slug, 'origin/main')?.status ?? 'unknown';
+      try {
+        return await effortError(ctx, h.slug, status, `${BOARD_ERROR_LIMIT} board writes in a row failed; last: ${firstLine(e)}`, {});
+      } catch (e2) {
+        ctx.deps.log(`could not post the effort error for ${h.slug}: ${firstLine(e2)}`);
+      }
+    }
     return { action: 'idle' };
   } finally {
     snap.cleanup();
@@ -80,16 +95,15 @@ async function stepOn(ctx, board) {
   if (resolved.length) await clearResolved(ctx, resolved.map((r) => r.id));
 
   const now = deps.now();
-  const persisted = readInput(home);
+  const resumable = savedSlugs(home).find((s) => holds(clone, s, cfg.id, { ref: 'origin/main' }));
   let slug = ctx.holding?.slug ?? null;
   if (slug) {
     if (!holds(clone, slug, cfg.id, { ref: 'origin/main' })) return lose(ctx, slug);
-  } else if (persisted && holds(clone, persisted.slug, cfg.id, { ref: 'origin/main' })) {
-    slug = persisted.slug;
-    ctx.holding = { slug, developmentDone: false };
+  } else if (resumable) {
+    slug = resumable;
+    ctx.holding = held(slug, true);
     deps.log(`resuming ${slug} with its saved agent input`);
   } else {
-    if (persisted) clearInput(home);
     const { backoff_until: until } = readState(home);
     if (until && now < new Date(until)) {
       deps.log(`backing off until ${until}`);
@@ -100,7 +114,7 @@ async function stepOn(ctx, board) {
       await applyOnClosed(ctx, now);
       return { action: 'idle' };
     }
-    ctx.holding = { slug, developmentDone: false };
+    ctx.holding = held(slug, true);
   }
   return runHeld(ctx, slug, bcfg);
 }
@@ -135,12 +149,13 @@ async function pickAndClaim(ctx, board, bcfg, now) {
   const openIds = new Set(listRequests(board).requests.filter((r) => r.fm.status === 'open').map((r) => r.id));
   const ours = efforts.filter((e) => CANDIDATE.has(e.status) && e.fm?.claimed_by === cfg.id && claimState(e.fm, now, ttlMs) === 'live');
   const ro = readonlyKeys(clone);
+  let fetched = true; // step() fetched just now
   for (const e of [...ours, ...rank(efforts, { now, ttlMs, openRequestIds: openIds })]) {
     const warnings = overlaps(e, efforts, { now, ttlMs, readonlyKeys: ro })
       .map((o) => `${e.slug} shares ${o.repos.join(', ')} with ${o.slug}`);
     for (const w of warnings) deps.log(`warning: ${w}`);
     const r = await claim(clone, e.slug, {
-      claimant: cfg.id, identity, workerId: cfg.id, now, ttlMs, hooks: deps.hooks,
+      claimant: cfg.id, identity, workerId: cfg.id, now, ttlMs, hooks: deps.hooks, fetched,
       body: warnings.length ? `Overlap warning:\n${warnings.map((w) => `- ${w}`).join('\n')}` : undefined,
     });
     if (r.ok) {
@@ -148,6 +163,7 @@ async function pickAndClaim(ctx, board, bcfg, now) {
       return e.slug;
     }
     deps.log(`could not claim ${e.slug} (${r.reason})`);
+    fetched = false;
   }
   return null;
 }
@@ -177,17 +193,20 @@ async function runHeld(ctx, slug, bcfg) {
     return { action: 'idle' };
   }
   for (const p of a.problems) deps.log(`warning: request ${p.id} not applied: ${p.problems.join('; ')}`);
-  const persisted = readInput(home);
-  const agentInput = [...(persisted?.slug === slug ? persisted.agentInput : []), ...a.agentInput];
-  if (agentInput.length) writeInput(home, slug, agentInput);
+  const agentInput = [...readInput(home, slug), ...a.agentInput];
+  if (a.agentInput.length) writeInput(home, slug, agentInput);
 
   const fm = committedFm(clone, slug, 'origin/main');
   if (!fm || fm.claimed_by !== cfg.id) return lose(ctx, slug);
+  // The agent works on what main says now (applied answers included). Leftovers that block the sync are
+  // from earlier work this worker can no longer publish: move them aside (Ruling P2-11), never fail on them.
+  const env = identityEnv(identity);
   try {
-    syncKeepingWork(clone, identityEnv(identity)); // the agent works on what main says now (applied answers included)
+    syncKeepingWork(clone, env);
   } catch (e) {
     if (!(e instanceof SyncConflict)) throw e;
-    return effortError(ctx, slug, fm.status, `local edits conflict with origin/main (${e.paths.join(', ')}); they are left as they are`, {});
+    salvage(ctx, { paths: e.paths, code: false, reason: `they block ${slug}'s sync with origin/main` });
+    syncKeepingWork(clone, env);
   }
   const r = route(fm.status, { developmentDone: ctx.holding.developmentDone });
   if (!r) { // an answer parked or rejected it
@@ -198,6 +217,10 @@ async function runHeld(ctx, slug, bcfg) {
   const keys = resolveRepoKeys(clone, slug);
   if (keys.length && fm.status !== 'ACCEPTED') {
     try {
+      if (ctx.holding.fresh) { // a new hold starts from what was pushed (Ruling P2-11)
+        salvage(ctx, { paths: [], reason: `fresh claim of ${slug}` });
+        for (const n of prepareCheckouts(clone, slug, keys, iso(deps.now()).replace(/[-:]/g, ''))) deps.log(n);
+      }
       deps.assemble({ rootDir: clone, slug, keys, hooks: { workerId: cfg.id } });
     } catch (e) {
       return effortError(ctx, slug, fm.status, `assemble-env failed: ${firstLine(e)}`, { keys });
@@ -217,11 +240,15 @@ async function runHeld(ctx, slug, bcfg) {
   const renewIfDue = async () => {
     const t = deps.now();
     if (t.getTime() - lastRenew < half) return;
-    lastRenew = t.getTime();
-    const rr = await renew(clone, slug, { claimant: cfg.id, identity, workerId: cfg.id, now: t, hooks: deps.hooks });
-    deps.log(rr.ok ? `renewed ${slug}` : `could not renew ${slug} (${rr.reason})`);
+    let rr;
+    try {
+      rr = await renew(clone, slug, { claimant: cfg.id, identity, workerId: cfg.id, now: t, hooks: deps.hooks });
+    } catch (e) { rr = { ok: false, reason: firstLine(e) }; }
+    if (rr.ok) lastRenew = t.getTime(); // a failed renew is retried on the next tick, not ttl/2 later
+    deps.log(rr.ok ? `renewed ${slug}` : `could not renew ${slug} (${rr.reason}); retrying`);
   };
   const onTick = () => { inflight = renewIfDue(); return inflight; };
+  ctx.holding.fresh = false;
   deps.log(`running ${r.phase} for ${slug}`);
   const res = await deps.runAgent({
     ...cmd, env: { ...cmd.env, ...identityEnv(identity) }, cwd: clone, timeoutMs: bcfg.phaseTimeoutMs, logPath,

@@ -1,8 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { readFileSync, writeFileSync, existsSync, readdirSync } from 'node:fs';
-import { join, dirname } from 'node:path';
+import { readFileSync, writeFileSync, existsSync, readdirSync, mkdirSync, appendFileSync, rmSync } from 'node:fs';
+import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { makeBoard, IDENT } from '../board/fixtures.mjs';
 import { workerYaml } from '../board/registry.mjs';
@@ -16,6 +16,7 @@ import { makeContext, step } from './loop.mjs';
 const FAKE = join(dirname(fileURLToPath(import.meta.url)), 'fixtures', 'fake-agent.mjs');
 const T0 = new Date('2026-06-01T10:00:00Z');
 const at = (ms) => new Date(T0.getTime() + ms);
+const iso = (ms) => new Date(ms).toISOString().replace(/\.\d{3}Z$/, 'Z');
 const MIN = 60e3;
 const OWNER = { name: 'Alice Owner', email: 'alice@users.noreply.github.com' };
 const IDA = 'alice-aaaaaa';
@@ -59,8 +60,29 @@ function codeRepo(b, name = 'api') {
   return { remote, seed, catalog: { [name]: { url: remote, default_branch: 'main', readonly: false } } };
 }
 
+// The fake agent's script applied in-process (no child): writes, exec, result, stderr into the run log.
+// `ticks: [ms, ...]` advances the worker's clock by each amount and calls onTick (lease renewal) in turn;
+// `timeout: true` reports a timed-out run. `real: true` runs fixtures/fake-agent.mjs as a child instead.
+async function inProcessAgent(w, opts, script) {
+  const resultFile = opts.env.SDLC_RESULT_FILE;
+  rmSync(resultFile, { force: true });
+  for (const [rel, content] of Object.entries(script.writes ?? {})) {
+    const f = resolve(opts.cwd, rel);
+    mkdirSync(dirname(f), { recursive: true });
+    writeFileSync(f, content);
+  }
+  for (const [cwd, cmd, ...args] of script.exec ?? []) {
+    execFileSync(cmd, args, { cwd: resolve(opts.cwd, cwd), env: { ...process.env, ...opts.env }, stdio: 'ignore' });
+  }
+  for (const ms of script.ticks ?? []) { w.now = new Date(w.now.getTime() + ms); await opts.onTick(); }
+  if (script.result != null) { mkdirSync(dirname(resultFile), { recursive: true }); writeFileSync(resultFile, JSON.stringify(script.result)); }
+  if (script.stderr) appendFileSync(opts.logPath, `${script.stderr}\n`);
+  if (script.timeout) return { exitCode: null, signal: 'SIGTERM', timedOut: true, stderrTail: script.stderr ?? '' };
+  return { exitCode: script.exitCode ?? 0, signal: null, timedOut: false, stderrTail: script.stderr ?? '' };
+}
+
 // A worker home with its meta clone, a scripted fake agent and test deps.
-function worker(b, { id = IDA, script = { result: null }, catalog = {}, clock, deps = {} } = {}) {
+function worker(b, { id = IDA, script = { result: null }, catalog = {}, deps = {} } = {}) {
   const home = join(b.dir, `home-${id}`);
   b.clone(`home-${id}/meta`);
   writeConfig(home, {
@@ -71,7 +93,7 @@ function worker(b, { id = IDA, script = { result: null }, catalog = {}, clock, d
   w.script = (s) => writeFileSync(scriptPath, JSON.stringify(s));
   w.script(script);
   const all = {
-    now: clock ?? (() => w.now),
+    now: () => w.now,
     sleep: async () => {},
     gh: { installed: () => true, authOk: () => true },
     which: () => true,
@@ -79,6 +101,8 @@ function worker(b, { id = IDA, script = { result: null }, catalog = {}, clock, d
     runAgent: async (opts) => {
       w.runs.push(opts);
       if (w.beforeRun) await w.beforeRun(opts);
+      const s = JSON.parse(readFileSync(scriptPath, 'utf8'));
+      if (!s.real) return inProcessAgent(w, opts, s);
       return runAgent({ ...opts, cmd: process.execPath, args: [FAKE], env: { ...opts.env, FAKE_AGENT_SCRIPT: scriptPath } });
     },
     assemble: (opts) => assemble({ ...opts, catalog: { repos: catalog } }),
@@ -124,6 +148,7 @@ test('every commit (meta and code repo) has Worker trailer and owner author', as
       writes: { 'workspace/api/feature.txt': 'x\n', 'docs/plans/alpha.md': '---\nstatus: PLANNED\n---\n\n- [ ] Step 1\n' },
       exec: [['workspace/api', 'git', 'add', 'feature.txt'], ['workspace/api', 'git', 'commit', '-q', '-m', 'add feature']],
       result: completed('PLANNED'),
+      real: true,
     },
   });
   assert.equal((await w.step()).action, 'reported');
@@ -193,10 +218,9 @@ test('clarification: posted, claim kept, run continues next step', async () => {
 test('agent exit 1 / no result file / timeout → effort error with redacted excerpt, release, backoff set', async () => {
   const b = setup({
     featReqs: { alpha: feat(), beta: feat({ priority: 'medium' }), gamma: feat({ priority: 'low' }) },
-    config: 'phase_timeout: 1s\n',
   });
   const token = `ghp_${'a'.repeat(36)}`;
-  const w = worker(b, { script: { stderr: `boom: token ${token}`, exitCode: 1, result: null } });
+  const w = worker(b, { script: { stderr: `boom: token ${token}`, exitCode: 1, result: null, real: true } });
 
   const errorFor = (slug) => {
     const fm = fmOnMain(b, slug);
@@ -226,7 +250,7 @@ test('agent exit 1 / no result file / timeout → effort error with redacted exc
   assert.equal(readState(w.home).backoff_until, at(21 * MIN).toISOString());
 
   w.now = at(22 * MIN);
-  w.script({ sleepMs: 4000, result: completed('ACCEPTED') });
+  w.script({ timeout: true, result: completed('ACCEPTED') });
   assert.deepEqual(await w.step(), { action: 'failed', effort: 'gamma' });
   assert.match(errorFor('gamma'), /timed out/);
   assert.equal(readState(w.home).failures, 3);
@@ -406,14 +430,15 @@ test('answered clarification on held effort → rework step added before next ru
 });
 
 test('lease renewed during a run longer than ttl/2; no renew when the run is short', async () => {
-  const b = setup({ featReqs: { alpha: feat() }, config: 'lease_ttl: 2s\n' });
-  const start = Date.now();
-  const w = worker(b, { clock: () => at(Date.now() - start), script: { sleepMs: 1700, result: completed('ACCEPTED') } });
+  const b = setup({ featReqs: { alpha: feat() } });
+  const w = worker(b, { script: { ticks: [60 * MIN, 61 * MIN], result: completed('ACCEPTED') } });
   const renews = () => git(b.remote, 'log', '--format=%s', 'main').split('\n').filter((s) => s === 'board(renew): alpha').length;
   assert.equal((await w.step()).action, 'reported');
   assert.ok(renews() >= 1, 'a long run renews the lease');
   const after = renews();
-  w.script({ result: completed('ACCEPTED') });
+  assert.equal(after, 1, 'exactly one renew, at ttl/2');
+  assert.equal(fmOnMain(b, 'alpha').renewed_at, iso(T0.getTime() + 121 * MIN));
+  w.script({ ticks: [30 * MIN], result: completed('ACCEPTED') });
   assert.equal((await w.step()).action, 'reported');
   assert.equal(renews(), after, 'a short run pushes no renew');
 });
@@ -489,13 +514,13 @@ test('crash between apply and run: the next step reuses the persisted agent inpu
   w.beforeRun = () => { throw new Error('simulated crash'); };
   await assert.rejects(w.step(), /simulated crash/);
   assert.equal(onMain(b, `board/requests/${id}.md`), null, 'the apply commit deleted the request');
-  assert.ok(existsSync(join(w.home, 'run/agent-input.json')));
+  assert.ok(existsSync(join(w.home, 'run/agent-input/alpha.json')));
 
   w.beforeRun = null;
   w.restart();
   assert.deepEqual(await w.step(), { action: 'reported', effort: 'alpha' });
   assert.match(w.prompt(), /Option B/);
-  assert.ok(!existsSync(join(w.home, 'run/agent-input.json')), 'deleted once the result is handled');
+  assert.ok(!existsSync(join(w.home, 'run/agent-input/alpha.json')), 'deleted once a run has acted on it');
 });
 
 test('preflight worker error; once answered resolved, the worker deletes it and takes work again (Ruling P2-4)', async () => {
@@ -523,15 +548,13 @@ test('report after a renew during the run keeps the agent\'s edit to the line ne
   // Frontmatter order puts status right after renewed_at, so the agent's status edit and the renew touch adjacent lines.
   const b = setup({
     featReqs: { alpha: { priority: 'high', date: '2026-05-01', claimed_by: 'bob-zzzzzz', claimed_at: '2026-05-01T00:00:00Z', renewed_at: '2026-05-01T00:00:00Z', status: 'ACCEPTED' } },
-    config: 'lease_ttl: 2s\n',
   });
-  const start = Date.now();
-  const w = worker(b, { clock: () => at(Date.now() - start), script: { result: null } });
+  const w = worker(b, { script: { result: null } });
   w.beforeRun = () => {
     const f = join(w.meta, 'docs/feat-req/alpha.md');
     const text = readFileSync(f, 'utf8');
     assert.match(text, /renewed_at: .*\nstatus: ACCEPTED/);
-    w.script({ writes: { 'docs/feat-req/alpha.md': text.replace('status: ACCEPTED', 'status: DESIGNED') }, sleepMs: 1700, result: completed('DESIGNED') });
+    w.script({ writes: { 'docs/feat-req/alpha.md': text.replace('status: ACCEPTED', 'status: DESIGNED') }, ticks: [121 * MIN], result: completed('DESIGNED') });
   };
   assert.deepEqual(await w.step(), { action: 'reported', effort: 'alpha' });
   assert.ok(git(b.remote, 'log', '--format=%s', 'main').includes('board(renew): alpha'), 'a renew landed during the run');
@@ -564,4 +587,160 @@ test('a fatal preflight problem (unregistered worker) throws and writes nothing'
   const before = tip(b);
   await assert.rejects(w.step(), /not registered/);
   assert.equal(tip(b), before);
+});
+
+const salvaged = (w) => {
+  const root = join(w.home, 'salvage');
+  return existsSync(root) ? readdirSync(root).map((d) => join(root, d)) : [];
+};
+
+test('a lost effort\'s leftover edits are salvaged and never block the next effort (Ruling P2-11)', async () => {
+  const b = setup({ featReqs: { alpha: feat(), beta: feat({ priority: 'low' }) } });
+  const w = worker(b, { script: { writes: { 'docs/design/alpha.md': 'mine\n' }, result: completed('ACCEPTED') } });
+  w.beforeRun = () => {
+    const f = onMain(b, 'docs/feat-req/alpha.md');
+    b.seed('docs/feat-req/alpha.md', f.replace(`claimed_by: ${IDA}`, 'claimed_by: bob-zzzzzz'), 'board(takeover): alpha');
+  };
+  assert.deepEqual(await w.step(), { action: 'lost', effort: 'alpha' });
+  w.beforeRun = null;
+  b.seed('docs/design/alpha.md', 'bobs design\n', 'bob reports alpha');
+  w.script({ writes: { 'docs/design/beta.md': design(['web']) }, result: completed('ACCEPTED') });
+  assert.deepEqual(await w.step(), { action: 'reported', effort: 'beta' });
+  assert.equal(onMain(b, 'docs/design/beta.md'), design(['web']));
+  assert.equal(onMain(b, 'docs/design/alpha.md'), 'bobs design\n');
+  assert.equal(requestsOnMain(b).length, 0, 'no effort error on beta for alpha\'s files');
+  const [dir] = salvaged(w);
+  assert.equal(readFileSync(join(dir, 'meta/docs/design/alpha.md'), 'utf8'), 'mine\n');
+  assert.ok(w.logs.some((l) => l.includes('salvaged docs/design/alpha.md')), w.logs.join('\n'));
+});
+
+test('a report that conflicts with main becomes an effort error naming the salvage path', async () => {
+  const b = setup({ featReqs: { alpha: feat() }, files: { 'docs/design/alpha.md': '# d\nline\n' } });
+  const w = worker(b, { script: { writes: { 'docs/design/alpha.md': '# d\nmine\n' }, result: completed('ACCEPTED') } });
+  w.beforeRun = () => b.seed('docs/design/alpha.md', '# d\ntheirs\n', 'a person edits the design');
+  assert.deepEqual(await w.step(), { action: 'failed', effort: 'alpha' });
+  const [dir] = salvaged(w);
+  assert.equal(readFileSync(join(dir, 'meta/docs/design/alpha.md'), 'utf8'), '# d\nmine\n');
+  const text = requestsOnMain(b)[0].text;
+  assert.match(text, /conflict with origin\/main/);
+  assert.ok(text.includes(dir), 'the error names where the edits went');
+  assert.equal(git(w.meta, 'status', '--porcelain'), '');
+});
+
+test('an answer applied before a failed run is kept and folded into the retry (I2)', async () => {
+  const id = '202606010900-qqqqqq';
+  const req = buildRequest({
+    id, kind: 'question', scope: 'effort', effort: 'alpha', worker: IDB, for: 'alice', blocking: true, now: T0,
+    sections: { Request: 'Which format?', Context: 'c', Options: 'A) CSV\nB) JSON' },
+  });
+  const b = setup({ featReqs: { alpha: feat({ awaiting: id }) }, files: { [`board/requests/${id}.md`]: req } });
+  const p = b.clone('p');
+  assert.equal((await answerRequest(p, id, { answer: 'B', by: 'alice', identity: OWNER, now: T0 })).ok, true);
+  const w = worker(b, { script: { exitCode: 1, result: null } });
+  assert.deepEqual(await w.step(), { action: 'failed', effort: 'alpha' });
+  const err = requestsOnMain(b)[0];
+  assert.match(err.text, /instructions not yet acted on[\s\S]*Option B/);
+  const errId = parseDoc(err.text).data.id;
+  assert.equal((await answerRequest(p, errId, { answer: 'retry', by: 'alice', identity: OWNER, now: T0 })).ok, true);
+  w.now = at(10 * MIN);
+  w.script({ result: completed('ACCEPTED') });
+  assert.deepEqual(await w.step(), { action: 'reported', effort: 'alpha' });
+  assert.match(w.prompt(), /Option B[\s\S]*resume/);
+});
+
+test('a failed renew is retried on the next tick, not ttl/2 later (I3)', async () => {
+  const b = setup({ featReqs: { alpha: feat() } });
+  let fail = 0;
+  const w = worker(b, {
+    script: { ticks: [121 * MIN, MIN], result: completed('ACCEPTED') },
+    deps: { hooks: { beforePush: () => { if (fail > 0) { fail -= 1; throw new Error('network down'); } } } },
+  });
+  w.beforeRun = () => { fail = 1; };
+  assert.equal((await w.step()).action, 'reported');
+  const renews = git(b.remote, 'log', '--format=%s', 'main').split('\n').filter((x) => x === 'board(renew): alpha');
+  assert.equal(renews.length, 1);
+  assert.ok(w.logs.some((l) => /could not renew alpha/.test(l)), w.logs.join('\n'));
+  assert.ok(w.logs.some((l) => l === 'renewed alpha'), w.logs.join('\n'));
+});
+
+test('re-claim after another holder pushed feat/<slug>: workspace reset to origin\'s branch, push succeeds (I4)', async () => {
+  const b = setup({ featReqs: { alpha: feat({ status: 'DESIGNED' }) }, files: { 'docs/design/alpha.md': design(['api']) } });
+  const code = codeRepo(b);
+  const commit = (file) => ({
+    writes: { [`workspace/api/${file}`]: `${file}\n` },
+    exec: [['workspace/api', 'git', 'add', file], ['workspace/api', 'git', 'commit', '-q', '-m', file]],
+  });
+  const w = worker(b, { catalog: code.catalog, script: { ...commit('mine.txt'), writes: { ...commit('mine.txt').writes, 'workspace/api/dirty.txt': 'x\n' }, result: null } });
+  w.beforeRun = () => {
+    const f = onMain(b, 'docs/feat-req/alpha.md');
+    b.seed('docs/feat-req/alpha.md', f.replace(`claimed_by: ${IDA}`, 'claimed_by: bob-zzzzzz'), 'board(takeover): alpha');
+  };
+  assert.equal((await w.step()).action, 'lost'); // local feat/alpha has an unpushed commit and a dirty file
+  w.beforeRun = null;
+  git(code.seed, 'checkout', '-q', '-b', 'feat/alpha');
+  writeFileSync(join(code.seed, 'bob.txt'), 'bob\n');
+  git(code.seed, 'add', '-A');
+  git(code.seed, 'commit', '-q', '-m', 'bob');
+  git(code.seed, 'push', '-q', 'origin', 'feat/alpha');
+  const bobs = git(code.seed, 'rev-parse', 'HEAD').trim();
+  const f = onMain(b, 'docs/feat-req/alpha.md');
+  b.seed('docs/feat-req/alpha.md', f.replace(/claimed_by: .*\n/, '').replace(/claimed_at: .*\n/, '').replace(/renewed_at: .*\n/, ''), 'board(release): alpha');
+  let atRun = null;
+  w.beforeRun = () => { atRun = git(join(w.meta, 'workspace/api'), 'rev-parse', 'HEAD').trim(); };
+  w.script({ ...commit('again.txt'), result: completed('PLANNED') });
+  assert.deepEqual(await w.step(), { action: 'reported', effort: 'alpha' });
+  assert.equal(atRun, bobs);
+  assert.equal(git(code.remote, 'rev-parse', 'feat/alpha~1').trim(), bobs);
+  assert.ok(salvaged(w).some((d) => existsSync(join(d, 'workspace/api/dirty.txt'))));
+});
+
+test('a blocking request whose code push is rejected becomes an effort error (I5)', async () => {
+  const b = setup({ featReqs: { alpha: feat({ status: 'DESIGNED' }) }, files: { 'docs/design/alpha.md': design(['api']) } });
+  const code = codeRepo(b);
+  const w = worker(b, {
+    catalog: code.catalog,
+    script: {
+      writes: { 'workspace/api/a.txt': 'a\n' },
+      exec: [['workspace/api', 'git', 'add', 'a.txt'], ['workspace/api', 'git', 'commit', '-q', '-m', 'a']],
+      result: { outcome: 'request', request: { kind: 'question', blocking: true, sections: { Request: 'r', Context: 'c', Options: 'A) x\nB) y' } } },
+    },
+  });
+  w.beforeRun = () => { // someone else pushes a different feat/alpha while we run
+    git(code.seed, 'checkout', '-q', '-b', 'feat/alpha');
+    writeFileSync(join(code.seed, 'other.txt'), 'o\n');
+    git(code.seed, 'add', '-A');
+    git(code.seed, 'commit', '-q', '-m', 'other');
+    git(code.seed, 'push', '-q', 'origin', 'feat/alpha');
+  };
+  assert.deepEqual(await w.step(), { action: 'failed', effort: 'alpha' });
+  const reqs = requestsOnMain(b).map((r) => parseDoc(r.text).data);
+  assert.deepEqual(reqs.map((r) => r.kind), ['error']);
+  assert.match(requestsOnMain(b)[0].text, /code push rejected/);
+});
+
+test('three completed runs in a row that change nothing → effort error (progress guard)', async () => {
+  const b = setup({ featReqs: { alpha: feat() } });
+  const w = worker(b, { script: { result: completed('ACCEPTED') } });
+  assert.deepEqual(await w.step(), { action: 'reported', effort: 'alpha' });
+  assert.deepEqual(await w.step(), { action: 'reported', effort: 'alpha' });
+  assert.deepEqual(await w.step(), { action: 'failed', effort: 'alpha' });
+  assert.match(requestsOnMain(b)[0].text, /no progress/);
+});
+
+test('three board failures in a row on a held effort → effort error instead of idling (BoardError guard)', async () => {
+  const b = setup({ featReqs: { alpha: feat() } });
+  let fail = 0;
+  const w = worker(b, {
+    script: { result: { outcome: 'request', request: { kind: 'clarification', blocking: false, sections: { Request: 'r', Context: 'c', Assumption: 'a' } } } },
+    deps: { hooks: { beforePush: () => { if (fail > 0) { fail -= 1; throw new Error('push refused'); } } } },
+  });
+  assert.equal((await w.step()).action, 'requested');
+  w.script({ writes: { 'docs/design/alpha.md': design(['api']) }, result: completed('ACCEPTED') });
+  fail = 3;
+  assert.deepEqual(await w.step(), { action: 'idle' });
+  assert.deepEqual(await w.step(), { action: 'idle' });
+  assert.deepEqual(await w.step(), { action: 'failed', effort: 'alpha' });
+  const err = requestsOnMain(b).map((r) => r.text).find((t) => /kind: error/.test(t));
+  assert.match(err, /3 board writes in a row failed/);
+  assert.equal(fmOnMain(b, 'alpha').claimed_by, undefined);
 });
