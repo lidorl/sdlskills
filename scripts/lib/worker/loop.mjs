@@ -15,7 +15,7 @@ import { assemble as realAssemble, resolveRepoKeys } from '../../assemble-env.mj
 import { readConfig, readState, writeState } from './home.mjs';
 import { route, buildPrompt, agentCommand, runAgent as realRunAgent } from './agent.mjs';
 import { preflight, realDeps as preflightDeps } from './preflight.mjs';
-import { lose, letGo, effortError, workerError, handleResult } from './outcomes.mjs';
+import { lose, letGo, effortError, workerError, handleResult, interrupted } from './outcomes.mjs';
 import { readInput, writeInput, savedSlugs } from './agent-input.mjs';
 import { salvage } from './salvage.mjs';
 import { prepareCheckouts } from './code-repos.mjs';
@@ -41,11 +41,13 @@ export function continuesOurClaim(clone, slug, { claimant, prepared, now, ttlMs 
     && prepared?.slug === slug && !!fm.claimed_at && String(prepared.claimed_at) === String(fm.claimed_at);
 }
 
-export function makeContext({ home, deps = {} }) {
+// `signal` (AbortSignal, optional): aborting it stops a running agent; the step then ends with the
+// interrupted outcome (code pushed, changed docs reported, claim released).
+export function makeContext({ home, deps = {}, signal }) {
   const cfg = readConfig(home);
   const pf = preflightDeps();
   return {
-    home, cfg, clone: join(home, 'meta'), holding: null,
+    home, cfg, clone: join(home, 'meta'), holding: null, signal,
     identity: { name: cfg.author.name, email: cfg.author.email },
     deps: {
       now: () => new Date(),
@@ -254,6 +256,12 @@ async function runHeld(ctx, slug, bcfg) {
   const half = bcfg.leaseTtlMs / 2;
   let lastRenew = deps.now().getTime();
   let inflight = Promise.resolve();
+  // The run stops when the worker is asked to stop (ctx.signal) or when a renew finds the claim taken.
+  const run = new AbortController();
+  let takenOver = false;
+  const stopRun = () => run.abort();
+  if (ctx.signal?.aborted) run.abort();
+  else ctx.signal?.addEventListener('abort', stopRun, { once: true });
   const renewIfDue = async () => {
     const t = deps.now();
     if (t.getTime() - lastRenew < half) return;
@@ -262,14 +270,27 @@ async function runHeld(ctx, slug, bcfg) {
       rr = await renew(clone, slug, { claimant: cfg.id, identity, workerId: cfg.id, now: t, hooks: deps.hooks });
     } catch (e) { rr = { ok: false, reason: firstLine(e) }; }
     if (rr.ok) lastRenew = t.getTime(); // a failed renew is retried on the next tick, not ttl/2 later
+    if (!rr.ok && rr.reason === 'replaced') {
+      takenOver = true;
+      deps.log(`${slug} is no longer ours; stopping the agent`);
+      run.abort();
+      return;
+    }
     deps.log(rr.ok ? `renewed ${slug}` : `could not renew ${slug} (${rr.reason}); retrying`);
   };
   const onTick = () => { inflight = renewIfDue(); return inflight; };
   deps.log(`running ${r.phase} for ${slug}`);
-  const res = await deps.runAgent({
-    ...cmd, env: { ...cmd.env, ...identityEnv(identity) }, cwd: clone, timeoutMs: bcfg.phaseTimeoutMs, logPath,
-    onTick, tickMs: Math.max(50, Math.min(60e3, half / 4)),
-  });
+  let res;
+  try {
+    res = await deps.runAgent({
+      ...cmd, env: { ...cmd.env, ...identityEnv(identity) }, cwd: clone, timeoutMs: bcfg.phaseTimeoutMs, logPath,
+      onTick, tickMs: Math.max(50, Math.min(60e3, half / 4)), signal: run.signal,
+    });
+  } finally {
+    ctx.signal?.removeEventListener('abort', stopRun);
+  }
   await inflight.catch(() => {}); // a renew still pushing must land before the report touches the clone
+  if (takenOver) return lose(ctx, slug);
+  if (res.aborted) return interrupted(ctx, slug, fm.status, keys);
   return handleResult(ctx, slug, fm.status, { res, keys, logPath, bcfg });
 }

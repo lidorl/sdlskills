@@ -216,11 +216,11 @@ test('reportPaths gathers the effort docs, changed history, and extras', () => {
   assert.throws(() => reportPaths(c, 'bulk-export', ['../x']));
 });
 
-test('worker subcommand before Plan 2 exits 2 with a clear message', async () => {
+test('worker subcommand dispatches to the worker CLI', async () => {
   const c = makeBoard().clone('c');
-  const r = await cli(c, ['worker', 'list']);
+  const r = await cli(c, ['worker', 'bogus']);
   assert.equal(r.code, 2);
-  assert.match(r.err, /workers arrive in a later release/);
+  assert.match(r.err, /unknown worker command bogus\nusage: sdlc worker/);
 });
 
 test('answer on a terminal with no --choice asks through the menu', async () => {

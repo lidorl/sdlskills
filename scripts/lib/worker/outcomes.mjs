@@ -162,6 +162,21 @@ async function handleRequest(ctx, slug, status, result, keys) {
   return { action: 'requested', effort: slug };
 }
 
+// The worker was stopped mid-run: publish what the agent got done (code branches, the effort's changed docs,
+// with keep-work semantics on a lost push), then release. -> { action: 'interrupted' } or the report's outcome
+export async function interrupted(ctx, slug, status, keys) {
+  const { cfg, clone, identity, deps } = ctx;
+  fetchMain(clone, identityEnv(identity));
+  if (!holds(clone, slug, cfg.id, { ref: 'origin/main' })) return lose(ctx, slug);
+  if (effortDirty(clone, slug)) {
+    const rep = await report(ctx, slug, status, status, { keys, summary: 'progress so far; the worker was stopped mid-run' });
+    if (!rep.ok) return rep.ret;
+  }
+  await letGo(ctx, slug, keys);
+  deps.log(`interrupted ${slug}: released`);
+  return { action: 'interrupted', effort: slug };
+}
+
 // Push the code branches, move any leftovers aside, then release. -> the salvage dir or null
 export async function letGo(ctx, slug, keys) {
   const { cfg, deps, clone, identity } = ctx;

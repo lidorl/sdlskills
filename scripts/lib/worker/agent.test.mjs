@@ -156,3 +156,29 @@ test('classifyFailure: ENOENT and model errors are worker errors', () => {
   assert.equal(classifyFailure({ exitCode: 1, stderrTail: 'tests failed' }), 'effort');
   assert.equal(classifyFailure({ timedOut: true, stderrTail: '' }), 'effort');
 });
+
+test('runAgent abort kills the agent process group and resolves aborted', async () => {
+  const dir = tmp();
+  const pidFile = join(dir, 'agent.pid');
+  const grandchildPidFile = join(dir, 'grandchild.pid');
+  const ac = new AbortController();
+  const p = fakeRun(dir, { pidFile, grandchildPidFile, sleepMs: 60000, result: { outcome: 'failed', error: { message: 'late' } } }, { signal: ac.signal });
+  while (!existsSync(pidFile)) await new Promise((r) => setTimeout(r, 20));
+  ac.abort();
+  const r = await p;
+  assert.equal(r.aborted, true);
+  const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+  assert.equal(alive(Number(readFileSync(pidFile, 'utf8'))), false);
+  for (let i = 0; i < 100 && alive(Number(readFileSync(grandchildPidFile, 'utf8'))); i++) await new Promise((res) => setTimeout(res, 20));
+  assert.equal(alive(Number(readFileSync(grandchildPidFile, 'utf8'))), false);
+  assert.equal(existsSync(join(dir, 'run', 'result.json')), false);
+});
+
+test('runAgent with an already-aborted signal starts nothing', async () => {
+  const dir = tmp();
+  const ac = new AbortController();
+  ac.abort();
+  const r = await fakeRun(dir, { pidFile: join(dir, 'agent.pid') }, { signal: ac.signal });
+  assert.deepEqual(r, { aborted: true });
+  assert.equal(existsSync(join(dir, 'agent.pid')), false);
+});

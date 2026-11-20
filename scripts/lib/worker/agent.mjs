@@ -68,7 +68,10 @@ export function agentCommand(cfg, prompt, home) {
 
 const lastLines = (text, n) => text.split('\n').filter((l, i, a) => l !== '' || i < a.length - 1).slice(-n).join('\n');
 
-export function runAgent({ cmd, args = [], env = {}, cwd, timeoutMs, logPath, onTick, tickMs = 1000 }) {
+// `signal` (AbortSignal): on abort the agent's process group is killed and the run resolves { aborted: true }
+// (with exitCode/signal/stderrTail when it had started); an already-aborted signal starts nothing.
+export function runAgent({ cmd, args = [], env = {}, cwd, timeoutMs, logPath, onTick, tickMs = 1000, signal }) {
+  if (signal?.aborted) return Promise.resolve({ aborted: true });
   mkdirSync(dirname(logPath), { recursive: true });
   // A previous run's result must never be mistaken for this one's.
   if (env.SDLC_RESULT_FILE) {
@@ -90,6 +93,7 @@ export function runAgent({ cmd, args = [], env = {}, cwd, timeoutMs, logPath, on
 
     let stderr = '';
     let timedOut = false;
+    let aborted = false;
     let settled = false;
     let killTimer;
     let ticking = false;
@@ -104,11 +108,13 @@ export function runAgent({ cmd, args = [], env = {}, cwd, timeoutMs, logPath, on
       if (stderr.length > 1_000_000) stderr = stderr.slice(-500_000);
     });
 
-    const timeout = timeoutMs > 0 ? setTimeout(() => {
-      timedOut = true;
+    const stop = () => {
       killGroup('SIGTERM');
-      killTimer = setTimeout(() => killGroup('SIGKILL'), 5000);
-    }, timeoutMs) : null;
+      killTimer ??= setTimeout(() => killGroup('SIGKILL'), 5000);
+    };
+    const timeout = timeoutMs > 0 ? setTimeout(() => { timedOut = true; stop(); }, timeoutMs) : null;
+    const onAbort = () => { aborted = true; log('\n[worker] run aborted: stopping the agent\n'); stop(); };
+    signal?.addEventListener('abort', onAbort, { once: true });
 
     if (onTick) {
       tickTimer = setInterval(async () => {
@@ -125,13 +131,15 @@ export function runAgent({ cmd, args = [], env = {}, cwd, timeoutMs, logPath, on
       clearTimeout(timeout);
       clearTimeout(killTimer);
       clearInterval(tickTimer);
+      signal?.removeEventListener('abort', onAbort);
       resolve(result);
     };
 
     child.on('error', (spawnError) => finish({ spawnError }));
-    child.on('close', (exitCode, signal) => {
+    child.on('close', (exitCode, sig) => {
       killGroup('SIGKILL'); // stragglers left in the group
-      finish({ exitCode, signal, timedOut, stderrTail: lastLines(stderr, 50) });
+      const out = { exitCode, signal: sig, timedOut, stderrTail: lastLines(stderr, 50) };
+      finish(aborted ? { aborted: true, ...out } : out);
     });
   });
 }

@@ -2,7 +2,6 @@
 // the sibling modules; this file parses argv, calls them, and renders results.
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
-import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parse } from 'yaml';
 import { assertOnMain, identityEnv, fetchMain, snapshotMain } from './git.mjs';
 import { claim, release, committedFm, featReqPath } from './claims.mjs';
@@ -15,6 +14,7 @@ import { safePath, SLUG_RE, REQUEST_ID_RE } from './safe-path.mjs';
 import { loadCatalog } from '../catalog.mjs';
 import { reportPaths } from './paths.mjs';
 import { reportEffort } from './report.mjs';
+import { runWorker } from '../worker/cli.mjs';
 
 export { reportPaths };
 import { createInterface } from 'node:readline/promises';
@@ -395,18 +395,14 @@ const USAGE = `usage: sdlc <command>
   check | next | status | inbox [--all] | watch [--interval 30s] [--since <sha>]
   claim <slug> | report <slug> --phase <STATUS> [--paths a,b] | release <slug>
   answer <id> [--choice X] [--note "..."]   (add --json where supported)
+  worker <command>   (create, start, once, stop, status, list, retire, config; see sdlc worker)
 `;
 
 export async function run(argv, deps) {
   const { cwd = process.cwd() } = deps;
   const [cmd, ...rest] = argv;
   try {
-    if (cmd === 'worker') {
-      const mod = fileURLToPath(new URL('../worker/cli.mjs', import.meta.url));
-      if (existsSync(mod)) return await (await import(pathToFileURL(mod).href)).run(rest, deps);
-      deps.err('workers arrive in a later release\n');
-      return 2;
-    }
+    if (cmd === 'worker') return await runWorker(rest, deps);
     if (!cmd || !COMMANDS[cmd]) throw new UsageError(cmd ? `unknown command ${cmd}` : 'missing command');
     const args = parseArgs(COMMANDS[cmd], rest);
     if (SLUG_COMMANDS.has(cmd) && !SLUG_RE.test(args.positional[0])) throw new UsageError(`invalid slug "${args.positional[0]}"`);

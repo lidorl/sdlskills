@@ -14,7 +14,7 @@ import { isEntryPoint } from './lib/is-entry-point.mjs';
  * on uncertainty. Only a directory with no `.git` at all is unprotected
  * (assemble-env only ever creates clones there).
  */
-function isProtected(dir) {
+export function isProtected(dir) {
   if (!existsSync(join(dir, '.git'))) return false;
   try {
     const status = execFileSync('git', ['status', '--porcelain'], { cwd: dir, stdio: 'pipe' }).toString().trim();

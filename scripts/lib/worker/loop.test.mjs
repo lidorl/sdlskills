@@ -925,3 +925,30 @@ test('a hold that skipped preparing at ACCEPTED prepares the checkouts once it r
   assert.ok(!remoteLog(code).includes('stale.txt'), remoteLog(code).join(', '));
   assert.equal(readState(w.home).prepared.slug, 'alpha');
 });
+
+test('taken over mid-run: the renew finds the claim gone, the run is aborted, lost, nothing pushed', async () => {
+  const b = setup({ featReqs: { alpha: feat() } });
+  const w = worker(b, { script: { writes: { 'docs/design/alpha.md': design(['api']) }, ticks: [121 * MIN], result: completed('ACCEPTED') } });
+  let before;
+  w.beforeRun = () => {
+    const f = onMain(b, 'docs/feat-req/alpha.md');
+    b.seed('docs/feat-req/alpha.md', f.replace(`claimed_by: ${IDA}`, 'claimed_by: bob-zzzzzz'), 'board(takeover): alpha');
+    before = tip(b);
+  };
+  assert.deepEqual(await w.step(), { action: 'lost', effort: 'alpha' });
+  assert.equal(w.runs[0].signal.aborted, true);
+  assert.equal(tip(b), before);
+  assert.ok(w.logs.some((l) => /alpha is no longer ours; stopping the agent/.test(l)), w.logs.join('\n'));
+});
+
+test('stop signal before the run: nothing starts, the claim is released (interrupted)', async () => {
+  const b = setup({ featReqs: { alpha: feat() } });
+  const ac = new AbortController();
+  const w = worker(b, { script: { result: completed('ACCEPTED') } });
+  w.ctx.signal = ac.signal;
+  ac.abort();
+  w.ctx.deps.runAgent = async (opts) => { w.runs.push(opts); return opts.signal.aborted ? { aborted: true } : assert.fail('must not run'); };
+  assert.deepEqual(await w.step(), { action: 'interrupted', effort: 'alpha' });
+  assert.equal(fmOnMain(b, 'alpha').claimed_by, undefined);
+  assert.match(headMsg(b), /^board\(release\): alpha/);
+});

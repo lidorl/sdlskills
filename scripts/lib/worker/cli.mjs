@@ -1,0 +1,542 @@
+// `sdlc worker <command>`: create, start, once, stop, status, list, retire, config. The lifecycle of
+// docs/design/workers.md "Worker home and lifecycle": argv parsing, the run session around loop.step(), and
+// the protocol writes for the lifecycle events. Exit codes: 0 ok, 1 refusal or failure, 2 usage.
+import { spawn as realSpawn, execFileSync } from 'node:child_process';
+import {
+  appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, rmSync,
+} from 'node:fs';
+import { hostname } from 'node:os';
+import { join } from 'node:path';
+import { parse } from 'yaml';
+import { boardWrite, fetchMain, snapshotMain, identityEnv } from '../board/git.mjs';
+import { release } from '../board/claims.mjs';
+import { listRequests, postRequest, newRequestId } from '../board/requests.mjs';
+import { readWorker, workerYaml, workerState } from '../board/registry.mjs';
+import { parseLog } from '../board/events.mjs';
+import { loadEfforts } from '../board/queue.mjs';
+import { loadConfig } from '../board/config.mjs';
+import { safeExcerpt } from '../board/redact.mjs';
+import { WORKER_ID_RE } from '../board/safe-path.mjs';
+import { isProtected } from '../../clean-env.mjs';
+import { resolveRepoKeys } from '../../assemble-env.mjs';
+import {
+  sdlcHome, workerHome, readConfig, writeConfig, readState, writeState, readPid, writePid, clearPid, isAlive,
+} from './home.mjs';
+import { preflight } from './preflight.mjs';
+import { makeContext, step, WorkerFatal } from './loop.mjs';
+import { letGo } from './outcomes.mjs';
+import { pushCodeBranches } from './code-repos.mjs';
+import { createWorker, CreateError } from './create.mjs';
+
+class UsageError extends Error {}
+class Refusal extends Error {}
+
+const STOP_TIMEOUT_MS = 60_000;
+const STOP_POLL_MS = 250;
+const DEFAULT_IDLE_MS = 60_000;
+const DETACHED = 'SDLC_WORKER_DETACHED';
+
+const iso = (d) => d.toISOString().replace(/\.\d{3}Z$/, 'Z');
+const firstLine = (e) => String(e?.message ?? e).split('\n')[0];
+
+const USAGE = `usage: sdlc worker <command>
+  create --agent claude|copilot --model <m> [--name <n>] [--meta <url>] [--no-probe]
+  start <id> [--detach] | once <id> | stop <id>
+  status <id> [--json] | list [--json]
+  retire <id> [--force] | config <id> --model <m>
+`;
+
+// name -> { flags: { --flag: 'bool' | 'value' }, positional: n }
+const COMMANDS = {
+  create: { flags: { '--agent': 'value', '--model': 'value', '--name': 'value', '--meta': 'value', '--no-probe': 'bool' }, positional: 0 },
+  start: { flags: { '--detach': 'bool' }, positional: 1 },
+  once: { flags: {}, positional: 1 },
+  stop: { flags: {}, positional: 1 },
+  status: { flags: { '--json': 'bool' }, positional: 1 },
+  list: { flags: { '--json': 'bool' }, positional: 0 },
+  retire: { flags: { '--force': 'bool' }, positional: 1 },
+  config: { flags: { '--model': 'value' }, positional: 1 },
+};
+
+function parseArgs(spec, argv) {
+  const flags = {};
+  const positional = [];
+  for (let i = 0; i < argv.length; i++) {
+    let a = argv[i];
+    if (!a.startsWith('--')) { positional.push(a); continue; }
+    let inline = null;
+    const eq = a.indexOf('=');
+    if (eq > 0) { inline = a.slice(eq + 1); a = a.slice(0, eq); }
+    const kind = spec.flags[a];
+    if (!kind) throw new UsageError(`unknown option ${a}`);
+    if (kind === 'bool') { flags[a] = true; continue; }
+    const v = inline ?? argv[++i];
+    if (v === undefined) throw new UsageError(`${a} needs a value`);
+    flags[a] = v;
+  }
+  if (positional.length !== spec.positional) throw new UsageError(`expected ${spec.positional} argument(s), got ${positional.length}`);
+  return { flags, positional };
+}
+
+// ---- deps ----------------------------------------------------------------------------------------
+
+function processSignals(handler) {
+  const on = (sig) => handler(sig);
+  process.on('SIGTERM', on);
+  process.on('SIGINT', on);
+  return () => { process.off('SIGTERM', on); process.off('SIGINT', on); };
+}
+
+// Resolves after `ms`, or at once when `signal` aborts.
+function abortableWait(ms, signal) {
+  return new Promise((resolve) => {
+    if (signal?.aborted) { resolve(); return; }
+    const done = () => { clearTimeout(t); signal?.removeEventListener('abort', done); resolve(); };
+    const t = setTimeout(done, ms);
+    signal?.addEventListener('abort', done, { once: true });
+  });
+}
+
+const realGh = {
+  api: (path) => JSON.parse(execFileSync('gh', ['api', path], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })),
+};
+
+function resolveDeps(d) {
+  return {
+    out: d.out, err: d.err,
+    env: d.env ?? process.env,
+    cwd: d.cwd ?? process.cwd(),
+    now: d.now ?? (() => new Date()),
+    loop: d.loop ?? {}, // overrides for the loop context's deps (runAgent, gh, which, log, hooks, ...)
+    onSignal: d.onSignal ?? processSignals,
+    wait: d.wait ?? abortableWait,
+    kill: d.kill ?? ((pid, sig) => process.kill(pid, sig)),
+    isAlive: d.isAlive ?? isAlive,
+    spawn: d.spawn ?? realSpawn,
+    pid: d.pid ?? process.pid,
+    scriptPath: d.scriptPath, // the sdlc entry a detached worker runs; <home>/meta/scripts/sdlc.mjs by default
+    gh: d.gh ?? realGh,
+    stopTimeoutMs: d.stopTimeoutMs ?? STOP_TIMEOUT_MS,
+  };
+}
+
+// The runtime log: stdout, plus logs/worker.log when stdout is not already that file (a foreground run).
+function runtimeLog(home, d) {
+  const file = join(home, 'logs', 'worker.log');
+  const tee = d.env[DETACHED] !== '1';
+  return (m) => {
+    const line = `${iso(d.now())} ${m}\n`;
+    d.out(line);
+    if (!tee) return;
+    try { mkdirSync(join(home, 'logs'), { recursive: true }); appendFileSync(file, line); } catch { /* best effort */ }
+  };
+}
+
+function requireHome(id, d) {
+  if (!WORKER_ID_RE.test(String(id))) throw new UsageError(`invalid worker id "${id}"`);
+  const home = workerHome(id, d.env);
+  if (!existsSync(join(home, 'config.json'))) throw new Refusal(`no worker ${id} on this machine (${home})`);
+  return home;
+}
+
+const context = (home, d, signal) => {
+  const base = { now: d.now };
+  if (!d.loop.log) base.log = runtimeLog(home, d);
+  return makeContext({ home, deps: { ...base, ...d.loop }, signal });
+};
+
+// fn(dir) over a throwaway copy of the clone's origin/main docs/ and board/ (no fetch).
+function onMain(clone, fn) {
+  const snap = snapshotMain(clone);
+  try { return fn(snap.dir); } finally { snap.cleanup(); }
+}
+
+function refresh(ctx) {
+  try { fetchMain(ctx.clone, identityEnv(ctx.identity)); return true; } catch (e) {
+    ctx.deps.log(`warning: cannot reach origin (${firstLine(e)}); using the last fetched main`);
+    return false;
+  }
+}
+
+// ---- protocol writes ------------------------------------------------------------------------------
+
+// start / stop / crash: an empty event commit (Plan 1's event kinds that need no file change).
+function event(ctx, kind, body) {
+  const { cfg, clone, identity, deps } = ctx;
+  return boardWrite(clone, {
+    kind, subject: cfg.id, body, identity, trailers: { worker: cfg.id }, onReject: 'rebase', commitFromHead: true,
+    hooks: deps.hooks, sleep: deps.sleep, mutate: () => {},
+  });
+}
+
+async function tryEvent(ctx, kind, body) {
+  try {
+    const r = await event(ctx, kind, body);
+    if (!r.ok) ctx.deps.log(`warning: could not push the ${kind} event (${r.reason})`);
+    return r.ok;
+  } catch (e) {
+    ctx.deps.log(`warning: could not push the ${kind} event (${firstLine(e)})`);
+    return false;
+  }
+}
+
+// One write to this worker's registry file. patch(entry) -> the new entry, or null when nothing changes.
+async function updateRegistry(ctx, kind, patch, check) {
+  const { cfg, clone, identity, deps } = ctx;
+  const file = `board/workers/${cfg.id}.yml`;
+  let missing = false;
+  const r = await boardWrite(clone, {
+    kind, subject: cfg.id, identity, trailers: { worker: cfg.id }, onReject: 'rebase', commitFromHead: true,
+    hooks: deps.hooks, sleep: deps.sleep,
+    mutate: (tree) => {
+      const text = tree.read(file);
+      const w = text === null ? null : parse(text);
+      if (!w || typeof w !== 'object') { missing = true; return; }
+      const next = patch(w);
+      if (next) tree.write(file, workerYaml(next));
+    },
+    validate: (view) => { const t = view.read(file); return t !== null && check(parse(t)); },
+  });
+  if (missing) throw new Refusal(`worker ${cfg.id} is not registered on the board`);
+  if (r.ok || r.reason === 'nothing-to-do') return;
+  throw new Refusal(`could not update board/workers/${cfg.id}.yml (${r.reason})`);
+}
+
+// Release every claim this worker holds on origin/main, pushing each effort's code branches first.
+async function releaseHeld(ctx) {
+  const { cfg, clone, identity, deps } = ctx;
+  const held = onMain(clone, (board) => loadEfforts(board).efforts.filter((e) => e.fm?.claimed_by === cfg.id).map((e) => e.slug));
+  for (const slug of held) {
+    const code = pushCodeBranches(clone, slug, resolveRepoKeys(clone, slug));
+    for (const f of code.failed) deps.log(`warning: push of workspace/${f.key} failed: ${f.error}; the commits stay in the local branch`);
+    const r = await release(clone, slug, { claimant: cfg.id, identity, workerId: cfg.id, hooks: deps.hooks });
+    deps.log(r.ok ? `released ${slug}` : `could not release ${slug} (${r.reason})`);
+  }
+  if (held.length) writeState(ctx.home, { prepared: null });
+  return held;
+}
+
+function fence(text) {
+  const longest = Math.max(0, ...(text.match(/`+/g) ?? []).map((m) => m.length));
+  const f = '`'.repeat(Math.max(3, longest + 1));
+  return `${f}\n${text}\n${f}`;
+}
+
+// The previous run ended without a clean stop: a crash event, then a worker error (one open per worker).
+async function reportCrash(ctx, why) {
+  const { cfg, home, clone, identity, deps } = ctx;
+  deps.log(`worker ${cfg.id} stopped without a clean shutdown: ${why}`);
+  await tryEvent(ctx, 'crash', why);
+  const open = onMain(clone, (board) => listRequests(board).requests.some((r) => r.fm.kind === 'error'
+    && r.fm.scope === 'worker' && r.fm.worker === cfg.id && r.fm.status === 'open'));
+  if (open) { deps.log('a worker error is already open; not posting another'); return; }
+  const logFile = join(home, 'logs', 'worker.log');
+  const tail = existsSync(logFile) ? readFileSync(logFile, 'utf8').replace(/\n+$/, '') : '';
+  const excerpt = tail ? safeExcerpt(tail, { maxLines: 50 }).text : '(logs/worker.log is empty)';
+  const now = deps.now();
+  try {
+    const r = await postRequest(clone, {
+      id: newRequestId(now, deps.rand), kind: 'error', scope: 'worker', worker: cfg.id, for: cfg.owner, blocking: true, now,
+      sections: {
+        Request: `worker ${cfg.id} stopped without a clean shutdown. Check the log below and the machine it runs on, then answer resolved.`,
+        Context: `Host ${hostname()}: ${why}. Last lines of logs/worker.log:\n\n${fence(excerpt)}`,
+        Error: why,
+      },
+    }, { identity, workerId: cfg.id, sleep: deps.sleep, hooks: deps.hooks });
+    deps.log(r.ok ? `worker error ${r.id} posted for the crash` : `could not post the crash worker error (${r.reason})`);
+  } catch (e) {
+    deps.log(`could not post the crash worker error (${firstLine(e)})`);
+  }
+}
+
+// ---- process control ------------------------------------------------------------------------------
+
+// SIGTERM, wait up to stopTimeoutMs, then SIGKILL. -> true when it had to kill.
+async function endProcess(pid, d) {
+  try { d.kill(pid, 'SIGTERM'); } catch { return false; }
+  for (let waited = 0; waited < d.stopTimeoutMs; waited += STOP_POLL_MS) {
+    if (!d.isAlive(pid)) return false;
+    await d.wait(STOP_POLL_MS);
+  }
+  if (!d.isAlive(pid)) return false;
+  try { d.kill(pid, 'SIGKILL'); } catch { /* gone */ }
+  for (let i = 0; i < 40 && d.isAlive(pid); i++) await d.wait(STOP_POLL_MS);
+  return true;
+}
+
+// The worker was killed before its own shutdown ran: release and the stop event from <home>/meta.
+async function cleanUpAfterKill(home, d) {
+  const ctx = context(home, d);
+  ctx.deps.log(`worker ${ctx.cfg.id} did not stop within ${d.stopTimeoutMs / 1000}s; killed`);
+  refresh(ctx);
+  try { await releaseHeld(ctx); } catch (e) { ctx.deps.log(`warning: could not release claims (${firstLine(e)})`); }
+  await tryEvent(ctx, 'stop', 'killed after it did not stop in time');
+  writeState(home, { clean_stop: true });
+  clearPid(home);
+}
+
+async function stopRunning(id, home, d) {
+  const pid = readPid(home);
+  if (!pid || !d.isAlive(pid)) return false;
+  if (await endProcess(pid, d)) await cleanUpAfterKill(home, d);
+  return true;
+}
+
+// ---- commands -----------------------------------------------------------------------------------
+
+async function cmdCreate({ flags }, d) {
+  const agent = flags['--agent'];
+  const model = flags['--model'];
+  if (!agent || !model) throw new UsageError('create needs --agent and --model');
+  let metaUrl = flags['--meta'];
+  if (!metaUrl) {
+    try {
+      metaUrl = execFileSync('git', ['remote', 'get-url', 'origin'], { cwd: d.cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+    } catch { throw new Refusal(`no --meta given and ${d.cwd} has no origin remote`); }
+  }
+  try {
+    const { id, home } = await createWorker({
+      metaUrl, agent, model, name: flags['--name'], probe: !flags['--no-probe'], gh: d.gh, env: d.env, now: d.now,
+    });
+    d.out(`created worker ${id}\n  home: ${home}\n  start it with: sdlc worker start ${id}\n`);
+    return 0;
+  } catch (e) {
+    if (e instanceof CreateError) throw new Refusal(e.message);
+    throw e;
+  }
+}
+
+function detach(id, home, d, oldPid) {
+  // A stale pid file is about to be overwritten: keep its crash signal for the worker's own start.
+  if (oldPid && !d.isAlive(oldPid)) writeState(home, { clean_stop: false });
+  const script = d.scriptPath ?? join(home, 'meta', 'scripts', 'sdlc.mjs');
+  if (!existsSync(script)) throw new Refusal(`cannot start in the background: ${script} is missing (is the kit installed in the meta repo?)`);
+  const logFile = join(home, 'logs', 'worker.log');
+  mkdirSync(join(home, 'logs'), { recursive: true });
+  const fd = openSync(logFile, 'a');
+  let child;
+  try {
+    child = d.spawn(process.execPath, [script, 'worker', 'start', id], {
+      cwd: join(home, 'meta'), detached: true, stdio: ['ignore', fd, fd], env: { ...d.env, [DETACHED]: '1' },
+    });
+  } finally { closeSync(fd); }
+  if (!child.pid) throw new Refusal('could not start the background worker');
+  child.unref();
+  writePid(home, child.pid);
+  d.out(`worker ${id} started in the background, pid ${child.pid}; log: ${logFile}\n`);
+  return 0;
+}
+
+// start and once: preflight, crash detection, the start event, the loop (or one cycle), the shutdown.
+async function cmdRun({ flags, positional: [id] }, d, { once }) {
+  const home = requireHome(id, d);
+  const pid = readPid(home);
+  const self = d.env[DETACHED] === '1' && pid === d.pid; // the pid file `start --detach` wrote for us
+  if (pid && !self && d.isAlive(pid)) throw new Refusal(`worker ${id} is already running, pid ${pid}`);
+  if (flags['--detach']) return detach(id, home, d, pid);
+
+  const ac = new AbortController();
+  const ctx = context(home, d, ac.signal);
+  const { cfg, clone, deps } = ctx;
+  refresh(ctx);
+  const pf = onMain(clone, (board) => preflight({ home, cfg, root: board, gh: { authOk: () => true }, which: () => true }));
+  if (!pf.ok) { // only fatal problems are checked here; the loop's own preflight handles the rest
+    if (self) clearPid(home);
+    throw new Refusal(pf.problem);
+  }
+  const stale = pid && !self && !d.isAlive(pid);
+  const crashed = stale ? `its pid file names process ${pid}, which is gone` : readState(home).clean_stop === false
+    ? 'its last run did not record a clean stop' : null;
+
+  let stopping = null;
+  const off = d.onSignal((sig) => {
+    if (stopping) return;
+    stopping = sig;
+    deps.log(`${sig}: stopping`);
+    ac.abort();
+  });
+  writePid(home, d.pid);
+  writeState(home, { clean_stop: false });
+  let code = 0;
+  let canWrite = true;
+  try {
+    if (crashed) await reportCrash(ctx, crashed);
+    await tryEvent(ctx, 'start');
+    deps.log(`worker ${id} started (pid ${d.pid}, ${cfg.agent} ${cfg.model})`);
+    code = once ? await oneCycle(ctx, d) : await loop(ctx, d, ac.signal);
+  } catch (e) {
+    if (!(e instanceof WorkerFatal)) throw e;
+    d.err(`${e.message}\n`);
+    deps.log(`stopping: ${e.message}`);
+    code = 1;
+    // A retired or unregistered worker writes nothing more (not even its stop event).
+    canWrite = onMain(clone, (board) => { const w = readWorker(board, id); return !!w && !w.retired_at; });
+  } finally {
+    off();
+    if (canWrite && ctx.holding) {
+      const slug = ctx.holding.slug;
+      try { await letGo(ctx, slug, resolveRepoKeys(clone, slug)); } catch (e) { deps.log(`warning: could not release ${slug} (${firstLine(e)})`); }
+    }
+    if (canWrite) await tryEvent(ctx, 'stop', stopping ? `stopped by ${stopping}` : undefined);
+    writeState(home, { clean_stop: true });
+    if (readPid(home) === d.pid) clearPid(home);
+    deps.log(`worker ${id} stopped`);
+  }
+  return code;
+}
+
+async function loop(ctx, d, signal) {
+  while (!signal.aborted) {
+    let r;
+    try {
+      r = await step(ctx);
+    } catch (e) {
+      if (e instanceof WorkerFatal) throw e;
+      ctx.deps.log(`step failed: ${firstLine(e)}; staying idle`);
+      r = { action: 'idle' };
+    }
+    if (signal.aborted) break;
+    if (r.action === 'idle' || r.action === 'needs-attention') await d.wait(ctx.board?.idlePollMs ?? DEFAULT_IDLE_MS, signal);
+  }
+  return 0;
+}
+
+// One step: claim, one phase, report. The caller's shutdown releases whatever is still held.
+async function oneCycle(ctx, d) {
+  const r = await step(ctx);
+  if (r.action === 'needs-attention') { d.err(`worker ${ctx.cfg.id} needs attention: see sdlc inbox\n`); return 1; }
+  if (r.action === 'idle' && !ctx.holding) {
+    const until = readState(ctx.home).backoff_until;
+    d.out(until && ctx.deps.now() < new Date(until) ? `backing off until ${until}\n` : 'queue empty\n');
+    return 0;
+  }
+  d.out(`${r.action}${r.effort ? ` ${r.effort}` : ''}\n`);
+  return r.action === 'failed' ? 1 : 0;
+}
+
+async function cmdStop({ positional: [id] }, d) {
+  const home = requireHome(id, d);
+  if (!(await stopRunning(id, home, d))) { d.out(`worker ${id} is not running\n`); return 0; }
+  d.out(`worker ${id} stopped\n`);
+  return 0;
+}
+
+function localIds(d) {
+  const dir = join(sdlcHome(d.env), 'workers');
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir).filter((n) => WORKER_ID_RE.test(n) && existsSync(join(dir, n, 'config.json'))).sort();
+}
+
+// A local home joined with the worker's state derived from its meta clone's origin/main.
+function describe(id, d) {
+  const home = workerHome(id, d.env);
+  const cfg = readConfig(home);
+  const pid = readPid(home);
+  const running = !!pid && d.isAlive(pid);
+  const clone = join(home, 'meta');
+  let board = { state: 'unknown', effort: null, lastSeen: null };
+  try { fetchMain(clone); } catch (e) { d.err(`warning: ${id}: could not refresh from origin/main: ${firstLine(e)}\n`); }
+  try {
+    board = onMain(clone, (root) => {
+      const { leaseTtlMs } = loadConfig(root);
+      return workerState(id, {
+        worker: readWorker(root, id), events: parseLog(clone, { ref: 'origin/main' }), efforts: loadEfforts(root).efforts,
+        requests: listRequests(root).requests, now: d.now(), ttlMs: leaseTtlMs,
+      });
+    });
+  } catch (e) { d.err(`warning: ${id}: could not read the board: ${firstLine(e)}\n`); }
+  return {
+    id, name: cfg.name, agent: cfg.agent, model: cfg.model, home, running, pid: running ? pid : null,
+    state: board.state, effort: board.effort, lastSeen: board.lastSeen,
+  };
+}
+
+const table = (head, rows) => {
+  const all = [head, ...rows];
+  const w = head.map((_, i) => Math.max(...all.map((r) => String(r[i] ?? '').length)));
+  return all.map((r) => r.map((c, i) => String(c ?? '').padEnd(w[i])).join('  ').trimEnd()).join('\n');
+};
+
+function render(rows, json, d) {
+  if (json) { d.out(`${JSON.stringify(rows)}\n`); return; }
+  const ts = (v) => (v ? new Date(v).toISOString().slice(0, 16).replace('T', ' ') : '-');
+  d.out(`${table(['id', 'name', 'model', 'local', 'state', 'effort', 'last seen'], rows.map((w) => [
+    w.id, w.name, `${w.agent}/${w.model}`, w.running ? `running (pid ${w.pid})` : 'stopped', w.state, w.effort ?? '-', ts(w.lastSeen),
+  ]))}\n`);
+}
+
+function cmdStatus({ flags, positional: [id] }, d) {
+  requireHome(id, d);
+  const row = describe(id, d);
+  render(flags['--json'] ? row : [row], flags['--json'], d);
+  return 0;
+}
+
+function cmdList({ flags }, d) {
+  const ids = localIds(d);
+  if (!ids.length && !flags['--json']) { d.out('no workers on this machine\n'); return 0; }
+  render(ids.map((id) => describe(id, d)), flags['--json'], d);
+  return 0;
+}
+
+async function cmdRetire({ flags, positional: [id] }, d) {
+  const home = requireHome(id, d);
+  if (await stopRunning(id, home, d)) d.out(`stopped worker ${id}\n`);
+  const ctx = context(home, d);
+  const { clone } = ctx;
+  refresh(ctx);
+  for (const slug of await releaseHeld(ctx)) d.out(`released ${slug}\n`);
+  const ws = join(clone, 'workspace');
+  const keep = [
+    ...(isProtected(clone) ? ['meta'] : []),
+    ...(existsSync(ws) ? readdirSync(ws).filter((k) => !k.startsWith('.') && isProtected(join(ws, k))).map((k) => `meta/workspace/${k}`) : []),
+    ...(existsSync(join(home, 'salvage')) && readdirSync(join(home, 'salvage')).length ? ['salvage'] : []),
+  ];
+  if (keep.length && !flags['--force']) {
+    throw new Refusal(`worker ${id} not retired: unpushed or uncommitted work in ${keep.join(', ')} under ${home}; `
+      + 'push or copy it, or run retire again with --force to delete it');
+  }
+  const stamp = iso(d.now());
+  await updateRegistry(ctx, 'retire', (w) => (w.retired_at ? null : { ...w, retired_at: stamp }), (w) => !!w?.retired_at);
+  rmSync(home, { recursive: true, force: true });
+  d.out(`worker ${id} retired; deleted ${home}\n`);
+  return 0;
+}
+
+async function cmdConfig({ flags, positional: [id] }, d) {
+  const model = flags['--model'];
+  if (!model) throw new UsageError('config needs --model');
+  const home = requireHome(id, d);
+  const pid = readPid(home);
+  if (pid && d.isAlive(pid)) throw new Refusal(`worker ${id} is running (pid ${pid}); stop it first`);
+  const ctx = context(home, d);
+  refresh(ctx);
+  await updateRegistry(ctx, 'config', (w) => (w.model === model ? null : { ...w, model }), (w) => w?.model === model);
+  writeConfig(home, { ...readConfig(home), model });
+  d.out(`worker ${id} now runs ${model}\n`);
+  return 0;
+}
+
+const HANDLERS = {
+  create: cmdCreate,
+  start: (a, d) => cmdRun(a, d, { once: false }),
+  once: (a, d) => cmdRun(a, d, { once: true }),
+  stop: cmdStop, status: cmdStatus, list: cmdList, retire: cmdRetire, config: cmdConfig,
+};
+
+export async function runWorker(argv, deps) {
+  const d = resolveDeps(deps);
+  const [cmd, ...rest] = argv;
+  try {
+    if (!cmd || !COMMANDS[cmd]) throw new UsageError(cmd ? `unknown worker command ${cmd}` : 'missing worker command');
+    const args = parseArgs(COMMANDS[cmd], rest);
+    if (args.positional.length && !WORKER_ID_RE.test(args.positional[0])) throw new UsageError(`invalid worker id "${args.positional[0]}"`);
+    return await HANDLERS[cmd](args, d);
+  } catch (e) {
+    if (e instanceof UsageError) { d.err(`${e.message}\n${USAGE}`); return 2; }
+    d.err(`${firstLine(e)}\n`);
+    return 1;
+  }
+}
+
+export const run = runWorker;
