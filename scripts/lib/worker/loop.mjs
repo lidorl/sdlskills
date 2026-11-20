@@ -12,7 +12,7 @@ import { loadConfig } from '../board/config.mjs';
 import { syncKeepingWork, SyncConflict } from '../board/report.mjs';
 import { loadCatalog } from '../catalog.mjs';
 import { assemble as realAssemble, resolveRepoKeys } from '../../assemble-env.mjs';
-import { readConfig, readState } from './home.mjs';
+import { readConfig, readState, writeState } from './home.mjs';
 import { route, buildPrompt, agentCommand, runAgent as realRunAgent } from './agent.mjs';
 import { preflight, realDeps as preflightDeps } from './preflight.mjs';
 import { lose, letGo, effortError, workerError, handleResult } from './outcomes.mjs';
@@ -27,9 +27,19 @@ const CANDIDATE = new Set(['ACCEPTED', 'DESIGNED', 'PLANNED', 'IN_PROGRESS']);
 const iso = (d) => d.toISOString().replace(/\.\d{3}Z$/, 'Z');
 const firstLine = (e) => String(e?.message ?? e).split('\n')[0];
 export const BOARD_ERROR_LIMIT = 3; // board failures in a row on a held effort before an effort error
-// `continued`: this hold carries on our own live claim (claim took its renew branch, or a restart resumes it),
-// so local code commits ahead of origin are ours to keep (Ruling P2-13). Any new claim or takeover is not.
-const held = (slug, continued) => ({ slug, fresh: true, continued, developmentDone: false, stalls: 0, boardErrors: 0 });
+// `continued`: this hold carries on a claim whose checkouts this worker already prepared, so local code
+// commits ahead of origin are ours to keep (Rulings P2-13, P2-14). `prepared`: prepareCheckouts has run in
+// this hold. A new claim, a takeover, or a claim that never got as far as preparing is not a continuation.
+const held = (slug, continued) => ({ slug, continued, prepared: false, developmentDone: false, stalls: 0, boardErrors: 0 });
+
+// Ruling P2-14: continuation is proven by state.json's `prepared` marker, written only after
+// prepareCheckouts ran for a claim. renew keeps claimed_at; a new claim or a takeover changes it, so a claim
+// pushed just before a crash (never prepared) does not match.
+export function continuesOurClaim(clone, slug, { claimant, prepared, now, ttlMs }) {
+  const fm = committedFm(clone, slug, 'origin/main');
+  return !!fm && fm.claimed_by === claimant && claimState(fm, now, ttlMs) === 'live'
+    && prepared?.slug === slug && !!fm.claimed_at && String(prepared.claimed_at) === String(fm.claimed_at);
+}
 
 export function makeContext({ home, deps = {} }) {
   const cfg = readConfig(home);
@@ -98,13 +108,13 @@ async function stepOn(ctx, board) {
 
   const now = deps.now();
   const resumable = savedSlugs(home).find((s) => holds(clone, s, cfg.id, { ref: 'origin/main' }));
-  const liveOurs = (s) => claimState(committedFm(clone, s, 'origin/main'), now, bcfg.leaseTtlMs) === 'live';
+  const continued = (s) => continuesOurClaim(clone, s, { claimant: cfg.id, prepared: readState(home).prepared, now, ttlMs: bcfg.leaseTtlMs });
   let slug = ctx.holding?.slug ?? null;
   if (slug) {
     if (!holds(clone, slug, cfg.id, { ref: 'origin/main' })) return lose(ctx, slug);
   } else if (resumable) {
     slug = resumable;
-    ctx.holding = held(slug, liveOurs(slug));
+    ctx.holding = held(slug, continued(slug));
     deps.log(`resuming ${slug} with its saved agent input`);
   } else {
     const { backoff_until: until } = readState(home);
@@ -118,7 +128,7 @@ async function stepOn(ctx, board) {
       return { action: 'idle' };
     }
     slug = picked.slug;
-    ctx.holding = held(slug, picked.continued);
+    ctx.holding = held(slug, continued(slug));
   }
   return runHeld(ctx, slug, bcfg);
 }
@@ -145,7 +155,7 @@ function readonlyKeys(clone) {
   } catch { return new Set(); }
 }
 
-// In-flight before new: our own live claims first, then the ranked queue. -> { slug, continued } or null
+// In-flight before new: our own live claims first, then the ranked queue. -> { slug } or null
 async function pickAndClaim(ctx, board, bcfg, now) {
   const { cfg, deps, clone, identity } = ctx;
   const ttlMs = bcfg.leaseTtlMs;
@@ -164,7 +174,7 @@ async function pickAndClaim(ctx, board, bcfg, now) {
     });
     if (r.ok) {
       deps.log(r.takeover ? `took over ${e.slug} from ${r.takeover}` : r.renewed ? `continuing our claim on ${e.slug}` : `claimed ${e.slug}`);
-      return { slug: e.slug, continued: r.renewed === true };
+      return { slug: e.slug };
     }
     deps.log(`could not claim ${e.slug} (${r.reason})`);
     fetched = false;
@@ -221,10 +231,12 @@ async function runHeld(ctx, slug, bcfg) {
   const keys = resolveRepoKeys(clone, slug);
   if (keys.length && fm.status !== 'ACCEPTED') {
     try {
-      if (ctx.holding.fresh) { // a new hold starts from what was pushed (Ruling P2-11)
+      if (!ctx.holding.prepared) { // a new hold starts from what was pushed (Ruling P2-11)
         salvage(ctx, { paths: [], reason: `fresh claim of ${slug}` });
         const stamp = iso(deps.now()).replace(/[-:]/g, '');
         for (const n of prepareCheckouts(clone, slug, keys, stamp, { continued: ctx.holding.continued })) deps.log(n);
+        ctx.holding.prepared = true;
+        writeState(home, { prepared: { slug, claimed_at: fm.claimed_at } });
       }
       deps.assemble({ rootDir: clone, slug, keys, hooks: { workerId: cfg.id } });
     } catch (e) {
@@ -253,7 +265,6 @@ async function runHeld(ctx, slug, bcfg) {
     deps.log(rr.ok ? `renewed ${slug}` : `could not renew ${slug} (${rr.reason}); retrying`);
   };
   const onTick = () => { inflight = renewIfDue(); return inflight; };
-  ctx.holding.fresh = false;
   deps.log(`running ${r.phase} for ${slug}`);
   const res = await deps.runAgent({
     ...cmd, env: { ...cmd.env, ...identityEnv(identity) }, cwd: clone, timeoutMs: bcfg.phaseTimeoutMs, logPath,

@@ -10,8 +10,9 @@ import { buildRequest, answerRequest, validateRequest } from '../board/requests.
 import { parseDoc } from '../board/frontmatter.mjs';
 import { runAgent } from './agent.mjs';
 import { writeConfig, readState, writeState } from './home.mjs';
+import { writeInput } from './agent-input.mjs';
 import { assemble } from '../../assemble-env.mjs';
-import { makeContext, step } from './loop.mjs';
+import { makeContext, step, continuesOurClaim } from './loop.mjs';
 
 const FAKE = join(dirname(fileURLToPath(import.meta.url)), 'fixtures', 'fake-agent.mjs');
 const T0 = new Date('2026-06-01T10:00:00Z');
@@ -825,4 +826,102 @@ test('development runs that only push code commits are progress, not stalls', as
     assert.deepEqual(await w.step(), { action: 'reported', effort: 'alpha' }, f);
   }
   assert.equal(requestsOnMain(b).length, 0);
+});
+
+const release = (b, slug) => {
+  const f = onMain(b, `docs/feat-req/${slug}.md`);
+  b.seed(`docs/feat-req/${slug}.md`, f.replace(/claimed_by: .*\n/, '').replace(/claimed_at: .*\n/, '').replace(/renewed_at: .*\n/, ''), `board(release): ${slug}`);
+};
+
+test('a crash between a new claim and preparing the checkouts is not a continuation: nothing abandoned is pushed (P2-14)', async () => {
+  const b = setup({ featReqs: { alpha: feat({ status: 'DESIGNED' }) }, files: { 'docs/design/alpha.md': design(['api']) } });
+  const code = codeRepo(b);
+  let crash = false;
+  const w = worker(b, {
+    catalog: code.catalog, script: { ...codeCommit('first.txt'), result: completed('PLANNED') },
+    deps: { log: (m) => { w.logs.push(m); if (crash && /^claimed alpha/.test(m)) throw new Error('crash after claim'); } },
+  });
+  assert.equal((await w.step()).action, 'reported');
+  w.script({ ...codeCommit('abandoned.txt'), result: null });
+  w.beforeRun = () => {
+    const f = onMain(b, 'docs/feat-req/alpha.md');
+    b.seed('docs/feat-req/alpha.md', f.replace(`claimed_by: ${IDA}`, 'claimed_by: bob-zzzzzz'), 'board(takeover): alpha');
+  };
+  assert.equal((await w.step()).action, 'lost');
+  w.beforeRun = null;
+  release(b, 'alpha');
+  w.now = at(10 * MIN);
+  crash = true;
+  await assert.rejects(w.step(), /crash after claim/); // our new claim is on main; the checkouts were never prepared
+  crash = false;
+  w.restart();
+  w.script({ result: completed('PLANNED') });
+  assert.deepEqual(await w.step(), { action: 'reported', effort: 'alpha' });
+  assert.ok(!remoteLog(code).includes('abandoned.txt'), remoteLog(code).join(', '));
+});
+
+test('continuesOurClaim: live, ours and prepared for this claim → true; a different claimed_at or none → false (P2-14)', async () => {
+  const b = setup({ featReqs: { alpha: feat({ claimed_by: IDA, claimed_at: '2026-06-01T09:00:00Z', renewed_at: '2026-06-01T09:30:00Z' }) } });
+  const c = b.clone('c');
+  const ask = (prepared, over = {}) => continuesOurClaim(c, 'alpha', { claimant: IDA, prepared, now: T0, ttlMs: 4 * 3600e3, ...over });
+  assert.equal(ask({ slug: 'alpha', claimed_at: '2026-06-01T09:00:00Z' }), true);
+  assert.equal(ask({ slug: 'alpha', claimed_at: '2026-06-01T08:00:00Z' }), false, 'an earlier claim of the same effort');
+  assert.equal(ask({ slug: 'beta', claimed_at: '2026-06-01T09:00:00Z' }), false);
+  assert.equal(ask(null), false);
+  assert.equal(ask({ slug: 'alpha', claimed_at: '2026-06-01T09:00:00Z' }, { claimant: IDB }), false, 'not ours');
+  assert.equal(ask({ slug: 'alpha', claimed_at: '2026-06-01T09:00:00Z' }, { now: at(5 * 3600e3) }), false, 'stale');
+});
+
+test('saved-input resume: kept ahead commits only when the prepared marker matches (P2-14)', async () => {
+  const b = setup({ featReqs: { alpha: feat({ status: 'DESIGNED' }) }, files: { 'docs/design/alpha.md': design(['api']) } });
+  const code = codeRepo(b);
+  const w = worker(b, { catalog: code.catalog, script: { ...codeCommit('first.txt'), result: completed('PLANNED') } });
+  assert.equal((await w.step()).action, 'reported');
+  const prepared = readState(w.home).prepared;
+  assert.deepEqual(prepared, { slug: 'alpha', claimed_at: fmOnMain(b, 'alpha').claimed_at });
+  const unpushed = (file) => {
+    const api = join(w.meta, 'workspace/api');
+    writeFileSync(join(api, file), 'x\n');
+    git(api, 'add', file);
+    git(api, '-c', `user.name=${OWNER.name}`, '-c', `user.email=${OWNER.email}`, 'commit', '-q', '-m', file);
+  };
+  // matching marker: a restart resuming through saved input keeps the unpushed commit
+  unpushed('kept.txt');
+  writeInput(w.home, 'alpha', ['Request x (question): Option A']);
+  w.restart();
+  w.script({ result: completed('PLANNED') });
+  assert.equal((await w.step()).action, 'reported');
+  assert.ok(w.logs.some((l) => l === 'resuming alpha with its saved agent input'), w.logs.join('\n'));
+  assert.equal(remoteLog(code)[0], 'kept.txt');
+  // mismatching marker (as after a crash before preparing): the unpushed commit is set aside, not pushed
+  unpushed('stale.txt');
+  writeInput(w.home, 'alpha', ['Request y (question): Option B']);
+  writeState(w.home, { prepared: { slug: 'alpha', claimed_at: '2000-01-01T00:00:00Z' } });
+  w.restart();
+  assert.equal((await w.step()).action, 'reported');
+  assert.ok(!remoteLog(code).includes('stale.txt'), remoteLog(code).join(', '));
+});
+
+test('a hold that skipped preparing at ACCEPTED prepares the checkouts once it reaches a code phase (P2-14)', async () => {
+  const b = setup({ featReqs: { alpha: feat() } });
+  const code = codeRepo(b);
+  const w = worker(b, { catalog: code.catalog });
+  // a checkout left from an earlier hold of alpha by this worker, with a commit nobody pushed
+  const api = join(w.meta, 'workspace/api');
+  git(w.meta, 'clone', '-q', code.remote, 'workspace/api');
+  git(api, 'checkout', '-q', '-b', 'feat/alpha');
+  writeFileSync(join(api, 'stale.txt'), 'x\n');
+  git(api, 'add', 'stale.txt');
+  git(api, '-c', 'user.name=x', '-c', 'user.email=x@x', 'commit', '-q', '-m', 'stale.txt');
+  w.beforeRun = (opts) => {
+    const f = join(opts.cwd, 'docs/feat-req/alpha.md');
+    w.script({ writes: { 'docs/design/alpha.md': design(['api']), 'docs/feat-req/alpha.md': readFileSync(f, 'utf8').replace('status: ACCEPTED', 'status: DESIGNED') }, result: completed('DESIGNED') });
+  };
+  assert.deepEqual(await w.step(), { action: 'reported', effort: 'alpha' });
+  assert.equal(readState(w.home).prepared ?? null, null, 'no checkouts prepared at ACCEPTED');
+  w.beforeRun = null;
+  w.script({ ...codeCommit('plan-step.txt'), writes: { ...codeCommit('plan-step.txt').writes, 'docs/plans/alpha.md': '# plan\n' }, result: completed('PLANNED') });
+  assert.deepEqual(await w.step(), { action: 'reported', effort: 'alpha' });
+  assert.ok(!remoteLog(code).includes('stale.txt'), remoteLog(code).join(', '));
+  assert.equal(readState(w.home).prepared.slug, 'alpha');
 });

@@ -22,6 +22,12 @@ const oneLine = (s) => String(s ?? '').replace(/\s+/g, ' ').trim();
 const lastLines = (text, n) => text.replace(/\n+$/, '').split('\n').slice(-n).join('\n');
 export const STALL_LIMIT = 3; // completed runs in a row that change nothing before an effort error
 
+// The hold is over: forget it, and its prepared-checkouts marker (Ruling P2-14).
+function endHold(ctx, slug) {
+  ctx.holding = null;
+  if (readState(ctx.home).prepared?.slug === slug) writeState(ctx.home, { prepared: null });
+}
+
 const failedPushes = (code) => code.failed.map((f) => `push of workspace/${f.key} failed: ${f.error}`);
 
 // Answers applied but not yet acted on by a run that finished: they stay saved, and the error says so.
@@ -35,7 +41,7 @@ export function lose(ctx, slug) {
   const why = fm?.claimed_by && fm.claimed_by !== ctx.cfg.id ? `now held by ${fm.claimed_by}` : `it is ${fm?.status ?? 'gone'} on main`;
   ctx.deps.log(`lost ${slug}: ${why}; nothing more is pushed for it`);
   salvage(ctx, { reason: `lost ${slug}` });
-  ctx.holding = null;
+  endHold(ctx, slug);
   return { action: 'lost', effort: slug };
 }
 
@@ -150,7 +156,7 @@ async function handleRequest(ctx, slug, status, result, keys) {
   clearInput(home, slug);
   if (q.blocking) {
     salvage(ctx, { reason: `released ${slug} for request ${r.id}` });
-    ctx.holding = null;
+    endHold(ctx, slug);
   }
   deps.log(`posted ${q.kind} ${r.id} for ${slug}${q.blocking ? '; released while it waits' : ''}`);
   return { action: 'requested', effort: slug };
@@ -164,7 +170,7 @@ export async function letGo(ctx, slug, keys) {
   const dir = salvage(ctx, { reason: `released ${slug}` });
   const r = await release(clone, slug, { claimant: cfg.id, identity, workerId: cfg.id, hooks: deps.hooks });
   if (!r.ok) deps.log(`could not release ${slug} (${r.reason})`);
-  ctx.holding = null;
+  endHold(ctx, slug);
   return dir;
 }
 
@@ -193,7 +199,7 @@ export async function effortError(ctx, slug, status, message, { keys = [], logPa
     },
   };
   const r = await postRequest(clone, req, { identity, workerId: cfg.id, releaseFrom: { slug, claimant: cfg.id }, sleep: deps.sleep, hooks: deps.hooks });
-  ctx.holding = null;
+  endHold(ctx, slug);
   const { failures: prev } = readState(home);
   const failures = prev + 1;
   const backoff = ctx.board.backoffMs;
