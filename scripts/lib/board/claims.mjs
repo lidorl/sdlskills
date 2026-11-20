@@ -2,7 +2,7 @@
 // frontmatter. It counts only once it is on origin/main and validated (boardWrite does both).
 import { boardWrite, fetchMain, identityEnv, showFile, BoardError } from './git.mjs';
 import { parseDoc, setFields, appendToSection } from './frontmatter.mjs';
-import { dirTree, SLUG_RE } from './safe-path.mjs';
+import { dirTree, SLUG_RE, REQUEST_ID_RE } from './safe-path.mjs';
 
 const CLAIM_FIELDS = ['claimed_by', 'claimed_at', 'renewed_at'];
 export const NOT_HOLDABLE = new Set(['PARKED', 'REJECTED', 'IMPLEMENTED']);
@@ -54,6 +54,16 @@ export function holds(clone, slug, claimant, { ref } = {}) {
 export const holdsIn = (tree, slug, claimant) => holdable(readFm(tree, slug)?.fm, claimant);
 const claimedBy = (tree, slug) => readFm(tree, slug)?.fm.claimed_by;
 
+// `awaiting` names a request that is still open in `tree` (the same origin/main content the claim patches).
+// An id that isn't a request id, a missing file or an unparsable one counts as not open.
+function awaitingOpen(tree, fm) {
+  const id = String(fm.awaiting ?? '');
+  if (!REQUEST_ID_RE.test(id)) return false;
+  const text = tree.read(`board/requests/${id}.md`);
+  if (text === null) return false;
+  try { return parseDoc(text).data?.status === 'open'; } catch { return false; }
+}
+
 const trailersFor = (slug, workerId, extra = {}) => ({
   ...(workerId ? { worker: workerId } : {}), effort: slug, ...extra,
 });
@@ -61,7 +71,7 @@ const trailersFor = (slug, workerId, extra = {}) => ({
 const MAX_ATTEMPTS = 3;
 class NotHolder extends Error {}
 
-export async function claim(clone, slug, { claimant, identity, workerId, now, ttlMs, isAwaitingOpen, hooks }) {
+export async function claim(clone, slug, { claimant, identity, workerId, now, ttlMs, hooks }) {
   checkSlug(slug);
   const stamp = iso(now);
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
@@ -88,7 +98,7 @@ export async function claim(clone, slug, { claimant, identity, workerId, now, tt
         const cur = readFm(tree, slug);
         if (!cur) { refusal = 'gone'; return; }
         if (NOT_HOLDABLE.has(cur.fm.status)) { refusal = 'closed'; return; }
-        if (cur.fm.awaiting && isAwaitingOpen(cur.fm)) { refusal = 'awaiting'; return; }
+        if (cur.fm.awaiting && awaitingOpen(tree, cur.fm)) { refusal = 'awaiting'; return; }
         const state = claimState(cur.fm, now, ttlMs);
         if (state === 'live') { refusal = cur.fm.claimed_by === claimant ? 'mismatch' : 'held'; return; }
         if ((state === 'stale') !== stale || (stale && cur.fm.claimed_by !== old)) { refusal = 'mismatch'; return; }

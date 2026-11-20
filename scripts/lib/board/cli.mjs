@@ -199,17 +199,22 @@ function nextOn(root, board, { flags }, deps) {
   return 0;
 }
 
+// fn(dir) over a throwaway copy of origin/main's docs/ and board/ (no fetch; the caller has fetched).
+function onMainCopy(root, fn) {
+  const snap = snapshotMain(root);
+  try { return fn(snap.dir); } finally { snap.cleanup(); }
+}
+
+// Claiming is a protocol write: everything it decides or reports comes from origin/main, never the local tree.
 async function cmdClaim(root, { positional: [slug] }, deps) {
   assertOnMain(root);
   const id = deps.whoami();
-  const cfg = loadConfig(root);
+  fetchMain(root, identityEnv(id));
+  const cfg = onMainCopy(root, loadConfig);
   const now = deps.now();
-  const r = await claim(root, slug, {
-    claimant: id.login, identity: id, now, ttlMs: cfg.leaseTtlMs,
-    isAwaitingOpen: (fm) => openRequestIds(root).has(String(fm.awaiting)),
-  });
+  const r = await claim(root, slug, { claimant: id.login, identity: id, now, ttlMs: cfg.leaseTtlMs });
   if (!r.ok) {
-    const fm = committedFm(root, slug);
+    const fm = committedFm(root, slug, 'origin/main');
     const why = {
       gone: `no such effort ${slug}`, held: `${slug} is held by ${fm?.claimed_by}`, closed: `${slug} is ${fm?.status}; not claimable`,
       awaiting: `${slug} is waiting on an open request`, mismatch: `${slug} changed while claiming; try again`,
@@ -218,9 +223,12 @@ async function cmdClaim(root, { positional: [slug] }, deps) {
     return 1;
   }
   deps.out(r.takeover ? `claimed ${slug} (took over from ${r.takeover})\n` : `claimed ${slug}\n`);
-  const { efforts } = loadEfforts(root);
-  const mine = efforts.find((e) => e.slug === slug);
-  if (mine) warnOverlaps(deps, slug, overlaps(mine, efforts, { now, ttlMs: cfg.leaseTtlMs, readonlyKeys: readonlyKeys(root) }));
+  const ov = onMainCopy(root, (board) => {
+    const { efforts } = loadEfforts(board);
+    const mine = efforts.find((e) => e.slug === slug);
+    return mine ? overlaps(mine, efforts, { now, ttlMs: cfg.leaseTtlMs, readonlyKeys: readonlyKeys(root) }) : [];
+  });
+  warnOverlaps(deps, slug, ov);
   return 0;
 }
 
@@ -384,11 +392,12 @@ async function promptWith(ui, req) {
   return { answer, notes };
 }
 
+// Answering is a protocol write: read the request from origin/main and never touch the local tree.
 async function cmdAnswer(root, { flags, positional: [id] }, deps) {
   assertOnMain(root);
   const ident = deps.whoami();
-  sync(root, identityEnv(ident));
-  const req = listRequests(root).requests.find((r) => r.id === id);
+  fetchMain(root, identityEnv(ident));
+  const req = onMainCopy(root, (board) => listRequests(board).requests.find((r) => r.id === id));
   if (!req || req.fm.status !== 'open') { deps.err(`no such open request ${id}\n`); return 1; }
   let answer;
   let notes = flags['--note'];

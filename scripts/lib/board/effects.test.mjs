@@ -169,7 +169,7 @@ test('worker error resolved: nothing applied', () => {
 
 async function claimed(fx, name = 'a') {
   const clone = fx.clone(name);
-  const r = await claim(clone, SLUG, { claimant: WHO, workerId: WHO, identity: IDENT, now: NOW, ttlMs: 4 * 3600e3, isAwaitingOpen: () => false });
+  const r = await claim(clone, SLUG, { claimant: WHO, workerId: WHO, identity: IDENT, now: NOW, ttlMs: 4 * 3600e3 });
   assert.equal(r.ok, true);
   return clone;
 }

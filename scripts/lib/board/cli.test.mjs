@@ -88,7 +88,7 @@ test('report after a takeover prints the warning, exits 3, pushes nothing', asyn
   const o = b.clone('o');
   assert.equal((await cli(a, ['claim', 'bulk-export'])).code, 0);
   const t = await claim(o, 'bulk-export', {
-    claimant: 'lidorl-1a2b3c', identity: ME, now: hours(5), ttlMs: 4 * 3600e3, isAwaitingOpen: () => false,
+    claimant: 'lidorl-1a2b3c', identity: ME, now: hours(5), ttlMs: 4 * 3600e3,
   });
   assert.ok(t.ok);
   const before = git(b.remote, 'rev-parse', 'main');
@@ -450,4 +450,39 @@ test('report keeps main\'s protocol fields: a working copy that lost awaiting do
   assert.equal(r.code, 0, r.err);
   assert.equal(onMain(b, 'bulk-export').status, 'IMPLEMENTED');
   assert.equal(onMain(b, 'bulk-export').awaiting, '202606010900-aaaaaa');
+});
+
+test('claim reads awaiting from origin/main: a request that exists only upstream still blocks the claim', async () => {
+  const b = makeBoard({ featReqs: { 'bulk-export': feat() } });
+  const c = b.clone('c'); // taken before the request lands
+  const id = '202606010900-aaaaaa';
+  b.seed(`board/requests/${id}.md`, request(id, { blocking: true }));
+  b.seed('docs/feat-req/bulk-export.md', git(b.remote, 'show', 'main:docs/feat-req/bulk-export.md').replace('status: ACCEPTED', `status: ACCEPTED\nawaiting: '${id}'`));
+  const before = git(b.remote, 'rev-parse', 'main');
+  const r = await cli(c, ['claim', 'bulk-export']);
+  assert.equal(r.code, 1);
+  assert.match(r.err, /bulk-export is waiting on an open request/);
+  assert.equal(git(b.remote, 'rev-parse', 'main'), before);
+});
+
+test('claim failure message reads origin/main, not the stale local copy', async () => {
+  const b = makeBoard({ featReqs: { 'bulk-export': feat() } });
+  const c = b.clone('c');
+  b.seed('docs/feat-req/bulk-export.md', git(b.remote, 'show', 'main:docs/feat-req/bulk-export.md').replace('status: ACCEPTED', 'status: PARKED'));
+  const r = await cli(c, ['claim', 'bulk-export']);
+  assert.equal(r.code, 1);
+  assert.match(r.err, /bulk-export is PARKED; not claimable/);
+});
+
+test('answer never touches the local tree: a dirty edit survives an upstream move, nothing is stashed', async () => {
+  const id = '202606010900-bbbbbb';
+  const b = makeBoard({ featReqs: { 'bulk-export': feat() }, files: { [`board/requests/${id}.md`]: request(id), 'notes.md': 'one\n' } });
+  const c = b.clone('c');
+  writeFileSync(join(c, 'notes.md'), 'mine\n');
+  b.seed('notes.md', 'theirs\n');
+  const r = await cli(c, ['answer', id, '--choice', 'confirm']);
+  assert.equal(r.code, 0, r.err);
+  assert.equal(readFileSync(join(c, 'notes.md'), 'utf8'), 'mine\n');
+  assert.equal(git(c, 'stash', 'list'), '');
+  assert.equal(parseDoc(git(b.remote, 'show', `main:board/requests/${id}.md`)).data.status, 'answered');
 });

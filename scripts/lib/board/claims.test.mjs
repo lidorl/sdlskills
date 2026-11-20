@@ -7,13 +7,14 @@ import { join } from 'node:path';
 import { makeBoard, IDENT } from './fixtures.mjs';
 import { BoardError } from './git.mjs';
 import { claimState, claim, renew, release, holds } from './claims.mjs';
-import { parseDoc } from './frontmatter.mjs';
+import { parseDoc, setFields } from './frontmatter.mjs';
+import { buildRequest } from './requests.mjs';
 
 const g = (cwd, ...args) => execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();
 const NOW = new Date('2026-11-20T12:00:00.000Z');
 const TTL = 4 * 3600e3;
 const noSleep = () => Promise.resolve();
-const base = { identity: IDENT, now: NOW, ttlMs: TTL, isAwaitingOpen: () => false, sleep: noSleep };
+const base = { identity: IDENT, now: NOW, ttlMs: TTL, sleep: noSleep };
 const rel = (slug) => `docs/feat-req/${slug}.md`;
 
 function setup(fm = { title: 'Bulk export', status: 'APPROVED' }) {
@@ -64,15 +65,27 @@ test('race: two clones claim the same effort, exactly one holds it on origin/mai
   assert.equal(g(a, 'rev-list', '--count', 'origin/main..HEAD'), '0');
 });
 
+const OPEN_ID = '202611201100-aaaaaa';
+const ANSWERED_ID = '202611201100-bbbbbb';
+const req = (id) => buildRequest({
+  id, kind: 'clarification', scope: 'effort', effort: 'waiting', worker: 'w-aaaaaa', for: 'p', blocking: true, now: NOW,
+  sections: { Request: 'r', Context: 'c', Assumption: 'a' },
+});
+
 test('live claim by someone else is held; awaiting open is awaiting; missing file is gone', async () => {
   const fx = makeBoard({
     featReqs: { 'bulk-export': { title: 't', claimed_by: 'x', claimed_at: '2026-11-20T11:00:00Z', renewed_at: '2026-11-20T11:30:00Z' } },
-    files: { [rel('waiting')]: '---\nawaiting: question-1\n---\n\n# w\n' },
+    files: {
+      [rel('waiting')]: `---\nawaiting: ${OPEN_ID}\n---\n\n# w\n`,
+      [rel('answered')]: `---\nawaiting: ${ANSWERED_ID}\n---\n\n# w\n`,
+      [`board/requests/${OPEN_ID}.md`]: req(OPEN_ID),
+      [`board/requests/${ANSWERED_ID}.md`]: setFields(req(ANSWERED_ID), { status: 'answered' }),
+    },
   });
   const a = fx.clone('a');
   assert.deepEqual(await claim(a, 'bulk-export', { ...base, claimant: 'a-w' }), { ok: false, reason: 'held' });
-  assert.deepEqual(await claim(a, 'waiting', { ...base, claimant: 'a-w', isAwaitingOpen: () => true }), { ok: false, reason: 'awaiting' });
-  assert.equal((await claim(a, 'waiting', { ...base, claimant: 'a-w', isAwaitingOpen: () => false })).ok, true);
+  assert.deepEqual(await claim(a, 'waiting', { ...base, claimant: 'a-w' }), { ok: false, reason: 'awaiting' });
+  assert.equal((await claim(a, 'answered', { ...base, claimant: 'a-w' })).ok, true);
   assert.deepEqual(await claim(a, 'nope', { ...base, claimant: 'a-w' }), { ok: false, reason: 'gone' });
   assert.equal(g(a, 'rev-parse', 'HEAD'), g(a, 'rev-parse', 'origin/main'));
 });
