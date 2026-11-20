@@ -2,7 +2,7 @@
 date: 2026-11-19
 priority: High
 severity: Low
-status: PLANNED
+status: IN_PROGRESS
 source: Promoted from docs/kit-open-items.md ("Parallel agents / task claiming"), shaped in a 2026-11-19 discussion
 plans:
   - docs/plans/workers-1.md

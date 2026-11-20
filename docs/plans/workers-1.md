@@ -1,7 +1,7 @@
 ---
 feat_req: docs/feat-req/workers.md
 design: docs/design/workers.md
-status: PLANNED
+status: IMPLEMENTED
 date: 2026-11-20
 plan: 1 of 3
 repos: [sdlskills]
@@ -62,7 +62,7 @@ Single-repo effort. `repos.yml` and `workspace/` don't apply to building the kit
   - `setFields(text: string, patch: object) -> string`. A `null` value deletes the key. Other keys keep their order, and the body is unchanged byte-for-byte.
   - `appendToSection(text: string, heading: string, line: string) -> string`. Appends `line` under `## <heading>`, creating the section at the end of the file if it's absent.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```js
 test('setFields adds, changes and deletes keys, keeps body and key order', () => {
@@ -88,21 +88,21 @@ test('appendToSection inserts before the next ## heading when the section is in 
 });
 ```
 
-- [ ] **Step 2: Run the tests and confirm they fail**
+- [x] **Step 2: Run the tests and confirm they fail**
 
 Run: `node --test scripts/lib/board/frontmatter.test.mjs`
 Expected: FAIL, "Cannot find module".
 
-- [ ] **Step 3: Implement `parseDoc`, `setFields` and `appendToSection`**
+- [x] **Step 3: Implement `parseDoc`, `setFields` and `appendToSection`**
 
 Use the `yaml` package's `parseDocument` so existing key order is kept, and serialize only the frontmatter block. Ignore headings inside ``` fences when finding sections (same approach as `render-status.mjs` `parsePullRequests`).
 
-- [ ] **Step 4: Run the tests and confirm they pass**
+- [x] **Step 4: Run the tests and confirm they pass**
 
 Run: `node --test scripts/lib/board/frontmatter.test.mjs`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add scripts/lib/board/frontmatter.mjs scripts/lib/board/frontmatter.test.mjs
@@ -123,7 +123,7 @@ git commit -m "feat(board): frontmatter read and edit"
   - `validateConfig(obj) -> string[]`, a list of problems.
   - `boardEnabled(root: string) -> boolean`: whether `board/` is a directory.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```js
 test('parseDuration', () => {
@@ -145,19 +145,19 @@ test('validateConfig flags unknown keys and bad durations', () => {
 test('boardEnabled is false without board/ and true with it', () => { /* … */ });
 ```
 
-- [ ] **Step 2: Run the tests and confirm they fail**
+- [x] **Step 2: Run the tests and confirm they fail**
 
 Run: `node --test scripts/lib/board/config.test.mjs`
 Expected: FAIL.
 
-- [ ] **Step 3: Implement the five exports in `config.mjs`**
+- [x] **Step 3: Implement the five exports in `config.mjs`**
 
-- [ ] **Step 4: Run the tests and confirm they pass**
+- [x] **Step 4: Run the tests and confirm they pass**
 
 Run: `node --test scripts/lib/board/config.test.mjs`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add scripts/lib/board/config.*
@@ -176,7 +176,7 @@ git commit -m "feat(board): board/config.yml settings with defaults"
   - `formatMessage({ kind, subject, trailers: { worker?, effort?, request?, phase?, replaces?, answeredBy? } }) -> string`. The subject line is `board(<kind>): <subject>`, then a blank line, then the trailers in the fixed order `Worker, Sdlc-Event, Effort, Request, Phase, Replaces, Answered-by`. `Sdlc-Event` is always present.
   - `parseLog(root: string, { ref = 'origin/main', limit = 2000, sinceSha? }) -> Event[]`, newest first. `Event = { sha, author, at: Date, kind, subject, worker, effort, request, phase, replaces, answeredBy }`. Commits without `Sdlc-Event` are skipped. With `sinceSha`, only the commits after it are returned.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```js
 test('formatMessage', () => {
@@ -193,21 +193,21 @@ test('parseLog round-trips formatMessage, skips non-board commits, honours since
 });
 ```
 
-- [ ] **Step 2: Run the tests and confirm they fail**
+- [x] **Step 2: Run the tests and confirm they fail**
 
 Run: `node --test scripts/lib/board/events.test.mjs`
 Expected: FAIL.
 
-- [ ] **Step 3: Implement `formatMessage` and `parseLog`**
+- [x] **Step 3: Implement `formatMessage` and `parseLog`**
 
 `parseLog` runs `git log <ref> -n <limit> --format=%H%x00%an%x00%aI%x00%s%x00%(trailers:unfold,only)%x1e` and splits on `\x1e`. With `sinceSha`, it uses the range `<sinceSha>..<ref>`.
 
-- [ ] **Step 4: Run the tests and confirm they pass**
+- [x] **Step 4: Run the tests and confirm they pass**
 
 Run: `node --test scripts/lib/board/events.test.mjs`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add scripts/lib/board/events.*
@@ -236,7 +236,7 @@ git commit -m "feat(board): commit trailer event format and log parser"
   - `makeBoard({ featReqs?: Record<slug, frontmatterObj>, board?: boolean = true }) -> { dir, remote, clone(name) -> path, seed(path, content, msg) }`. A bare remote seeded with `docs/feat-req/<slug>.md`, `board/workers/.gitkeep` and `board/requests/.gitkeep`. Each `clone()` is a fresh clone with `user.name`/`user.email` set.
   - `IDENT = { name: 'Test Owner', email: 'owner@example.com' }`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```js
 test('writes, pushes and returns the sha that is on origin/main', () => { /* mutate writes one file */ });
@@ -257,21 +257,21 @@ test('assertOnMain throws off main', () => {});
 
 `no-force.test.mjs` walks `scripts/lib/board/`, `scripts/lib/worker/` (if present) and `scripts/sdlc.mjs` (if present). It asserts no source file (excluding `*.test.mjs`) matches `/--force|['"]-f['"]|\+refs\/|\+HEAD/`.
 
-- [ ] **Step 2: Run the tests and confirm they fail**
+- [x] **Step 2: Run the tests and confirm they fail**
 
 Run: `node --test scripts/lib/board/git.test.mjs scripts/lib/board/no-force.test.mjs`
 Expected: `git.test.mjs` fails (module missing). `no-force` passes trivially.
 
-- [ ] **Step 3: Implement `fixtures.mjs`, then `git.mjs`**
+- [x] **Step 3: Implement `fixtures.mjs`, then `git.mjs`**
 
 The post-push validation does `sync`, then `git merge-base --is-ancestor <sha> origin/main`, then `validate(clone)`.
 
-- [ ] **Step 4: Run the tests and confirm they pass**
+- [x] **Step 4: Run the tests and confirm they pass**
 
 Run: `node --test scripts/lib/board/git.test.mjs scripts/lib/board/no-force.test.mjs`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add scripts/lib/board/git.* scripts/lib/board/fixtures.mjs scripts/lib/board/no-force.test.mjs
@@ -295,7 +295,7 @@ git commit -m "feat(board): pull/commit/push/validate primitive, never forced"
   - `release(clone, slug, { claimant, identity, workerId?, extraMutate?: (clone) => string[] }) -> result`. It clears the three claim fields, and `extraMutate` lets a request post ride in the same commit.
   - `holds(clone, slug, claimant) -> boolean`: whether the file exists, `claimed_by === claimant`, and `status` isn't `PARKED`, `REJECTED` or `IMPLEMENTED`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```js
 test('race: two clones claim the same effort, exactly one holds it on origin/main', () => {
@@ -316,21 +316,21 @@ test('release clears claimed_by/claimed_at/renewed_at and leaves other fields', 
 test('renew touches only renewed_at', () => {});
 ```
 
-- [ ] **Step 2: Run the tests and confirm they fail**
+- [x] **Step 2: Run the tests and confirm they fail**
 
 Run: `node --test scripts/lib/board/claims.test.mjs`
 Expected: FAIL.
 
-- [ ] **Step 3: Implement the five exports**
+- [x] **Step 3: Implement the five exports**
 
 The feat-req path is `docs/feat-req/<slug>.md`. A missing file returns `gone`.
 
-- [ ] **Step 4: Run the tests and confirm they pass**
+- [x] **Step 4: Run the tests and confirm they pass**
 
 Run: `node --test scripts/lib/board/claims.test.mjs`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add scripts/lib/board/claims.*
@@ -350,7 +350,7 @@ git commit -m "feat(board): claims, leases, release and takeover"
   - `rank(efforts, { now, ttlMs, openRequestIds: Set<string> }) -> Effort[]`. Candidates are status in `{ACCEPTED, DESIGNED, PLANNED, IN_PROGRESS}`, not live-claimed, and not `awaiting` an id in `openRequestIds`. The order follows `select-next-task` Step 3, rules 2–5: Critical or security first; then in-flight (past `ACCEPTED`) before new; then priority `High > Medium > Low`; then oldest `date`, with a missing date as oldest. Unclaimed and stale efforts both count as candidates.
   - `overlaps(effort, efforts, { now, ttlMs, readonlyKeys: Set<string> }) -> { slug, repos: string[] }[]`: the other live-claimed efforts sharing non-readonly repos.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```js
 test('rank applies severity, in-flight, priority, age in that order', () => {});
@@ -362,21 +362,21 @@ test('overlaps names the other effort and only shared writable repos', () => {
 });
 ```
 
-- [ ] **Step 2: Run the tests and confirm they fail**
+- [x] **Step 2: Run the tests and confirm they fail**
 
 Run: `node --test scripts/lib/board/queue.test.mjs`
 Expected: FAIL.
 
-- [ ] **Step 3: Implement `loadEfforts`, `rank` and `overlaps`**
+- [x] **Step 3: Implement `loadEfforts`, `rank` and `overlaps`**
 
 `security` is true when the frontmatter has `security: true` or a `tags` array that includes `security`.
 
-- [ ] **Step 4: Run the tests and confirm they pass**
+- [x] **Step 4: Run the tests and confirm they pass**
 
 Run: `node --test scripts/lib/board/queue.test.mjs`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add scripts/lib/board/queue.*
@@ -394,7 +394,7 @@ git commit -m "feat(board): queue ranking and repo-overlap detection"
   - `redact(text: string, env = process.env) -> string`. It replaces each match with `[REDACTED]`.
   - `safeExcerpt(text: string, { maxLines = 50, env = process.env }) -> { text: string, withheld: boolean }`. It takes the last `maxLines` lines and redacts them. If `redact` throws, it returns `{ text: 'excerpt withheld: redaction failed', withheld: true }`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 One planted token per pattern. Each assertion checks the token is absent and `[REDACTED]` is present:
 `ghp_` + 36 chars, `github_pat_` + 82 chars, `gho_`/`ghu_`/`ghs_`/`ghr_`, `sk-ant-api03-…`, `sk-…` (48 chars), `AKIA` + 16 uppercase chars, `xoxb-…`/`xoxp-…`, a three-part JWT `eyJ….eyJ….…`, a `-----BEGIN … PRIVATE KEY-----` … `-----END … PRIVATE KEY-----` block, `Authorization: Bearer <tok>`, `https://user:pass@host`, `password=hunter2` / `api_key: abc` / `secret="x"`, and the value of an env var `MY_SERVICE_TOKEN=s3cr3tvalue` appearing bare in the text.
@@ -408,21 +408,21 @@ test('safeExcerpt withholds the excerpt when redaction throws', () => {
 test('plain text is unchanged', () => {});
 ```
 
-- [ ] **Step 2: Run the tests and confirm they fail**
+- [x] **Step 2: Run the tests and confirm they fail**
 
 Run: `node --test scripts/lib/board/redact.test.mjs`
 Expected: FAIL.
 
-- [ ] **Step 3: Implement `redact` and `safeExcerpt`**
+- [x] **Step 3: Implement `redact` and `safeExcerpt`**
 
 Env values are redacted only when the name matches `/TOKEN|SECRET|KEY|PASSWORD/i` and the value is at least 6 characters long, so short values don't erase ordinary words.
 
-- [ ] **Step 4: Run the tests and confirm they pass**
+- [x] **Step 4: Run the tests and confirm they pass**
 
 Run: `node --test scripts/lib/board/redact.test.mjs`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add scripts/lib/board/redact.*
@@ -452,7 +452,7 @@ git commit -m "feat(board): secret redaction for error excerpts"
   - `withdrawRequest(clone, id, { identity, workerId, slug, note }) -> result`. It deletes the file, clears `awaiting` if it points to this request, and appends `note` to the feat-req's `## Decisions`.
   - `answeredFor(root, slug) -> Request[]`: the answered requests for that effort.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```js
 test('newRequestId shape and sortability', () => {
@@ -472,19 +472,19 @@ test('withdrawRequest removes the file, clears awaiting, logs the note', () => {
 test('listRequests reports a request with broken YAML in problems and skips it', () => {});
 ```
 
-- [ ] **Step 2: Run the tests and confirm they fail**
+- [x] **Step 2: Run the tests and confirm they fail**
 
 Run: `node --test scripts/lib/board/requests.test.mjs`
 Expected: FAIL.
 
-- [ ] **Step 3: Implement the exports**
+- [x] **Step 3: Implement the exports**
 
-- [ ] **Step 4: Run the tests and confirm they pass**
+- [x] **Step 4: Run the tests and confirm they pass**
 
 Run: `node --test scripts/lib/board/requests.test.mjs`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add scripts/lib/board/requests.*
@@ -518,28 +518,28 @@ git commit -m "feat(board): request files: build, validate, post, answer, withdr
 | effort error `park` / `retry` / text | park: `status: PARKED`, with `## Triage` reason = the error message | retry: "resume"; text: the instructions |
 | worker error `resolved` | — (handled by the worker runtime) | null |
 
-- [ ] **Step 1: Write the failing tests**: one `test()` per row above, plus:
+- [x] **Step 1: Write the failing tests**: one `test()` per row above, plus:
 
 ```js
 test('applyAnswered: one apply commit, request files gone, awaiting cleared, Decisions cites each id', () => {});
 test('applyAnswered pushes nothing if the claim is no longer held', () => {});
 ```
 
-- [ ] **Step 2: Run the tests and confirm they fail**
+- [x] **Step 2: Run the tests and confirm they fail**
 
 Run: `node --test scripts/lib/board/effects.test.mjs`
 Expected: FAIL.
 
-- [ ] **Step 3: Implement `applyAnswer` and `applyAnswered`**
+- [x] **Step 3: Implement `applyAnswer` and `applyAnswered`**
 
 The plan file for a slug is `docs/plans/<slug>.md`, or the highest-numbered `<slug>-N.md` that isn't `IMPLEMENTED`.
 
-- [ ] **Step 4: Run the tests and confirm they pass**
+- [x] **Step 4: Run the tests and confirm they pass**
 
 Run: `node --test scripts/lib/board/effects.test.mjs`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add scripts/lib/board/effects.*
@@ -560,21 +560,21 @@ git commit -m "feat(board): apply answered requests (effects table)"
   - `workerState(id, { worker, events, efforts, requests, now, ttlMs }) -> { state: 'retired' | 'needs-attention' | 'stopped' | 'working' | 'stale' | 'idle', effort: string | null, lastSeen: Date | null }`. The rules are checked in this order: retired → an open worker-scope error naming it → the last of start/stop/crash isn't `start` → holds a live claim → holds a stale claim → idle.
   - `boardView(root, { now, ttlMs }) -> { workers: [{...worker, ...state}], inbox: Record<for, Request[]>, inFlight: [{ slug, status, claimant, claimAgeMs, stale }] }`. Shared by `sdlc status`, `sdlc inbox` and `render-status`.
 
-- [ ] **Step 1: Write the failing tests**: one per state in the order above, plus a `boardView` test that groups the inbox by `for` (oldest first) and gives the in-flight rows a claimant, an age and a stale flag.
+- [x] **Step 1: Write the failing tests**: one per state in the order above, plus a `boardView` test that groups the inbox by `for` (oldest first) and gives the in-flight rows a claimant, an age and a stale flag.
 
-- [ ] **Step 2: Run the tests and confirm they fail**
+- [x] **Step 2: Run the tests and confirm they fail**
 
 Run: `node --test scripts/lib/board/registry.test.mjs`
 Expected: FAIL.
 
-- [ ] **Step 3: Implement the exports**
+- [x] **Step 3: Implement the exports**
 
-- [ ] **Step 4: Run the tests and confirm they pass**
+- [x] **Step 4: Run the tests and confirm they pass**
 
 Run: `node --test scripts/lib/board/registry.test.mjs`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add scripts/lib/board/registry.*
@@ -602,7 +602,7 @@ git commit -m "feat(board): worker registry and derived worker state"
     - `watch [--interval 30s] [--json] [--since <sha>] [--max-polls N]`. `--max-polls` is for tests.
   - Every write command calls `assertOnMain` first.
 
-- [ ] **Step 1: Write the failing tests** (each one uses `makeBoard`, with stubs for `whoami`, `now` and `sleep`):
+- [x] **Step 1: Write the failing tests** (each one uses `makeBoard`, with stubs for `whoami`, `now` and `sleep`):
 
 ```js
 test('check exits 1 and names a broken request file', () => {});
@@ -619,26 +619,26 @@ test('watch --json --max-polls 2 prints each new event as one JSON line', () => 
 test('worker subcommand before Plan 2 exits 2 with a clear message', () => {});
 ```
 
-- [ ] **Step 2: Run the tests and confirm they fail**
+- [x] **Step 2: Run the tests and confirm they fail**
 
 Run: `node --test scripts/lib/board/cli.test.mjs`
 Expected: FAIL.
 
-- [ ] **Step 3: Implement `cli.mjs` `run` and the `scripts/sdlc.mjs` entry**
+- [x] **Step 3: Implement `cli.mjs` `run` and the `scripts/sdlc.mjs` entry**
 
 Argument parsing is hand-rolled, like `assemble-env.mjs`. Colors come from `style.mjs` `colorEnabled(process.stdout)`.
 
-- [ ] **Step 4: Run the tests and confirm they pass**
+- [x] **Step 4: Run the tests and confirm they pass**
 
 Run: `node --test scripts/lib/board/cli.test.mjs`
 Expected: PASS.
 
-- [ ] **Step 5: Run the full suite**
+- [x] **Step 5: Run the full suite**
 
 Run: `npm test`
 Expected: PASS, with no regression in the existing tests.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add scripts/sdlc.mjs scripts/lib/board/cli.*
