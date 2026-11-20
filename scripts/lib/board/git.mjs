@@ -2,7 +2,10 @@
 // pull -> mutate -> commit only touched paths -> push to main -> (on reject: restart | rebase-retry)
 // -> after push confirm the commit is on origin/main and validate() still holds. Never forces a push.
 import { execFileSync } from 'node:child_process';
+import { mkdirSync, writeFileSync, unlinkSync } from 'node:fs';
+import { dirname } from 'node:path';
 import { formatMessage } from './events.mjs';
+import { safePath } from './safe-path.mjs';
 
 export class BoardError extends Error {}
 
@@ -50,8 +53,45 @@ export function assertOnMain(clone) {
 // If --keep refuses (a dirty file differs on origin), stash, hard-reset, pop; on a conflicting pop the
 // dirty work stays in the stash and the clone is clean at origin/main.
 function restoreToOrigin(clone, env, keepWork = false) {
-  // keep-work: the caller's files (including ones our commit added) stay on disk, uncommitted and unstaged.
-  if (keepWork) { git(clone, ['reset', '--mixed', 'origin/main'], { env }); return; }
+  if (!keepWork) { discardToOrigin(clone, env); return {}; }
+  // keep-work: restore to origin/main exactly as discard does, then give back our own non-protocol files.
+  let ours = null;
+  try {
+    const sha = git(clone, ['rev-parse', 'HEAD'], { env }).trim();
+    if (git(clone, ['rev-list', '--count', 'origin/main..HEAD'], { env }).trim() !== '0') {
+      const toks = git(clone, ['diff-tree', '--no-commit-id', '--name-status', '-r', '-z', 'HEAD'], { env }).split('\0').filter(Boolean);
+      const files = [];
+      for (let i = 0; i + 1 < toks.length; i += 2) files.push({ status: toks[i][0], path: toks[i + 1] });
+      ours = { sha, files };
+    }
+  } catch { ours = null; }
+  discardToOrigin(clone, env);
+  const out = { kept: [], conflicted: [] };
+  if (!ours) return out;
+  const blob = (rev, path) => git(clone, ['rev-parse', '-q', '--verify', `${rev}:${path}`], { env, allowFail: true })?.trim() ?? null;
+  const short = ours.sha.slice(0, 7);
+  for (const { status, path } of ours.files) {
+    if (path.startsWith('docs/feat-req/') || path.startsWith('board/')) continue;
+    try {
+      const untouchedUpstream = blob('origin/main', path) === blob(`${ours.sha}~1`, path);
+      if (untouchedUpstream) {
+        const abs = safePath(clone, path);
+        if (status === 'D') unlinkSync(abs);
+        else { mkdirSync(dirname(abs), { recursive: true }); writeFileSync(abs, git(clone, ['show', `${ours.sha}:${path}`], { env })); }
+        out.kept.push(path);
+      } else {
+        if (status !== 'D') {
+          const abs = safePath(clone, `${path}.ours-${short}`);
+          writeFileSync(abs, git(clone, ['show', `${ours.sha}:${path}`], { env }));
+        }
+        out.conflicted.push(path);
+      }
+    } catch { out.conflicted.push(path); }
+  }
+  return out;
+}
+
+function discardToOrigin(clone, env) {
   if (git(clone, ['reset', '--keep', 'origin/main'], { env, allowFail: true }) !== null) return;
   const stashRef = () => git(clone, ['rev-parse', '-q', '--verify', 'refs/stash'], { env, allowFail: true });
   const before = stashRef();
@@ -110,13 +150,11 @@ export async function boardWrite(clone, {
 
       git(clone, ['fetch', 'origin', 'main'], { env });
       if (onReject !== 'rebase' || attempt >= MAX_REBASE_ATTEMPTS) {
-        restoreToOrigin(clone, env, keepWork);
-        return { ok: false, reason: 'lost-race' };
+        return { ok: false, reason: 'lost-race', ...restoreToOrigin(clone, env, keepWork) };
       }
       if (git(clone, ['rebase', '--autostash', 'origin/main'], { env, allowFail: true }) === null) {
         git(clone, ['rebase', '--abort'], { env, allowFail: true });
-        restoreToOrigin(clone, env, keepWork);
-        return { ok: false, reason: 'conflict' };
+        return { ok: false, reason: 'conflict', ...restoreToOrigin(clone, env, keepWork) };
       }
       if (hasUnmerged(clone)) { // autostash pop conflicted: nothing of ours has been pushed yet
         git(clone, ['reset', '--hard', 'HEAD'], { env });

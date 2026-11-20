@@ -221,7 +221,7 @@ async function cmdReport(root, { flags, positional: [slug] }, deps) {
   const holder = () => {
     try { return parseDoc(gitOut(root, ['show', `origin/main:docs/feat-req/${slug}.md`])).data?.claimed_by; } catch { return undefined; }
   };
-  const lost = (landed = false) => {
+  const lost = (landed = false, res = {}) => {
     const by = holder();
     if (landed) deps.err(`${slug}: report landed but ${slug} is now held by ${by}\n`);
     else {
@@ -229,6 +229,8 @@ async function cmdReport(root, { flags, positional: [slug] }, deps) {
         ? `${slug} is now held by ${by}; nothing was pushed\n`
         : `${slug} is not claimed by ${id.login}; nothing was pushed\n`);
     }
+    if (res.kept?.length) deps.err(`kept your uncommitted work: ${res.kept.join(', ')}\n`);
+    if (res.conflicted?.length) deps.err(`changed upstream too; your version saved beside it as <path>.ours-<sha>: ${res.conflicted.join(', ')}\n`);
     return 3;
   };
   sync(root);
@@ -248,7 +250,7 @@ async function cmdReport(root, { flags, positional: [slug] }, deps) {
     validate: (c) => holds(c, slug, id.login),
   });
   if (r.ok) { deps.out(`reported ${slug} at ${phase}\n`); return 0; }
-  if (refused || r.reason === 'conflict') return lost();
+  if (refused || r.reason === 'conflict') return lost(false, r);
   if (r.reason === 'replaced') return lost(true);
   deps.err(`could not report ${slug} (${r.reason})\n`);
   return 1;

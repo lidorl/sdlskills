@@ -279,7 +279,7 @@ test('a whoami that cannot find a GitHub login stops with the fix and pushes not
   assert.equal(git(b.remote, 'rev-parse', 'main'), before);
 });
 
-test('report that loses to a takeover mid-push exits 3 and keeps the new design doc on disk', async () => {
+test('report that lands but is then replaced by a takeover exits 3 and keeps the new design doc on disk', async () => {
   const b = makeBoard({ featReqs: { 'bulk-export': feat() } });
   const a = b.clone('a');
   const o = b.clone('o');
@@ -303,4 +303,36 @@ test('report that loses to a takeover mid-push exits 3 and keeps the new design 
   assert.match(r.err, /lidorl-1a2b3c/);
   assert.equal(readFileSync(join(a, 'docs/design/bulk-export.md'), 'utf8'), '# my design\n');
   assert.equal(git(a, 'rev-parse', 'HEAD'), git(a, 'rev-parse', 'origin/main'));
+});
+
+test('report whose takeover conflicts exits 3, keeps only the design doc, and a second report pushes nothing', async () => {
+  const b = makeBoard({ featReqs: { 'bulk-export': feat() } });
+  b.seed('other.md', 'x\n');
+  const a = b.clone('a');
+  const o = b.clone('o');
+  assert.equal((await cli(a, ['claim', 'bulk-export'])).code, 0);
+  git(o, 'pull', '-q', '--ff-only', 'origin', 'main');
+  mkdirSync(join(a, 'docs/design'), { recursive: true });
+  writeFileSync(join(a, 'docs/design/bulk-export.md'), '# my design\n');
+  let fired = false;
+  const hooks = {
+    beforePush: () => {
+      if (fired) return;
+      fired = true;
+      const f = join(o, 'docs/feat-req/bulk-export.md');
+      writeFileSync(f, readFileSync(f, 'utf8').replace('claimed_by: lidorl', 'claimed_by: lidorl-1a2b3c').replace(/renewed_at: .*/, 'renewed_at: 2026-06-01T10:30:00Z'));
+      writeFileSync(join(o, 'other.md'), 'changed\n');
+      git(o, 'commit', '-qam', 'board(takeover): bulk-export');
+      git(o, 'push', '-q', 'origin', 'main');
+    },
+  };
+  const r = await cli(a, ['report', 'bulk-export', '--phase', 'DESIGNED'], { now: hours(1), hooks });
+  assert.equal(r.code, 3, r.err);
+  assert.match(r.err, /kept your uncommitted work: docs\/design\/bulk-export\.md/);
+  assert.equal(git(a, 'status', '--porcelain').trim(), '?? docs/design/');
+  const tip = git(b.remote, 'rev-parse', 'main');
+  const again = await cli(a, ['report', 'bulk-export', '--phase', 'DESIGNED'], { now: hours(2) });
+  assert.equal(again.code, 3, again.err);
+  assert.match(again.err, /held by lidorl-1a2b3c/);
+  assert.equal(git(b.remote, 'rev-parse', 'main'), tip);
 });

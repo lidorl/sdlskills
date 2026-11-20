@@ -194,13 +194,31 @@ test('R2: a renew emptied by rebase does not sweep a staged new file', async () 
   assert.equal(g(a, 'diff', '--cached', '--name-only'), 'secret.md');
 });
 
-test('keep-work: a lost race leaves a newly added file on disk, HEAD at origin/main, nothing staged', async () => {
-  const fx = makeBoard(); const a = fx.clone('a'); const b = fx.clone('b');
-  const r = await boardWrite(a, { ...base, kind: 'report', subject: 's', onReject: 'restart', onFailure: 'keep-work', mutate: writer('new.md', 'mine\n'), hooks: { beforePush: racer(b, 'y.md', 'b\n') } });
+test('keep-work: a lost race restores only our own files; upstream changes stay, overlaps become .ours-<sha7>', async () => {
+  const fx = makeBoard(); fx.seed('shared.md', 'base\n'); fx.seed('unrelated.md', 'u\n');
+  const a = fx.clone('a'); const b = fx.clone('b');
+  const mutate = (clone) => {
+    writeFileSync(join(clone, 'new.md'), 'mine\n');
+    writeFileSync(join(clone, 'shared.md'), 'ours\n');
+    return ['new.md', 'shared.md'];
+  };
+  const race = () => {
+    writeFileSync(join(b, 'shared.md'), 'theirs\n');
+    writeFileSync(join(b, 'unrelated.md'), 'changed upstream\n');
+    g(b, 'add', '-A'); g(b, 'commit', '-m', 'racer'); g(b, 'push', 'origin', 'main');
+  };
+  const ourSha = () => g(a, 'rev-parse', 'HEAD').slice(0, 7);
+  let sha7;
+  const r = await boardWrite(a, { ...base, kind: 'report', subject: 's', onReject: 'restart', onFailure: 'keep-work', mutate, hooks: { beforePush: () => { sha7 = ourSha(); race(); } } });
   assert.equal(r.reason, 'lost-race');
-  assert.equal(readFileSync(join(a, 'new.md'), 'utf8'), 'mine\n');
+  assert.deepEqual(r.kept, ['new.md']);
+  assert.deepEqual(r.conflicted, ['shared.md']);
   assert.equal(revParse(a, 'HEAD'), revParse(a, 'origin/main'));
-  assert.equal(g(a, 'diff', '--cached', '--name-only'), '');
+  assert.equal(readFileSync(join(a, 'new.md'), 'utf8'), 'mine\n');
+  assert.equal(readFileSync(join(a, 'shared.md'), 'utf8'), 'theirs\n');
+  assert.equal(readFileSync(join(a, `shared.md.ours-${sha7}`), 'utf8'), 'ours\n');
+  assert.equal(readFileSync(join(a, 'unrelated.md'), 'utf8'), 'changed upstream\n');
+  assert.equal(g(a, 'status', '--porcelain').split('\n').sort().join('|'), `?? new.md|?? shared.md.ours-${sha7}`);
 });
 
 test('default discard: a lost race removes the file our commit added', async () => {
