@@ -14,10 +14,12 @@ import { syncKeepingWork, SyncConflict } from '../board/report.mjs';
 import { loadCatalog } from '../catalog.mjs';
 import { assemble as realAssemble, resolveRepoKeys } from '../../assemble-env.mjs';
 import { readConfig, readState, writeState, excludeRunDir } from './home.mjs';
-import { route, buildPrompt, agentCommand, runAgent as realRunAgent, RUN_DIR, runDirProblem } from './agent.mjs';
+import {
+  route, buildPrompt, agentCommand, runAgent as realRunAgent, RUN_DIR, runDirProblem, planDone, PHASE_MARK,
+} from './agent.mjs';
 import { preflight, realDeps as preflightDeps } from './preflight.mjs';
 import { lose, letGo, effortError, workerError, handleResult, interrupted } from './outcomes.mjs';
-import { readInput, writeInput, savedSlugs } from './agent-input.mjs';
+import { readSaved, writeInput, clearInput, savedSlugs } from './agent-input.mjs';
 import { salvage } from './salvage.mjs';
 import { prepareCheckouts } from './code-repos.mjs';
 
@@ -33,7 +35,8 @@ export const BOARD_ERROR_LIMIT = 3; // board failures in a row on a held effort 
 // this hold. A new claim, a takeover, or a claim that never got as far as preparing is not a continuation.
 // `pending`: a finished run whose result is not handled yet ({ status, res, keys, logPath }); the next step
 // handles it again instead of running the agent again.
-const held = (slug, continued) => ({ slug, continued, prepared: false, developmentDone: false, stalls: 0, boardErrors: 0, pending: null });
+// `phase`: the phase this hold's last run was routed to (recorded in the requests it posts).
+const held = (slug, continued) => ({ slug, continued, prepared: false, phase: null, stalls: 0, boardErrors: 0, pending: null });
 
 // Ruling P2-14: continuation is proven by state.json's `prepared` marker, written only after
 // prepareCheckouts ran for a claim. renew keeps claimed_at; a new claim or a takeover changes it, so a claim
@@ -162,7 +165,7 @@ async function stepOn(ctx, board) {
     slug = picked.slug;
     ctx.holding = held(slug, continued(slug));
   }
-  return runHeld(ctx, slug, bcfg);
+  return runHeld(ctx, slug, bcfg, board);
 }
 
 // Ruling P2-4: the worker's own answered-resolved worker errors are deleted before it takes work again.
@@ -230,8 +233,17 @@ function runLogPath(home, now, slug, phase) {
   return p;
 }
 
-async function runHeld(ctx, slug, bcfg) {
+// Answered requests on this effort (read before the apply commit deletes them): their ids, and the routed
+// phase (develop|close-out) a worker recorded in their Context when it posted them.
+function answeredOn(board, slug) {
+  const qs = listRequests(board).requests.filter((q) => q.fm.status === 'answered' && q.fm.scope === 'effort' && q.fm.effort === slug);
+  const phase = qs.map((q) => String(q.sections?.Context ?? '').match(PHASE_MARK)?.[1]).find(Boolean) ?? null;
+  return { ids: qs.map((q) => q.id), phase };
+}
+
+async function runHeld(ctx, slug, bcfg, board) {
   const { cfg, deps, home, clone, identity } = ctx;
+  const answered = answeredOn(board, slug);
   const a = await applyAnswered(clone, slug, { claimant: cfg.id, identity, workerId: cfg.id, now: deps.now(), rand: deps.rand, hooks: deps.hooks });
   if (!a.ok) {
     if (a.reason === 'replaced') return lose(ctx, slug);
@@ -239,11 +251,19 @@ async function runHeld(ctx, slug, bcfg) {
     return { action: 'idle' };
   }
   for (const p of a.problems) deps.log(`warning: request ${p.id} not applied: ${p.problems.join('; ')}`);
-  const agentInput = [...readInput(home, slug), ...a.agentInput];
-  if (a.agentInput.length) writeInput(home, slug, agentInput);
 
   const fm = committedFm(clone, slug, 'origin/main');
   if (!fm || fm.claimed_by !== cfg.id) return lose(ctx, slug);
+  // Saved input belongs to the hold that applied it: this claim, a continuation of it, or the effort error
+  // whose answer was applied just now. Anything else is from an earlier hold and is dropped.
+  const saved = readSaved(home, slug);
+  const ours = ctx.holding.continued || (!!saved.claimed_at && String(saved.claimed_at) === String(fm.claimed_at))
+    || (!!saved.after && answered.ids.includes(saved.after));
+  if (saved.agentInput.length && !ours) deps.log(`dropped saved agent input for ${slug}: it belongs to an earlier hold`);
+  const agentInput = [...(ours ? saved.agentInput : []), ...a.agentInput];
+  const phase = (a.agentInput.length && answered.phase) || (ours && saved.phase) || null;
+  if (agentInput.length) writeInput(home, slug, agentInput, { claimed_at: fm.claimed_at, phase });
+  else clearInput(home, slug);
   // The agent works on what main says now (applied answers included). Leftovers that block the sync are
   // from earlier work this worker can no longer publish: move them aside (Ruling P2-11), never fail on them.
   const env = identityEnv(identity);
@@ -254,12 +274,15 @@ async function runHeld(ctx, slug, bcfg) {
     salvage(ctx, { paths: e.paths, code: false, reason: `they block ${slug}'s sync with origin/main` });
     syncKeepingWork(clone, env);
   }
-  const r = route(fm.status, { developmentDone: ctx.holding.developmentDone });
+  // Development is done when the plan says so (durable); answers go back to the phase that asked for them.
+  const developmentDone = fm.status === 'IN_PROGRESS' && (phase ? phase === 'close-out' : planDone(clone, slug));
+  const r = route(fm.status, { developmentDone });
   if (!r) { // an answer parked or rejected it
     await letGo(ctx, slug, []);
     deps.log(`${slug} is ${fm.status}; released`);
     return { action: 'done', effort: slug };
   }
+  ctx.holding.phase = r.phase;
   const keys = resolveRepoKeys(clone, slug);
   if (keys.length && fm.status !== 'ACCEPTED') {
     try {
@@ -277,7 +300,7 @@ async function runHeld(ctx, slug, bcfg) {
   }
 
   const prompt = buildPrompt({
-    workerId: cfg.id, slug, status: fm.status, agent: cfg.agent, agentInput, developmentDone: ctx.holding.developmentDone,
+    workerId: cfg.id, slug, status: fm.status, agent: cfg.agent, agentInput, developmentDone,
   });
   const unsafe = runDirProblem(clone);
   if (unsafe) return workerError(ctx, unsafe, unsafe, keys);

@@ -12,10 +12,11 @@ import { reportPaths } from '../board/paths.mjs';
 import { reportEffort } from '../board/report.mjs';
 import { resolveRepoKeys } from '../../assemble-env.mjs';
 import { readState, writeState } from './home.mjs';
-import { readResult, classifyFailure, RUN_DIR, runDirProblem } from './agent.mjs';
+import { readResult, classifyFailure, RUN_DIR, runDirProblem, planDone, phaseNote } from './agent.mjs';
 import { safePath } from '../board/safe-path.mjs';
 import { pushCodeBranches, dirtyNote } from './code-repos.mjs';
-import { readInput, clearInput } from './agent-input.mjs';
+import { readInput, writeInput, clearInput } from './agent-input.mjs';
+import { parseDoc } from '../board/frontmatter.mjs';
 import { salvage, salvageFile } from './salvage.mjs';
 
 const firstLine = (e) => String(e?.message ?? e).split('\n')[0];
@@ -31,10 +32,24 @@ function endHold(ctx, slug) {
 
 const failedPushes = (code) => code.failed.map((f) => `push of workspace/${f.key} failed: ${f.error}`);
 
-// Answers applied but not yet acted on by a run that finished: they stay saved, and the error says so.
-function pending(ctx, slug) {
+// Answers applied but not yet acted on by a run that finished. An effort error keeps them for the run its
+// answer starts; a worker error lets the claim go, so they are only listed (the Decisions section has them).
+function pending(ctx, slug, kept = 'kept for the next run') {
   const input = readInput(ctx.home, slug);
-  return input.length ? [`instructions not yet acted on (kept for the next run):\n${input.map((a) => `- ${oneLine(a)}`).join('\n')}`] : [];
+  return input.length ? [`instructions not yet acted on (${kept}):\n${input.map((a) => `- ${oneLine(a)}`).join('\n')}`] : [];
+}
+
+const phaseLine = (ctx) => (ctx.holding?.phase ? [phaseNote(ctx.holding.phase)] : []);
+
+// Completed runs in a row that changed nothing (a request-only run included). -> true at STALL_LIMIT
+function stalled(ctx, progressed) {
+  ctx.holding.stalls = progressed ? 0 : (ctx.holding.stalls ?? 0) + 1;
+  return ctx.holding.stalls >= STALL_LIMIT;
+}
+
+// The working feat-req's status: what the agent's completed phase must match.
+function workingStatus(clone, slug) {
+  try { return parseDoc(readFileSync(safePath(clone, featReqPath(slug)), 'utf8')).data?.status ?? null; } catch { return null; }
 }
 
 export function lose(ctx, slug) {
@@ -42,6 +57,7 @@ export function lose(ctx, slug) {
   const why = fm?.claimed_by && fm.claimed_by !== ctx.cfg.id ? `now held by ${fm.claimed_by}` : `it is ${fm?.status ?? 'gone'} on main`;
   ctx.deps.log(`lost ${slug}: ${why}; nothing more is pushed for it`);
   salvage(ctx, { reason: `lost ${slug}` });
+  clearInput(ctx.home, slug); // saved input is tied to the hold that applied it
   endHold(ctx, slug);
   return { action: 'lost', effort: slug };
 }
@@ -146,8 +162,14 @@ function warnStrays(ctx, slug) {
 }
 
 async function handleCompleted(ctx, slug, status, result, keys) {
-  const { home } = ctx;
-  const changed = effortDirty(ctx.clone, slug);
+  const { home, clone, deps } = ctx;
+  const working = workingStatus(clone, slug);
+  if (result.phase !== working) { // the Phase trailer and IMPLEMENTED must be what the feat-req says
+    return effortError(ctx, slug, status, `the agent reported phase ${result.phase} but the working feat-req says ${working ?? '(unreadable)'}`, { keys, tried: result.summary });
+  }
+  const finished = status === 'IN_PROGRESS' && planDone(clone, slug);
+  if (result.development_done === true && !finished) deps.log(`warning: the agent reported development_done for ${slug} but its plan has unchecked steps; staying in develop`);
+  const changed = effortDirty(clone, slug);
   const rep = await report(ctx, slug, status, result.phase, { keys, summary: result.summary });
   if (!rep.ok) return rep.ret;
   writeState(home, { failures: 0, backoff_until: null });
@@ -157,11 +179,7 @@ async function handleCompleted(ctx, slug, status, result, keys) {
     await letGo(ctx, slug, keys);
     return { action: 'done', effort: slug };
   }
-  const done = result.development_done === true;
-  const progressed = changed || rep.codeAdvanced || result.phase !== status || (done && !ctx.holding.developmentDone);
-  ctx.holding.stalls = progressed ? 0 : (ctx.holding.stalls ?? 0) + 1;
-  ctx.holding.developmentDone = done;
-  if (ctx.holding.stalls >= STALL_LIMIT) {
+  if (stalled(ctx, changed || rep.codeAdvanced || result.phase !== status)) {
     return effortError(ctx, slug, status, `no progress: ${STALL_LIMIT} completed runs in a row changed nothing`, { keys, tried: result.summary });
   }
   return { action: 'reported', effort: slug };
@@ -170,19 +188,26 @@ async function handleCompleted(ctx, slug, status, result, keys) {
 async function handleRequest(ctx, slug, status, result, keys) {
   const { cfg, deps, home, clone, identity } = ctx;
   const q = result.request;
+  let progressed = false;
   if (effortDirty(clone, slug)) { // a gate asks about what the agent wrote: publish it first
     const rep = await report(ctx, slug, status, status, { keys, summary: result.summary });
     if (!rep.ok) return rep.ret;
-  } else if (q.blocking) {
+    progressed = true;
+  } else {
     const code = pushCodeBranches(clone, slug, keys);
-    if (code.failed.length) return effortError(ctx, slug, status, `code push rejected: ${failedPushes(code).join('; ')}`, {});
+    if (code.failed.length && q.blocking) return effortError(ctx, slug, status, `code push rejected: ${failedPushes(code).join('; ')}`, {});
+    for (const f of failedPushes(code)) deps.log(`warning: ${f}; the commits stay in the local branch`);
+    progressed = code.advanced.length > 0;
   }
+  // Every section is the agent's text, bound for a shared repo: redact all of them (Error is also fenced).
+  const sections = Object.fromEntries(Object.entries(q.sections).map(([k, v]) => [k, typeof v === 'string' ? redact(v) : v]));
+  sections.Context = [sections.Context, ...phaseLine(ctx)].join('\n\n');
   const now = deps.now();
   // v1: `for: owner` (or none) goes to the worker's owner; see the task 5 report.
   const forWho = !q.for || q.for === 'owner' ? cfg.owner : q.for;
   const req = {
     id: newRequestId(now, deps.rand), kind: q.kind, gate: q.gate ?? null, scope: 'effort', effort: slug, phase: status,
-    worker: cfg.id, for: forWho, blocking: q.blocking, now, sections: q.sections,
+    worker: cfg.id, for: forWho, blocking: q.blocking, now, sections,
   };
   const r = await postRequest(clone, req, {
     identity, workerId: cfg.id, releaseFrom: q.blocking ? { slug, claimant: cfg.id } : undefined, sleep: deps.sleep, hooks: deps.hooks,
@@ -199,6 +224,9 @@ async function handleRequest(ctx, slug, status, result, keys) {
     endHold(ctx, slug);
   }
   deps.log(`posted ${q.kind} ${r.id} for ${slug}${q.blocking ? '; released while it waits' : ''}`);
+  if (!q.blocking && stalled(ctx, progressed)) {
+    return effortError(ctx, slug, status, `no progress: ${STALL_LIMIT} runs in a row changed nothing (the last one only posted ${q.kind} ${r.id})`, { keys, tried: result.summary });
+  }
   return { action: 'requested', effort: slug };
 }
 
@@ -243,7 +271,9 @@ export async function effortError(ctx, slug, status, message, { keys = [], logPa
     ...(code.dirty.length ? [dirtyNote(code.dirty)] : []),
     ...(dir ? [`uncommitted edits were moved to ${dir} on host ${hostname()}`] : []),
     ...pending(ctx, slug),
+    ...phaseLine(ctx),
   ].join('\n');
+  const phase = ctx.holding?.phase ?? null;
   const req = {
     id: newRequestId(now, deps.rand), kind: 'error', scope: 'effort', effort: slug, phase: status, worker: cfg.id,
     for: cfg.owner, blocking: true, now,
@@ -254,6 +284,9 @@ export async function effortError(ctx, slug, status, message, { keys = [], logPa
     },
   };
   const r = await postRequest(clone, req, { identity, workerId: cfg.id, releaseFrom: { slug, claimant: cfg.id }, sleep: deps.sleep, hooks: deps.hooks });
+  // Unapplied answers wait for this error's answer, which re-claims the effort.
+  const input = readInput(home, slug);
+  if (r.ok && input.length) writeInput(home, slug, input, { after: r.id, phase });
   endHold(ctx, slug);
   const { failures: prev } = readState(home);
   const failures = prev + 1;
@@ -269,8 +302,9 @@ export async function effortError(ctx, slug, status, message, { keys = [], logPa
 export async function workerError(ctx, problem, excerpt, keys) {
   const { cfg, deps, clone, identity } = ctx;
   const held = ctx.holding?.slug;
-  const notes = held ? pending(ctx, held).map((p) => `${held}: ${p}`) : [];
+  const notes = held ? pending(ctx, held, 'in the Decisions section; not carried to a new claim').map((p) => `${held}: ${p}`) : [];
   const dir = held ? await letGo(ctx, held, keys ?? resolveRepoKeys(clone, held)) : null;
+  if (held) clearInput(ctx.home, held);
   fetchMain(clone, identityEnv(identity));
   const snap = snapshotMain(clone);
   let open;

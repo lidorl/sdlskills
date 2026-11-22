@@ -2,6 +2,7 @@
 import { spawn, execFileSync } from 'node:child_process';
 import {
   readFileSync, appendFileSync, mkdirSync, rmSync, writeFileSync, lstatSync, openSync, fstatSync, closeSync, constants,
+  existsSync, readdirSync,
 } from 'node:fs';
 import { join, dirname } from 'node:path';
 
@@ -20,6 +21,24 @@ export function route(status, { developmentDone = false } = {}) {
     default: return null;
   }
 }
+
+// Development is done when the effort has a plan and every plan file is IMPLEMENTED or has no unchecked step.
+// Durable (the plan is on main), unlike the agent's development_done, which is only a hint.
+export function planDone(root, slug) {
+  const dir = join(root, 'docs', 'plans');
+  const re = new RegExp(`^${slug}(-\\d+)?\\.md$`);
+  const files = existsSync(dir) ? readdirSync(dir).filter((n) => re.test(n)) : [];
+  if (!files.length) return false;
+  return files.every((n) => {
+    const text = readFileSync(join(dir, n), 'utf8');
+    const status = text.match(/^---\r?\n([\s\S]*?)\r?\n---/)?.[1].match(/^status:\s*(\S+)/m)?.[1];
+    return status === 'IMPLEMENTED' || !/^\s*[-*] \[ \]/m.test(text);
+  });
+}
+
+// The routed phase a worker records in the Context of a request it posts, so the answer goes back to it.
+export const phaseNote = (phase) => `Worker phase: ${phase}`;
+export const PHASE_MARK = /^Worker phase: (develop|close-out)\s*$/m;
 
 const SUPERPOWERS = new Set(['executing-plans']);
 

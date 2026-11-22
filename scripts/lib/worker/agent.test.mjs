@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, existsSync, symlin
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { route, buildPrompt, agentCommand, runAgent, readResult, classifyFailure } from './agent.mjs';
+import { route, buildPrompt, agentCommand, runAgent, readResult, classifyFailure, planDone } from './agent.mjs';
 
 const FAKE = join(dirname(fileURLToPath(import.meta.url)), 'fixtures', 'fake-agent.mjs');
 const tmp = () => mkdtempSync(join(tmpdir(), 'agent-test-'));
@@ -216,4 +216,18 @@ test('readResult never follows a symlink and reads only a regular file (S6)', ()
   const sub = join(dir, 'adir');
   mkdirSync(sub);
   assert.match(readResult(sub).problem, /not a regular file|unreadable/);
+});
+
+test('planDone: every plan file of the effort IMPLEMENTED or without unchecked steps; no plan → not done (I4)', () => {
+  const dir = tmp();
+  const plans = join(dir, 'docs', 'plans');
+  mkdirSync(plans, { recursive: true });
+  assert.equal(planDone(dir, 'alpha'), false);
+  writeFileSync(join(plans, 'alpha.md'), '---\nstatus: IN_PROGRESS\n---\n\n- [x] one\n* [x] two\n');
+  writeFileSync(join(plans, 'alpha-bulk.md'), '- [ ] not ours\n');
+  assert.equal(planDone(dir, 'alpha'), true);
+  writeFileSync(join(plans, 'alpha-2.md'), '---\nstatus: PLANNED\n---\n\n  - [ ] nested step\n');
+  assert.equal(planDone(dir, 'alpha'), false);
+  writeFileSync(join(plans, 'alpha-2.md'), '---\nstatus: IMPLEMENTED\n---\n\n- [ ] left unticked\n');
+  assert.equal(planDone(dir, 'alpha'), true);
 });

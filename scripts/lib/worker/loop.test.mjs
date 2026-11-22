@@ -77,6 +77,11 @@ async function inProcessAgent(w, opts, script) {
     execFileSync(cmd, args, { cwd: resolve(opts.cwd, cwd), env: { ...process.env, ...opts.env }, stdio: 'ignore' });
   }
   for (const ms of script.ticks ?? []) { w.now = new Date(w.now.getTime() + ms); await opts.onTick(); }
+  // A completed phase is also the feat-req's working status, as a real agent writes it (`keepStatus` opts out).
+  const fr = resolve(opts.cwd, 'docs/feat-req', `${opts.args[1].match(/for effort (\S+)\./)[1]}.md`);
+  if (script.result?.outcome === 'completed' && !script.keepStatus && existsSync(fr)) {
+    writeFileSync(fr, readFileSync(fr, 'utf8').replace(/^status: .*$/m, `status: ${script.result.phase}`));
+  }
   if (script.result != null) { mkdirSync(dirname(resultFile), { recursive: true }); writeFileSync(resultFile, JSON.stringify(script.result)); }
   if (script.stderr) appendFileSync(opts.logPath, `${script.stderr}\n`);
   if (script.timeout) return { exitCode: null, signal: 'SIGTERM', timedOut: true, stderrTail: script.stderr ?? '' };
@@ -148,7 +153,8 @@ test('every commit (meta and code repo) has Worker trailer and owner author', as
     catalog: code.catalog,
     script: {
       writes: { 'workspace/api/feature.txt': 'x\n', 'docs/plans/alpha.md': '---\nstatus: PLANNED\n---\n\n- [ ] Step 1\n' },
-      exec: [['workspace/api', 'git', 'add', 'feature.txt'], ['workspace/api', 'git', 'commit', '-q', '-m', 'add feature']],
+      exec: [['workspace/api', 'git', 'add', 'feature.txt'], ['workspace/api', 'git', 'commit', '-q', '-m', 'add feature'],
+        ['.', process.execPath, '-e', "const fs=require('fs');const f='docs/feat-req/alpha.md';fs.writeFileSync(f,fs.readFileSync(f,'utf8').replace('status: DESIGNED','status: PLANNED'))"]],
       result: completed('PLANNED'),
       real: true,
     },
@@ -794,7 +800,7 @@ test('a restart that continues our own live claim keeps and pushes the unpushed 
     execFileSync('git', ['commit', '-q', '-m', 'second.txt'], { cwd: api, env: { ...process.env, ...opts.env } });
     throw new Error('worker crashed');
   };
-  await assert.rejects(w.step(), /worker crashed/);
+  assert.deepEqual(await w.step(), { action: 'idle' }); // a throw while holding is counted (I3); then a restart
   w.beforeRun = null;
   w.restart();
   w.script({ result: completed('PLANNED') });
@@ -1160,4 +1166,153 @@ test('a post-run failure that repeats every time: effort error after the limit, 
   assert.match(err, /3 steps in a row failed; last: refusing symlinked path/);
   assert.equal(fmOnMain(b, 'alpha').claimed_by, undefined);
   assert.equal(readFileSync(outside, 'utf8'), 'x\n');
+});
+
+const planFile = (steps) => `---\nstatus: IN_PROGRESS\n---\n\n${steps}\n`;
+const question = (extra = {}) => ({ outcome: 'request', request: { kind: 'question', blocking: true, sections: { Request: 'Which?', Context: 'c', Options: 'A) x\nB) y' }, ...extra } });
+
+test('development done is read from the plan, not memory: a fresh context routes a fully checked plan to close-out (I4)', async () => {
+  const b = setup({ featReqs: { alpha: feat({ status: 'IN_PROGRESS' }) }, files: { 'docs/plans/alpha.md': planFile('- [ ] Step 1') } });
+  const w = worker(b, { script: { writes: { 'docs/plans/alpha.md': planFile('- [x] Step 1') }, result: completed('IN_PROGRESS', { development_done: true }) } });
+  assert.deepEqual(await w.step(), { action: 'reported', effort: 'alpha' });
+  assert.match(w.prompt(), /executing-plans/);
+  w.restart(); // as `sdlc worker once` does: nothing survives in memory
+  w.script({ result: completed('IN_PROGRESS') });
+  assert.deepEqual(await w.step(), { action: 'reported', effort: 'alpha' });
+  assert.match(w.prompt(), /Phase: close-out[\s\S]*\/close-out/);
+});
+
+test('the agent\'s development_done is only a hint: with unchecked plan steps the next run is still develop (I4)', async () => {
+  const b = setup({ featReqs: { alpha: feat({ status: 'IN_PROGRESS' }) }, files: { 'docs/plans/alpha.md': planFile('- [x] Step 1\n- [ ] Step 2') } });
+  const w = worker(b, { script: { writes: { 'docs/history/2026-06-01_alpha.md': 'h\n' }, result: completed('IN_PROGRESS', { development_done: true }) } });
+  assert.deepEqual(await w.step(), { action: 'reported', effort: 'alpha' });
+  assert.ok(w.logs.some((l) => /reported development_done for alpha but its plan has unchecked steps/.test(l)), w.logs.join('\n'));
+  assert.deepEqual(await w.step(), { action: 'reported', effort: 'alpha' });
+  assert.match(w.prompt(), /Phase: develop/);
+});
+
+test('a close-out question records its phase; the answer goes to a close-out run (I4)', async () => {
+  const b = setup({ featReqs: { alpha: feat({ status: 'IN_PROGRESS' }) }, files: { 'docs/plans/alpha.md': planFile('- [x] Step 1') } });
+  const w = worker(b, { script: { result: question() } });
+  assert.deepEqual(await w.step(), { action: 'requested', effort: 'alpha' });
+  assert.match(w.prompt(), /Phase: close-out/);
+  const q = requestsOnMain(b)[0];
+  assert.match(q.text, /^Worker phase: close-out$/m);
+  const p = b.clone('p');
+  assert.equal((await answerRequest(p, parseDoc(q.text).data.id, { answer: 'B', by: 'alice', identity: OWNER, now: T0 })).ok, true);
+  w.restart();
+  w.script({ result: completed('IN_PROGRESS') });
+  assert.deepEqual(await w.step(), { action: 'reported', effort: 'alpha' });
+  assert.match(w.prompt(), /Phase: close-out[\s\S]*Option B/);
+});
+
+test('the recorded phase routes the answer even where the plan alone would not (I4)', async () => {
+  const mk = (phase, steps) => {
+    const id = '202606010900-qqqqqq';
+    const req = buildRequest({
+      id, kind: 'question', scope: 'effort', effort: 'alpha', worker: IDB, for: 'alice', blocking: true, now: T0,
+      sections: { Request: 'Which?', Context: `c\n\nWorker phase: ${phase}`, Options: 'A) x\nB) y' },
+    });
+    return setup({ featReqs: { alpha: feat({ status: 'IN_PROGRESS', awaiting: id }) }, files: { [`board/requests/${id}.md`]: req, 'docs/plans/alpha.md': planFile(steps) } });
+  };
+  for (const [phase, steps] of [['close-out', '- [ ] Step 2'], ['develop', '- [x] Step 1']]) {
+    const b = mk(phase, steps);
+    assert.equal((await answerRequest(b.clone('p'), '202606010900-qqqqqq', { answer: 'A', by: 'alice', identity: OWNER, now: T0 })).ok, true);
+    const w = worker(b, { script: { result: completed('IN_PROGRESS') } });
+    assert.deepEqual(await w.step(), { action: 'reported', effort: 'alpha' });
+    assert.match(w.prompt(), new RegExp(`Phase: ${phase}[\\s\\S]*Option A`));
+  }
+});
+
+test('a completed phase that disagrees with the working feat-req is an effort error naming both; nothing is reported (M1)', async () => {
+  const b = setup({ featReqs: { alpha: feat() } });
+  const before = tip(b);
+  const w = worker(b, { script: { writes: { 'docs/design/alpha.md': design([]) }, keepStatus: true, result: completed('DESIGNED') } });
+  assert.deepEqual(await w.step(), { action: 'failed', effort: 'alpha' });
+  const text = requestsOnMain(b)[0].text;
+  assert.match(text, /the agent reported phase DESIGNED but the working feat-req says ACCEPTED/);
+  assert.ok(!messagesSince(b, before).some((m) => m.startsWith('board(report)')));
+  assert.equal(onMain(b, 'docs/design/alpha.md'), null);
+  assert.equal(fmOnMain(b, 'alpha').status, 'ACCEPTED');
+});
+
+test('an IMPLEMENTED result is not acted on while the working feat-req still says IN_PROGRESS (M1)', async () => {
+  const b = setup({ featReqs: { alpha: feat({ status: 'IN_PROGRESS' }) }, files: { 'docs/plans/alpha.md': planFile('- [x] Step 1') } });
+  const w = worker(b, { script: { keepStatus: true, result: completed('IMPLEMENTED') } });
+  assert.deepEqual(await w.step(), { action: 'failed', effort: 'alpha' });
+  assert.match(requestsOnMain(b)[0].text, /reported phase IMPLEMENTED but the working feat-req says IN_PROGRESS/);
+  assert.equal(fmOnMain(b, 'alpha').status, 'IN_PROGRESS');
+});
+
+test('every section of an agent request is redacted before it is posted (M2)', async () => {
+  const b = setup({ featReqs: { alpha: feat() } });
+  const tok = (c) => `ghp_${c.repeat(36)}`;
+  const w = worker(b, {
+    script: {
+      result: { outcome: 'request', request: { kind: 'question', blocking: true, sections: {
+        Request: `use ${tok('a')}?`, Context: `ctx ${tok('b')}`, Options: `A) ${tok('c')}\nB) no`,
+      } } },
+    },
+  });
+  assert.deepEqual(await w.step(), { action: 'requested', effort: 'alpha' });
+  const text = requestsOnMain(b)[0].text;
+  for (const c of 'abc') assert.ok(!text.includes(tok(c)), `token ${c} leaked`);
+  assert.equal(text.match(/\[REDACTED\]/g).length, 3);
+
+  const b2 = setup({ featReqs: { alpha: feat() } });
+  const w2 = worker(b2, {
+    script: { result: { outcome: 'request', request: { kind: 'clarification', blocking: false, sections: { Request: 'r', Context: 'c', Assumption: `with ${tok('d')}` } } } },
+  });
+  assert.deepEqual(await w2.step(), { action: 'requested', effort: 'alpha' });
+  const t2 = requestsOnMain(b2)[0].text;
+  assert.ok(!t2.includes(tok('d')));
+  assert.match(t2, /with \[REDACTED\]/);
+});
+
+test('runs that only post a clarification and change nothing count as stalls (M3)', async () => {
+  const b = setup({ featReqs: { alpha: feat() } });
+  const w = worker(b, { script: { result: { outcome: 'request', request: { kind: 'clarification', blocking: false, sections: { Request: 'r', Context: 'c', Assumption: 'a' } } } } });
+  assert.deepEqual(await w.step(), { action: 'requested', effort: 'alpha' });
+  assert.deepEqual(await w.step(), { action: 'requested', effort: 'alpha' });
+  assert.deepEqual(await w.step(), { action: 'failed', effort: 'alpha' });
+  const err = requestsOnMain(b).map((r) => r.text).find((t) => /kind: error/.test(t));
+  assert.match(err, /no progress: 3 runs in a row changed nothing \(the last one only posted clarification/);
+  assert.equal(fmOnMain(b, 'alpha').claimed_by, undefined);
+  // a clarification run that does change something resets the count
+  const b2 = setup({ featReqs: { alpha: feat() } });
+  const clar = (writes) => ({ writes, result: { outcome: 'request', request: { kind: 'clarification', blocking: false, sections: { Request: 'r', Context: 'c', Assumption: 'a' } } } });
+  const w2 = worker(b2, { script: clar({}) });
+  assert.equal((await w2.step()).action, 'requested');
+  assert.equal((await w2.step()).action, 'requested');
+  w2.script(clar({ 'docs/design/alpha.md': design([]) }));
+  assert.equal((await w2.step()).action, 'requested');
+  w2.script(clar({}));
+  assert.equal((await w2.step()).action, 'requested');
+});
+
+test('saved agent input is tied to its hold: a lost claim drops it (M5)', async () => {
+  const b = setup({ featReqs: { alpha: feat() } });
+  const w = worker(b, { script: { result: completed('ACCEPTED') } });
+  w.beforeRun = () => {
+    writeInput(w.home, 'alpha', ['Request x (question): Option A'], { claimed_at: fmOnMain(b, 'alpha').claimed_at });
+    const f = onMain(b, 'docs/feat-req/alpha.md');
+    b.seed('docs/feat-req/alpha.md', f.replace(`claimed_by: ${IDA}`, 'claimed_by: bob-zzzzzz'), 'board(takeover): alpha');
+  };
+  assert.deepEqual(await w.step(), { action: 'lost', effort: 'alpha' });
+  assert.ok(!existsSync(join(w.home, 'run/agent-input/alpha.json')));
+});
+
+test('saved agent input from an earlier hold is not folded into a new claim (M5)', async () => {
+  const b = setup({ featReqs: { alpha: feat() } });
+  const w = worker(b, { script: { result: completed('ACCEPTED') } });
+  writeInput(w.home, 'alpha', ['Request old (question): Option Z'], { claimed_at: '2026-05-01T00:00:00Z' });
+  assert.deepEqual(await w.step(), { action: 'reported', effort: 'alpha' });
+  assert.doesNotMatch(w.prompt(), /Option Z/);
+  assert.ok(w.logs.some((l) => l === 'dropped saved agent input for alpha: it belongs to an earlier hold'), w.logs.join('\n'));
+  assert.ok(!existsSync(join(w.home, 'run/agent-input/alpha.json')));
+  // the same claim (a crash and restart) keeps it, stamped with that claim's claimed_at
+  writeInput(w.home, 'alpha', ['Request y (question): Option Y'], { claimed_at: fmOnMain(b, 'alpha').claimed_at });
+  w.restart();
+  assert.deepEqual(await w.step(), { action: 'reported', effort: 'alpha' });
+  assert.match(w.prompt(), /Option Y/);
 });

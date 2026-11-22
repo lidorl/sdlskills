@@ -183,6 +183,31 @@ test('a killed worker left a report commit unpushed: start unwinds it, so the cr
   assert.ok(t.logs.some((m) => /unwound 1 local meta commit/.test(m)), t.logs.join('\n'));
 });
 
+test('`once` per phase reaches close-out: development done is read from the plan (I4)', async () => {
+  const plan = (steps) => `---\nstatus: IN_PROGRESS\n---\n\n${steps}\n`;
+  const t = setup({ featReqs: { alpha: feat({ status: 'IN_PROGRESS' }) }, files: { 'docs/plans/alpha.md': plan('- [ ] Step 1') } });
+  const prompts = [];
+  t.loop.runAgent = async (o) => {
+    prompts.push(o.args[1]);
+    let result = { outcome: 'completed', phase: 'IN_PROGRESS', summary: 'step 1 done', development_done: true };
+    if (prompts.length === 1) writeFileSync(join(o.cwd, 'docs/plans/alpha.md'), plan('- [x] Step 1'));
+    else {
+      const f = join(o.cwd, 'docs/feat-req/alpha.md');
+      writeFileSync(f, readFileSync(f, 'utf8').replace('status: IN_PROGRESS', 'status: IMPLEMENTED'));
+      result = { outcome: 'completed', phase: 'IMPLEMENTED', summary: 'closed out' };
+    }
+    mkdirSync(dirname(o.env.SDLC_RESULT_FILE), { recursive: true });
+    writeFileSync(o.env.SDLC_RESULT_FILE, JSON.stringify(result));
+    return { exitCode: 0, signal: null, timedOut: false, stderrTail: '' };
+  };
+  assert.equal((await cli(t, ['once', ID])).out, 'reported alpha\n');
+  assert.equal(fmOnMain(t.b, 'alpha').claimed_by, undefined, 'once released it');
+  assert.equal((await cli(t, ['once', ID])).out, 'done alpha\n');
+  assert.match(prompts[0], /Phase: develop/);
+  assert.match(prompts[1], /Phase: close-out/);
+  assert.equal(fmOnMain(t.b, 'alpha').status, 'IMPLEMENTED');
+});
+
 test('start --detach returns immediately; process survives the parent; stop ends it and pushes stop', async () => {
   const t = setup({ config: 'idle_poll: 1s\n' });
   // The parent is its own process: it must exit while the worker keeps running.
