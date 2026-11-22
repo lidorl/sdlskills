@@ -514,7 +514,8 @@ test('crash between apply and run: the next step reuses the persisted agent inpu
   assert.equal((await answerRequest(b.clone('p'), id, { answer: 'B', by: 'alice', identity: OWNER, now: T0 })).ok, true);
   const w = worker(b, { script: { result: completed('ACCEPTED') } });
   w.beforeRun = () => { throw new Error('simulated crash'); };
-  await assert.rejects(w.step(), /simulated crash/);
+  assert.deepEqual(await w.step(), { action: 'idle' }, 'a throw while holding is counted, not fatal (I3)');
+  assert.ok(w.logs.some((l) => /step failed: simulated crash/.test(l)), w.logs.join('\n'));
   assert.equal(onMain(b, `board/requests/${id}.md`), null, 'the apply commit deleted the request');
   assert.ok(existsSync(join(w.home, 'run/agent-input/alpha.json')));
 
@@ -745,8 +746,9 @@ test('three board failures in a row on a held effort → effort error instead of
   assert.deepEqual(await w.step(), { action: 'idle' });
   assert.deepEqual(await w.step(), { action: 'idle' });
   assert.deepEqual(await w.step(), { action: 'failed', effort: 'alpha' });
+  assert.equal(w.runs.length, 2, 'the finished run is handled again, never re-run (I3)');
   const err = requestsOnMain(b).map((r) => r.text).find((t) => /kind: error/.test(t));
-  assert.match(err, /3 board writes in a row failed/);
+  assert.match(err, /3 steps in a row failed/);
   assert.equal(fmOnMain(b, 'alpha').claimed_by, undefined);
 });
 
@@ -1122,4 +1124,40 @@ test('keepFeatEdits: unchanged → nothing; back at origin → put back; anythin
   assert.deepEqual(readFileSync(join(dir, 'meta/docs/feat-req/alpha.md')), mine);
   assert.match(readFileSync(f, 'utf8'), /something else/, 'the working file is left alone');
   assert.deepEqual(keepFeatEdits(w.ctx, 'alpha', null), {});
+});
+
+test('origin unreachable right after a run: the next step handles the same result without re-running the agent (I3)', async () => {
+  const b = setup({ featReqs: { alpha: feat() } });
+  const w = worker(b, { script: { result: completed('ACCEPTED') } });
+  w.beforeRun = (opts) => {
+    mkdirSync(join(opts.cwd, 'docs/design'), { recursive: true });
+    writeFileSync(join(opts.cwd, 'docs/design/alpha.md'), design(['api']));
+    renameSync(b.remote, `${b.remote}.off`); // the network drops before the run ends
+  };
+  assert.deepEqual(await w.step(), { action: 'idle' });
+  assert.ok(w.logs.some((l) => /board write failed: cannot reach origin after the run/.test(l)), w.logs.join('\n'));
+  renameSync(`${b.remote}.off`, b.remote);
+  w.beforeRun = null;
+  w.script({ result: { outcome: 'failed', error: { message: 'a re-run would fail' } } }); // proves no re-run
+  assert.deepEqual(await w.step(), { action: 'reported', effort: 'alpha' });
+  assert.equal(w.runs.length, 1);
+  assert.ok(w.logs.some((l) => l === 'handling the finished run of alpha again (its result was not handled yet)'), w.logs.join('\n'));
+  assert.equal(onMain(b, 'docs/design/alpha.md'), design(['api']));
+});
+
+test('a post-run failure that repeats every time: effort error after the limit, the agent ran once (I3)', async () => {
+  const b = setup({ featReqs: { alpha: feat() } });
+  const outside = join(b.dir, 'outside.md');
+  writeFileSync(outside, 'x\n');
+  // a symlinked effort doc makes every report attempt throw a plain Error (safePath refuses it)
+  const w = worker(b, { script: { exec: [['.', 'mkdir', '-p', 'docs/design'], ['.', 'ln', '-s', outside, 'docs/design/alpha.md']], result: completed('ACCEPTED') } });
+  assert.deepEqual(await w.step(), { action: 'idle' });
+  assert.deepEqual(await w.step(), { action: 'idle' });
+  assert.deepEqual(await w.step(), { action: 'failed', effort: 'alpha' });
+  assert.equal(w.runs.length, 1);
+  assert.ok(w.logs.filter((l) => /step failed: refusing symlinked path/.test(l)).length === 3, w.logs.join('\n'));
+  const err = requestsOnMain(b).map((r) => r.text).find((t) => /kind: error/.test(t));
+  assert.match(err, /3 steps in a row failed; last: refusing symlinked path/);
+  assert.equal(fmOnMain(b, 'alpha').claimed_by, undefined);
+  assert.equal(readFileSync(outside, 'utf8'), 'x\n');
 });

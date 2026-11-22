@@ -31,7 +31,9 @@ export const BOARD_ERROR_LIMIT = 3; // board failures in a row on a held effort 
 // `continued`: this hold carries on a claim whose checkouts this worker already prepared, so local code
 // commits ahead of origin are ours to keep (Rulings P2-13, P2-14). `prepared`: prepareCheckouts has run in
 // this hold. A new claim, a takeover, or a claim that never got as far as preparing is not a continuation.
-const held = (slug, continued) => ({ slug, continued, prepared: false, developmentDone: false, stalls: 0, boardErrors: 0 });
+// `pending`: a finished run whose result is not handled yet ({ status, res, keys, logPath }); the next step
+// handles it again instead of running the agent again.
+const held = (slug, continued) => ({ slug, continued, prepared: false, developmentDone: false, stalls: 0, boardErrors: 0, pending: null });
 
 // Ruling P2-14: continuation is proven by state.json's `prepared` marker, written only after
 // prepareCheckouts ran for a claim. renew keeps claimed_at; a new claim or a takeover changes it, so a claim
@@ -96,14 +98,16 @@ export async function step(ctx) {
     if (ctx.holding) ctx.holding.boardErrors = 0;
     return r;
   } catch (e) {
-    if (!(e instanceof BoardError)) throw e;
-    ctx.deps.log(`board write failed: ${firstLine(e)}; staying idle`);
+    // Any failure while holding counts (a finished run's result stays pending, so a retry never re-runs the
+    // agent); without a hold only a board failure is expected here.
+    if (e instanceof WorkerFatal || (!(e instanceof BoardError) && !ctx.holding)) throw e;
+    ctx.deps.log(`${e instanceof BoardError ? 'board write failed' : 'step failed'}: ${firstLine(e)}; staying idle`);
     const h = ctx.holding;
     if (h && ++h.boardErrors >= BOARD_ERROR_LIMIT && ctx.board) {
       // The lease would rot while we idle: hand the effort to a person instead.
       const status = committedFm(ctx.clone, h.slug, 'origin/main')?.status ?? 'unknown';
       try {
-        return await effortError(ctx, h.slug, status, `${BOARD_ERROR_LIMIT} board writes in a row failed; last: ${firstLine(e)}`, {});
+        return await effortError(ctx, h.slug, status, `${BOARD_ERROR_LIMIT} steps in a row failed; last: ${firstLine(e)}`, { keys: h.pending?.keys ?? [], logPath: h.pending?.logPath });
       } catch (e2) {
         ctx.deps.log(`could not post the effort error for ${h.slug}: ${firstLine(e2)}`);
       }
@@ -136,6 +140,10 @@ async function stepOn(ctx, board) {
   let slug = ctx.holding?.slug ?? null;
   if (slug) {
     if (!holds(clone, slug, cfg.id, { ref: 'origin/main' })) return lose(ctx, slug);
+    if (ctx.holding.pending) {
+      deps.log(`handling the finished run of ${slug} again (its result was not handled yet)`);
+      return finishRun(ctx, slug, ctx.holding.pending, bcfg);
+    }
   } else if (resumable) {
     slug = resumable;
     ctx.holding = held(slug, continued(slug));
@@ -318,5 +326,13 @@ async function runHeld(ctx, slug, bcfg) {
   unwindLocalCommits(ctx); // the agent may have committed in meta despite the prompt
   if (takenOver) return lose(ctx, slug);
   if (res.aborted) return interrupted(ctx, slug, fm.status, keys);
-  return handleResult(ctx, slug, fm.status, { res, keys, logPath, bcfg });
+  ctx.holding.pending = { status: fm.status, res, keys, logPath };
+  return finishRun(ctx, slug, ctx.holding.pending, bcfg);
+}
+
+// Handle a finished run's result; it stays pending until handling returns (a throw keeps it for a retry).
+async function finishRun(ctx, slug, { status, res, keys, logPath }, bcfg) {
+  const out = await handleResult(ctx, slug, status, { res, keys, logPath, bcfg });
+  if (ctx.holding?.slug === slug) ctx.holding.pending = null;
+  return out;
 }

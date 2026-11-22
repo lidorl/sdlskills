@@ -4,7 +4,7 @@ import { hostname } from 'node:os';
 import { readFileSync, existsSync, writeFileSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { fetchMain, snapshotMain, identityEnv, showFile } from '../board/git.mjs';
+import { fetchMain, snapshotMain, identityEnv, showFile, BoardError } from '../board/git.mjs';
 import { release, holds, committedFm, featReqPath } from '../board/claims.mjs';
 import { listRequests, postRequest, newRequestId } from '../board/requests.mjs';
 import { redact } from '../board/redact.mjs';
@@ -48,7 +48,11 @@ export function lose(ctx, slug) {
 
 export async function handleResult(ctx, slug, status, { res, keys, logPath, bcfg }) {
   const { cfg, clone, identity } = ctx;
-  fetchMain(clone, identityEnv(identity));
+  try {
+    fetchMain(clone, identityEnv(identity));
+  } catch (e) {
+    throw new BoardError(`cannot reach origin after the run: ${firstLine(e)}`); // the result stays pending
+  }
   if (!holds(clone, slug, cfg.id, { ref: 'origin/main' })) return lose(ctx, slug);
   // The agent could have swapped the run dir for a symlink during the run: check again, read through safePath.
   const unsafe = runDirProblem(clone);
