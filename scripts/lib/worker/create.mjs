@@ -8,8 +8,8 @@ import { boardWrite } from '../board/git.mjs';
 import { workerYaml } from '../board/registry.mjs';
 import { DEFAULT_CONFIG_YAML } from '../board/config.mjs';
 import { WORKER_ID_RE } from '../board/safe-path.mjs';
-import { agentCommand, runAgent } from './agent.mjs';
-import { workerHome, writeConfig, agentSettings, installTrailerHook } from './home.mjs';
+import { agentCommand, runAgent, RUN_DIR } from './agent.mjs';
+import { workerHome, writeConfig, agentSettings, installTrailerHook, excludeRunDir } from './home.mjs';
 
 export class CreateError extends Error {}
 
@@ -108,6 +108,7 @@ export async function createWorker({
       git(meta, ['config', 'user.name', owner.name]);
       git(meta, ['config', 'user.email', owner.email]);
       installTrailerHook(meta, id);
+      excludeRunDir(meta, RUN_DIR);
       const cfgName = name || id;
       writeConfig(home, {
         id, owner: owner.login, meta_url: metaUrl, agent, model, cli_args: cliArgs, name: cfgName,

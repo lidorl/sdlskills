@@ -55,7 +55,7 @@ test('agentCommand claude passes --settings and --model; env has SDLC_HEADLESS=1
   assert.deepEqual(args, ['-p', 'PROMPT', '--model', 'opus', '--output-format', 'json', '--settings', '/h/agent-settings.json', '--x']);
   assert.equal(env.SDLC_HEADLESS, '1');
   assert.equal(env.SDLC_WORKER_ID, 'al-abc123');
-  assert.equal(env.SDLC_RESULT_FILE, '/h/run/result.json');
+  assert.equal(env.SDLC_RESULT_FILE, '/h/meta/.sdlc-run/result.json', 'inside meta/, the agent\'s cwd');
 
   const cp = agentCommand({ ...cfg, agent: 'copilot', agent_cmd: '/bin/fake', cli_args: [] }, 'P', '/h');
   assert.equal(cp.cmd, '/bin/fake');

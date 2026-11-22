@@ -20,11 +20,11 @@ import { WORKER_ID_RE } from '../board/safe-path.mjs';
 import { isProtected } from '../../clean-env.mjs';
 import { resolveRepoKeys } from '../../assemble-env.mjs';
 import {
-  sdlcHome, workerHome, readConfig, writeConfig, readState, writeState, readPid, clearPid, isAlive,
+  sdlcHome, workerHome, readConfig, writeConfig, readState, writeState, readPid, clearPid, isAlive, excludeRunDir,
 } from './home.mjs';
 import { preflight } from './preflight.mjs';
 import { makeContext, step, WorkerFatal } from './loop.mjs';
-import { WORKER_PROCESS_VARS } from './agent.mjs';
+import { WORKER_PROCESS_VARS, RUN_DIR } from './agent.mjs';
 import { letGo } from './outcomes.mjs';
 import { pushCodeBranches } from './code-repos.mjs';
 import { createWorker, CreateError } from './create.mjs';
@@ -498,6 +498,7 @@ async function cmdRun({ flags, positional: [id] }, d, { once }) {
     ctx = context(home, d, ac.signal);
     // A previous run's agent pid file: kill that agent if it still runs (verified), then forget it.
     killLeftoverAgent(home, ctx.cfg, d, ctx.deps.log);
+    excludeRunDir(ctx.clone, RUN_DIR);
     refresh(ctx);
     const pf = onMain(ctx.clone, (board) => preflight({ home, cfg: ctx.cfg, root: board, gh: { authOk: () => true }, which: () => true }));
     // only fatal problems are checked here; the loop's own preflight handles the rest

@@ -1,6 +1,5 @@
 // What happens after a step's agent run, and the ways a step lets go of an effort: report, request,
 // effort error, worker error, lost. Shared state: ctx from loop.mjs.
-import { join } from 'node:path';
 import { hostname } from 'node:os';
 import { readFileSync, existsSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
@@ -12,7 +11,7 @@ import { reportPaths } from '../board/paths.mjs';
 import { reportEffort } from '../board/report.mjs';
 import { resolveRepoKeys } from '../../assemble-env.mjs';
 import { readState, writeState } from './home.mjs';
-import { readResult, classifyFailure } from './agent.mjs';
+import { readResult, classifyFailure, resultFile } from './agent.mjs';
 import { pushCodeBranches, dirtyNote } from './code-repos.mjs';
 import { readInput, clearInput } from './agent-input.mjs';
 import { salvage } from './salvage.mjs';
@@ -49,7 +48,7 @@ export async function handleResult(ctx, slug, status, { res, keys, logPath, bcfg
   const { cfg, home, clone, identity } = ctx;
   fetchMain(clone, identityEnv(identity));
   if (!holds(clone, slug, cfg.id, { ref: 'origin/main' })) return lose(ctx, slug);
-  const read = readResult(join(home, 'run', 'result.json'));
+  const read = readResult(resultFile(home));
   const exitFailed = !!res.spawnError || res.exitCode !== 0;
   if (!res.timedOut && exitFailed && classifyFailure(res) === 'worker') {
     const what = res.spawnError ? `agent CLI could not start: ${firstLine(res.spawnError)}` : 'the agent CLI rejected the run (model or CLI problem)';

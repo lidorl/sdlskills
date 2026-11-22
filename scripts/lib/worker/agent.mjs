@@ -51,6 +51,11 @@ export function buildPrompt({ workerId, slug, status, agent, agentInput = [], de
   return parts.join('\n');
 }
 
+// The result file lives inside meta/ (the agent's cwd, where the sandbox lets it write), in a directory the
+// meta clone's .git/info/exclude hides from git (see home.mjs excludeRunDir).
+export const RUN_DIR = '.sdlc-run';
+export const resultFile = (home) => join(home, 'meta', RUN_DIR, 'result.json');
+
 export function agentCommand(cfg, prompt, home) {
   const cmd = cfg.agent_cmd ?? cfg.agent;
   const extra = cfg.cli_args ?? [];
@@ -59,7 +64,7 @@ export function agentCommand(cfg, prompt, home) {
     : ['-p', prompt, '--model', cfg.model, '--output-format', 'json',
       '--settings', join(home, 'agent-settings.json'), ...extra];
   const env = {
-    SDLC_RESULT_FILE: join(home, 'run', 'result.json'),
+    SDLC_RESULT_FILE: resultFile(home),
     SDLC_WORKER_ID: cfg.id,
     SDLC_HEADLESS: '1',
   };

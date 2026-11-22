@@ -164,7 +164,7 @@ state.json         local only: clean_stop flag, consecutive failures, backoff_un
 worker.pid         present while running
 logs/worker.log    runtime log (detached stdout/stderr)
 logs/runs/<ts>-<effort>-<phase>.log   one agent run's transcript
-run/result.json    the result file for the current agent run
+meta/.sdlc-run/result.json   the result file for the current agent run (inside the agent's cwd; hidden by meta's .git/info/exclude)
 ```
 
 Each worker has its own `meta/` clone and holds at most one effort at a time. So `workspace/.current-effort` stays a correct per-worker marker, and ADR 001's single `workspace/` holds unchanged inside each worker. That's the ADR 001 amendment (ADR 005): **per-worker meta clones** replace the deferred per-effort directories.
@@ -200,7 +200,7 @@ loop:
   apply answered requests for E (effects.mjs), in the same commit that deletes them and clears awaiting
   assemble-env E (if DESIGNED+), install trailer hooks in workspace checkouts
   run the agent on E's routed phase, with a timeout; renew the lease every lease_ttl/2 while it runs
-  read run/result.json:
+  read meta/.sdlc-run/result.json:
     completed  → report (artifacts + new status + renewed lease); continue with E unless IMPLEMENTED
     request    → validate + redact; post; blocking → same commit sets awaiting + releases
     failed / missing / timeout → effort error (blocking) + release + backoff
@@ -349,7 +349,7 @@ No database. The persistent formats this adds:
 - **`board/requests/<id>.md`**: the spec's format plus `answer:` and, for review gates, `## Findings`.
 - **Board commit trailers**: `Worker`, `Sdlc-Event`, `Effort`, `Request`, `Phase`, `Replaces`, `Answered-by`.
 - **`board/config.yml`**: `lease_ttl`, `idle_poll`, `phase_timeout`, `backoff`, `watch_interval`.
-- **Worker home** (local, not shared): `config.json`, `state.json`, `agent-settings.json`, `run/result.json`.
+- **Worker home** (local, not shared): `config.json`, `state.json`, `agent-settings.json`, `meta/.sdlc-run/result.json`.
 
 The kit keeps its data contracts in `CLAUDE.process.md` (State) and `architecture.md`, and has no `data-model.md`. These are documented there instead of creating one.
 

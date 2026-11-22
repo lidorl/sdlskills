@@ -56,6 +56,7 @@ test('creates home, registers on main under the owner, id shape', async () => {
   assert.ok(existsSync(join(home, 'agent-settings.json')));
   assert.equal(git(join(home, 'meta'), 'config', 'user.email').trim(), 'lidor@example.com');
   assert.match(readFileSync(join(home, 'meta', '.git', 'hooks', 'commit-msg'), 'utf8'), new RegExp(`Worker: ${id}`));
+  assert.match(readFileSync(join(home, 'meta', '.git', 'info', 'exclude'), 'utf8'), /^\/\.sdlc-run\/$/m, 'the run dir is hidden in the clone only');
   const log = git(t.b.remote, 'log', '-1', '--format=%s%n%an <%ae>%n%(trailers:key=Worker,valueonly)', 'main');
   assert.match(log, new RegExp(`^board\\(register\\): ${id}\\nLidor L <lidor@example.com>\\n${id}`));
 });

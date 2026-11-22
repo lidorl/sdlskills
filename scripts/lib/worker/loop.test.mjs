@@ -952,3 +952,23 @@ test('stop signal before the run: nothing starts, the claim is released (interru
   assert.equal(fmOnMain(b, 'alpha').claimed_by, undefined);
   assert.match(headMsg(b), /^board\(release\): alpha/);
 });
+
+test('the result file is inside meta/ (the agent\'s cwd), hidden by info/exclude: never reported, salvaged or a stray (I5)', async () => {
+  const b = setup({ featReqs: { alpha: feat() } });
+  const w = worker(b, { script: { writes: { 'docs/design/alpha.md': design(['api']) }, result: completed('ACCEPTED') } });
+  assert.deepEqual(await w.step(), { action: 'reported', effort: 'alpha' });
+  const rf = w.runs[0].env.SDLC_RESULT_FILE;
+  assert.equal(rf, join(w.meta, '.sdlc-run', 'result.json'));
+  assert.ok(rf.startsWith(`${w.runs[0].cwd}/`), 'the agent can write it from its cwd');
+  assert.ok(existsSync(rf), 'kept until the next run clears it');
+  assert.match(readFileSync(join(w.meta, '.git/info/exclude'), 'utf8'), /^\/\.sdlc-run\/$/m);
+  assert.equal(readFileSync(join(w.meta, '.gitignore'), 'utf8'), 'workspace/\n', 'the shared .gitignore is untouched');
+  assert.equal(git(w.meta, 'status', '--porcelain', '--untracked-files=all'), '');
+  assert.ok(!git(b.remote, 'log', '--name-only', '--format=', 'main').includes('.sdlc-run'), 'never committed');
+  assert.ok(!w.logs.some((l) => /\.sdlc-run/.test(l)), w.logs.join('\n'));
+  // an effort error salvages the clone: the result file stays where it is
+  w.script({ result: { outcome: 'failed', error: { message: 'boom' } } });
+  assert.deepEqual(await w.step(), { action: 'failed', effort: 'alpha' });
+  assert.ok(existsSync(rf));
+  assert.ok(salvaged(w).every((d) => !existsSync(join(d, 'meta/.sdlc-run'))));
+});

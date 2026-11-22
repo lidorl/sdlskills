@@ -100,3 +100,14 @@ export function uninstallTrailerHook(repoDir) {
   }
   if (existsSync(kept)) renameSync(kept, hook);
 }
+
+// The agent's run directory inside meta/ (agent.mjs RUN_DIR) is hidden from git through the clone's own
+// .git/info/exclude, not the shared .gitignore: no status, report, salvage or dirty check ever sees it.
+export function excludeRunDir(metaDir, runDir = '.sdlc-run') {
+  const file = join(metaDir, '.git', 'info', 'exclude');
+  const line = `/${runDir}/`;
+  const text = existsSync(file) ? readFileSync(file, 'utf8') : '';
+  if (text.split('\n').some((l) => l.trim() === line)) return;
+  mkdirSync(dirname(file), { recursive: true });
+  writeFileSync(file, `${text}${text && !text.endsWith('\n') ? '\n' : ''}${line}\n`);
+}

@@ -12,8 +12,8 @@ import { loadConfig } from '../board/config.mjs';
 import { syncKeepingWork, SyncConflict } from '../board/report.mjs';
 import { loadCatalog } from '../catalog.mjs';
 import { assemble as realAssemble, resolveRepoKeys } from '../../assemble-env.mjs';
-import { readConfig, readState, writeState } from './home.mjs';
-import { route, buildPrompt, agentCommand, runAgent as realRunAgent } from './agent.mjs';
+import { readConfig, readState, writeState, excludeRunDir } from './home.mjs';
+import { route, buildPrompt, agentCommand, runAgent as realRunAgent, RUN_DIR } from './agent.mjs';
 import { preflight, realDeps as preflightDeps } from './preflight.mjs';
 import { lose, letGo, effortError, workerError, handleResult, interrupted } from './outcomes.mjs';
 import { readInput, writeInput, savedSlugs } from './agent-input.mjs';
@@ -250,6 +250,7 @@ async function runHeld(ctx, slug, bcfg) {
     workerId: cfg.id, slug, status: fm.status, agent: cfg.agent, agentInput, developmentDone: ctx.holding.developmentDone,
   });
   const cmd = agentCommand(cfg, prompt, home);
+  excludeRunDir(clone, RUN_DIR); // the result file is written inside meta/
   const logPath = runLogPath(home, deps.now(), slug, r.phase);
   mkdirSync(dirname(logPath), { recursive: true });
   writeFileSync(logPath, `[worker] ${cfg.id} ${r.phase} ${slug} (${fm.status}) at ${iso(deps.now())}\n`);
