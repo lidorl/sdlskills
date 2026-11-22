@@ -3,10 +3,10 @@
 // the protocol writes for the lifecycle events. Exit codes: 0 ok, 1 refusal or failure, 2 usage.
 import { spawn as realSpawn, execFileSync } from 'node:child_process';
 import {
-  appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, rmSync, writeFileSync,
+  appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync,
 } from 'node:fs';
 import { hostname } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { parse } from 'yaml';
 import { boardWrite, fetchMain, snapshotMain, identityEnv } from '../board/git.mjs';
 import { release } from '../board/claims.mjs';
@@ -98,12 +98,14 @@ function abortableWait(ms, signal) {
   });
 }
 
-// The command line of process `pid`; null when there is no such process, undefined when `ps` is unavailable.
-function realProcCommand(pid) {
+// The full command line of process `pid`; null when there is no such process; undefined when it cannot be
+// told (ps missing or failing otherwise). Unknown never counts as "not ours" (Ruling P2-17).
+export function realProcCommand(pid) {
   try {
-    return execFileSync('ps', ['-o', 'command=', '-p', String(pid)], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim() || null;
+    return execFileSync('ps', ['-ww', '-o', 'command=', '-p', String(pid)], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim() || null;
   } catch (e) {
-    return e.code === 'ENOENT' ? undefined : null;
+    const quiet = !String(e.stdout ?? '').trim() && !String(e.stderr ?? '').trim();
+    return e.status === 1 && quiet ? null : undefined; // ps exits 1, silently, for a pid it does not find
   }
 }
 
@@ -143,35 +145,102 @@ function runtimeLog(home, d) {
   };
 }
 
-// A pid file outlives reboots and pids get reused: a pid counts as this worker only while that process is
-// alive and its command line is `… worker start|once <id>`. Where `ps` is missing, liveness alone decides.
-function isWorker(pid, id, d) {
-  if (!pid || !d.isAlive(pid)) return false;
+// A pid file outlives reboots and pids get reused: a pid is this worker only while that process is alive and
+// its command line is `… worker start|once <id>`. -> 'ours' | 'not' | 'unknown' (ps could not tell)
+function workerStatus(pid, id, d) {
+  if (!pid || !d.isAlive(pid)) return 'not';
   const cmd = d.procCommand(pid);
-  if (cmd === undefined) return true;
-  return !!cmd && new RegExp(`(^|\\s)worker\\s(.*\\s)?(start|once)\\s(.*\\s)?${id}(\\s|$)`).test(cmd);
+  if (cmd === undefined) return 'unknown';
+  return cmd && new RegExp(`(^|\\s)worker\\s(.*\\s)?(start|once)\\s(.*\\s)?${id}(\\s|$)`).test(cmd) ? 'ours' : 'not';
 }
 
-const runningPid = (home, id, d) => { const pid = readPid(home); return isWorker(pid, id, d) ? pid : null; };
+const cannotTell = (id, pid, home) => new Refusal(`cannot tell whether pid ${pid} is worker ${id} (ps failed); `
+  + `if it is not running, remove ${join(home, 'worker.pid')} and try again`);
 
-// The pid file is the run lock: created exclusively, so two starts can never both pass the check.
-// A detached worker takes over the lock its parent took for it. -> { stalePid } (a pid file left behind)
-function lockRun(home, id, d) {
+// The pid of this worker's running process, or null. Throws when it cannot be told.
+function runningPid(home, id, d) {
+  const pid = readPid(home);
+  const st = workerStatus(pid, id, d);
+  if (st === 'unknown') throw cannotTell(id, pid, home);
+  return st === 'ours' ? pid : null;
+}
+
+// The agent a worker left running, verified by its command line: a pid file can name a reused pid.
+function leftoverAgent(home, cfg, d) {
+  const file = join(home, 'run', 'agent.pid');
+  let pid;
+  try { pid = Number.parseInt(readFileSync(file, 'utf8'), 10); } catch { return null; }
+  if (!(pid > 0) || !d.isAlive(pid)) return null;
+  const want = basename(cfg.agent_cmd ?? cfg.agent);
+  const cmd = d.procCommand(pid);
+  return cmd && cmd.split(/\s+/).some((tok) => basename(tok) === want) ? pid : null;
+}
+
+// Kill a verified leftover agent's process group (never a bare pid), then forget the agent pid file.
+function killLeftoverAgent(home, cfg, d, log) {
+  const pid = leftoverAgent(home, cfg, d);
+  if (pid) {
+    try { d.kill(-pid, 'SIGKILL'); log(`killed the agent left running (process group ${pid})`); } catch { /* gone */ }
+  }
+  rmSync(join(home, 'run', 'agent.pid'), { force: true });
+}
+
+const sleepSync = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+const readText = (file) => { try { return readFileSync(file, 'utf8'); } catch (e) { if (e.code === 'ENOENT') return null; throw e; } };
+
+const LOCK_TRIES = 100;
+const LOCK_WAIT_MS = 20;
+const MARKER_ABANDONED_MS = 10_000; // a takeover takes milliseconds; an older marker is from a start that died
+
+function clearAbandonedMarker(marker) {
+  try {
+    if (Date.now() - statSync(marker).mtimeMs > MARKER_ABANDONED_MS) rmSync(marker, { force: true });
+  } catch { /* gone */ }
+}
+
+// The pid file is the run lock: created exclusively, so two starts can never both pass the check. A stale
+// lock is taken over atomically (Ruling P2-17) under an exclusive takeover marker. An empty file is a lock
+// being written, never stale. A detached worker takes over the lock its parent took for it.
+// -> { stalePid } (the pid a stale lock named, 0 when it named none; null when there was none)
+export function lockRun(home, id, d) {
   const file = join(home, 'worker.pid');
   const handedOver = d.env[DETACHED] === '1' ? [d.pid, Number(d.env[PARENT_PID]) || 0] : [];
   let stalePid = null;
-  for (let attempt = 0; attempt < 3; attempt++) {
+  for (let attempt = 0; attempt < LOCK_TRIES; attempt++) {
     try {
       writeFileSync(file, `${d.pid}\n`, { flag: 'wx' });
       return { stalePid };
     } catch (e) {
       if (e.code !== 'EEXIST') throw e;
     }
-    const pid = readPid(home);
+    const text = readText(file);
+    if (text === null) continue; // released or taken over meanwhile
+    if (text.trim() === '') { sleepSync(LOCK_WAIT_MS); continue; } // another start is writing its pid
+    const n = Number.parseInt(text.trim(), 10);
+    const pid = n > 0 ? n : null;
     if (pid && handedOver.includes(pid)) { writePid(home, d.pid); return { stalePid }; }
-    if (isWorker(pid, id, d)) throw new Refusal(`worker ${id} is already running, pid ${pid}`);
-    stalePid ??= pid ?? 0;
-    rmSync(file, { force: true });
+    const st = workerStatus(pid, id, d);
+    if (st === 'ours') throw new Refusal(`worker ${id} is already running, pid ${pid}`);
+    if (st === 'unknown') throw cannotTell(id, pid, home);
+    // Take over the stale lock: only the holder of its takeover marker may remove it, and only while the
+    // lock still holds the content judged stale. No one else ever removes a lock, so a fresh one is safe.
+    const marker = `${file}.takeover-${pid ?? 'none'}`;
+    try {
+      writeFileSync(marker, `${d.pid}\n`, { flag: 'wx' });
+    } catch (e) {
+      if (e.code !== 'EEXIST') throw e;
+      clearAbandonedMarker(marker);
+      sleepSync(LOCK_WAIT_MS); // another start is taking it over
+      continue;
+    }
+    try {
+      if (readText(file) === text) {
+        rmSync(file, { force: true });
+        stalePid ??= pid ?? 0;
+      }
+    } finally {
+      rmSync(marker, { force: true });
+    }
   }
   throw new Refusal(`worker ${id} is being started by another process`);
 }
@@ -292,8 +361,8 @@ async function reportCrash(ctx, why) {
 
 // ---- process control ------------------------------------------------------------------------------
 
-// SIGKILL a process group (a detached worker and every agent lead their own), or the process alone when
-// it leads none (a worker started in a terminal).
+// SIGKILL the worker's process group (a detached worker leads its own), or the worker alone when it leads
+// none (a worker started in a terminal). Only for a pid verified as this worker.
 function killGroup(pid, d) {
   try { d.kill(-pid, 'SIGKILL'); } catch {
     try { d.kill(pid, 'SIGKILL'); } catch { /* gone */ }
@@ -313,9 +382,7 @@ async function endProcess(home, pid, d) {
   }
   if (!d.isAlive(pid)) return false;
   killGroup(pid, d);
-  const agentPidFile = join(home, 'run', 'agent.pid');
-  const agent = existsSync(agentPidFile) ? Number.parseInt(readFileSync(agentPidFile, 'utf8'), 10) : null;
-  if (agent > 0) { killGroup(agent, d); rmSync(agentPidFile, { force: true }); }
+  killLeftoverAgent(home, readConfig(home), d, () => {});
   for (let i = 0; i < 40 && d.isAlive(pid); i++) await d.wait(STOP_POLL_MS);
   if (d.isAlive(pid)) {
     throw new Refusal(`worker pid ${pid} is still alive after SIGKILL; nothing was released (run stop again once it is gone)`);
@@ -405,6 +472,8 @@ async function cmdRun({ flags, positional: [id] }, d, { once }) {
   let ctx;
   try {
     ctx = context(home, d, ac.signal);
+    // A previous run's agent pid file: kill that agent if it still runs (verified), then forget it.
+    killLeftoverAgent(home, ctx.cfg, d, ctx.deps.log);
     refresh(ctx);
     const pf = onMain(ctx.clone, (board) => preflight({ home, cfg: ctx.cfg, root: board, gh: { authOk: () => true }, which: () => true }));
     // only fatal problems are checked here; the loop's own preflight handles the rest
@@ -499,8 +568,9 @@ function localIds(d) {
 function describe(id, d) {
   const home = workerHome(id, d.env);
   const cfg = readConfig(home);
-  const pid = runningPid(home, id, d);
-  const running = !!pid;
+  let pid = null;
+  let running;
+  try { pid = runningPid(home, id, d); running = !!pid; } catch { running = 'unknown'; }
   const clone = join(home, 'meta');
   let board = { state: 'unknown', effort: null, lastSeen: null };
   try { fetchMain(clone); } catch (e) { d.err(`warning: ${id}: could not refresh from origin/main: ${firstLine(e)}\n`); }
@@ -529,7 +599,7 @@ function render(rows, json, d) {
   if (json) { d.out(`${JSON.stringify(rows)}\n`); return; }
   const ts = (v) => (v ? new Date(v).toISOString().slice(0, 16).replace('T', ' ') : '-');
   d.out(`${table(['id', 'name', 'model', 'local', 'state', 'effort', 'last seen'], rows.map((w) => [
-    w.id, w.name, `${w.agent}/${w.model}`, w.running ? `running (pid ${w.pid})` : 'stopped', w.state, w.effort ?? '-', ts(w.lastSeen),
+    w.id, w.name, `${w.agent}/${w.model}`, w.running === 'unknown' ? 'unknown (ps failed)' : w.running ? `running (pid ${w.pid})` : 'stopped', w.state, w.effort ?? '-', ts(w.lastSeen),
   ]))}\n`);
 }
 

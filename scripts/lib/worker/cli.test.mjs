@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join, dirname, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parse } from 'yaml';
@@ -15,6 +15,7 @@ import { runWorker } from './cli.mjs';
 const HERE = dirname(fileURLToPath(import.meta.url));
 const FAKE = join(HERE, 'fixtures', 'fake-agent.mjs');
 const HARNESS = join(HERE, 'fixtures', 'worker-main.mjs');
+const LOCK_RACE = join(HERE, 'fixtures', 'lock-race.mjs');
 const ID = 'alice-aaaaaa';
 const T0 = new Date('2026-06-01T10:00:00Z');
 const OWNER = { name: 'Alice Owner', email: 'alice@users.noreply.github.com' };
@@ -314,17 +315,19 @@ test('two starts at once: exactly one runs, the other refuses', { timeout: 30000
   }
 });
 
-// A worker (pid 4242) that ignores SIGTERM, with its agent (pid 4343) still running; signals are recorded.
-function hungWorker(t, { diesOnKill = true } = {}) {
+// A worker (pid 4242) that ignores SIGTERM, and pid 4343 named by run/agent.pid: its agent (`agentCmd`) still
+// running, or some other process. Signals are recorded.
+function hungWorker(t, { diesOnKill = true, agentCmd = 'node /usr/local/bin/claude -p go --model opus' } = {}) {
   writePid(t.home, 4242);
   t.asWorker(4242);
+  t.cmds.set(4343, agentCmd);
   mkdirSync(join(t.home, 'run'), { recursive: true });
   writeFileSync(join(t.home, 'run', 'agent.pid'), '4343\n');
   const h = { kills: [], alive: true };
   h.deps = {
     stopTimeoutMs: 1000,
     wait: async () => {},
-    isAlive: (pid) => pid === 4242 && h.alive,
+    isAlive: (pid) => (pid === 4242 && h.alive) || pid === 4343,
     kill: (pid, sig) => { h.kills.push([pid, sig]); if (pid === -4242 && sig === 'SIGKILL' && diesOnKill) h.alive = false; },
   };
   return h;
@@ -364,4 +367,62 @@ test('stop: when the release after a kill fails, clean_stop stays false (Ruling 
   assert.equal(r.code, 0, r.err);
   assert.equal(fmOnMain(t.b, 'alpha').claimed_by, ID);
   assert.equal(readState(t.home).clean_stop, false);
+});
+
+test('stop: an agent pid file naming some other process is never signalled (S5)', async () => {
+  const t = setup();
+  const h = hungWorker(t, { agentCmd: 'vim notes.txt' });
+  const r = await cli(t, ['stop', ID], h.deps);
+  assert.equal(r.code, 0, r.err);
+  assert.deepEqual(h.kills, [[4242, 'SIGTERM'], [-4242, 'SIGKILL']]);
+  assert.equal(existsSync(join(t.home, 'run', 'agent.pid')), false);
+});
+
+test('start forgets a leftover agent pid file, killing only a verified agent group', async () => {
+  for (const [cmd, expected] of [['vim notes.txt', []], ['node /usr/local/bin/claude -p go', [[-4343, 'SIGKILL']]]]) {
+    const t = setup();
+    t.cmds.set(4343, cmd);
+    mkdirSync(join(t.home, 'run'), { recursive: true });
+    writeFileSync(join(t.home, 'run', 'agent.pid'), '4343\n');
+    const kills = [];
+    const r = await cli(t, ['start', ID], { kill: (pid, sig) => kills.push([pid, sig]), isAlive: (pid) => pid === 4343 });
+    assert.equal(r.code, 0, r.err);
+    assert.deepEqual(kills, expected, cmd);
+    assert.equal(existsSync(join(t.home, 'run', 'agent.pid')), false);
+  }
+});
+
+test('when ps cannot tell whether the pid file names this worker, start and stop refuse and touch nothing', async () => {
+  const t = setup();
+  writePid(t.home, process.pid);
+  const kills = [];
+  const over = { procCommand: () => undefined, kill: (pid, sig) => kills.push([pid, sig]) };
+  for (const cmd of ['start', 'stop']) {
+    const r = await cli(t, [cmd, ID], over);
+    assert.equal(r.code, 1, cmd);
+    assert.match(r.err, new RegExp(`cannot tell whether pid ${process.pid} is worker ${ID} \\(ps failed\\)`));
+  }
+  assert.deepEqual(kills, []);
+  assert.equal(readPid(t.home), process.pid);
+  assert.equal(tip(t.b), t.seed);
+  assert.equal(JSON.parse((await cli(t, ['list', '--json'], over)).out)[0].running, 'unknown');
+});
+
+test('concurrent starts over a stale pid file: exactly one takes the lock, every round', { timeout: 60000 }, async () => {
+  const t = setup();
+  const dead = spawnSync(process.execPath, ['-e', '0']).pid;
+  for (let round = 0; round < 5; round++) {
+    writePid(t.home, dead);
+    const startAt = Date.now() + 500;
+    const runs = Array.from({ length: 6 }, () => new Promise((res) => {
+      const c = spawn(process.execPath, [LOCK_RACE, 'worker', 'start', ID, t.home, String(startAt), '700'], { stdio: ['ignore', 'pipe', 'inherit'] });
+      let out = '';
+      c.stdout.on('data', (x) => { out += x; });
+      c.on('exit', () => res(out.trim()));
+    }));
+    const outs = await Promise.all(runs);
+    assert.equal(outs.filter((o) => o === 'WIN').length, 1, outs.join('\n'));
+    for (const o of outs.filter((x) => x !== 'WIN')) assert.match(o, /^REFUSE worker alice-aaaaaa is (already running|being started)/);
+    assert.deepEqual(readdirSync(t.home).filter((n) => n.includes('.takeover-')), []);
+  }
 });
