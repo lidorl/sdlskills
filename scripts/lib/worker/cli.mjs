@@ -3,7 +3,8 @@
 // the protocol writes for the lifecycle events. Exit codes: 0 ok, 1 refusal or failure, 2 usage.
 import { spawn as realSpawn, execFileSync } from 'node:child_process';
 import {
-  appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync,
+  appendFileSync, closeSync, existsSync, linkSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, statSync,
+  writeFileSync,
 } from 'node:fs';
 import { hostname } from 'node:os';
 import { basename, join } from 'node:path';
@@ -190,22 +191,40 @@ const readText = (file) => { try { return readFileSync(file, 'utf8'); } catch (e
 
 const LOCK_TRIES = 100;
 const LOCK_WAIT_MS = 20;
-const MARKER_ABANDONED_MS = 10_000; // a takeover takes milliseconds; an older marker is from a start that died
+// Writing a pid or taking over a lock takes milliseconds: an empty lock or a marker older than this was left
+// by a start that died (Ruling P2-18).
+const ABANDONED_MS = 10_000;
 
-function clearAbandonedMarker(marker) {
+const ageMs = (file) => { try { return Date.now() - statSync(file).mtimeMs; } catch { return null; } };
+
+// An abandoned takeover marker is renamed aside first, so only the start whose rename succeeded removes it.
+// If what it renamed turns out fresh (another start's marker, created after the age check), it goes back.
+// When the lock no longer holds `staleText`, that other takeover is done (it removes the lock before its
+// marker), so a marker put back after it finished is removed again: no one can need it any more.
+function clearAbandonedMarker(marker, file, staleText, d) {
+  if (!(ageMs(marker) > ABANDONED_MS)) return;
+  const aside = `${marker}.abandoned-${d.pid}-${Date.now()}`;
+  try { renameSync(marker, aside); } catch { return; } // another start cleared it
   try {
-    if (Date.now() - statSync(marker).mtimeMs > MARKER_ABANDONED_MS) rmSync(marker, { force: true });
-  } catch { /* gone */ }
+    if (!(ageMs(aside) > ABANDONED_MS)) {
+      try { linkSync(aside, marker); } catch { return; } // a newer marker took its place
+      if (readText(file) !== staleText) rmSync(marker, { force: true });
+    }
+  } finally {
+    rmSync(aside, { force: true });
+  }
 }
 
 // The pid file is the run lock: created exclusively, so two starts can never both pass the check. A stale
 // lock is taken over atomically (Ruling P2-17) under an exclusive takeover marker. An empty file is a lock
-// being written, never stale. A detached worker takes over the lock its parent took for it.
+// being written; once it is older than ABANDONED_MS it is stale too (Ruling P2-18). A detached worker takes
+// over the lock its parent took for it.
 // -> { stalePid } (the pid a stale lock named, 0 when it named none; null when there was none)
 export function lockRun(home, id, d) {
   const file = join(home, 'worker.pid');
   const handedOver = d.env[DETACHED] === '1' ? [d.pid, Number(d.env[PARENT_PID]) || 0] : [];
   let stalePid = null;
+  let emptySeen = false;
   for (let attempt = 0; attempt < LOCK_TRIES; attempt++) {
     try {
       writeFileSync(file, `${d.pid}\n`, { flag: 'wx' });
@@ -215,21 +234,25 @@ export function lockRun(home, id, d) {
     }
     const text = readText(file);
     if (text === null) continue; // released or taken over meanwhile
-    if (text.trim() === '') { sleepSync(LOCK_WAIT_MS); continue; } // another start is writing its pid
+    const empty = text.trim() === '';
+    emptySeen = empty;
+    if (empty && !(ageMs(file) > ABANDONED_MS)) { sleepSync(LOCK_WAIT_MS); continue; } // a start is writing its pid
     const n = Number.parseInt(text.trim(), 10);
     const pid = n > 0 ? n : null;
-    if (pid && handedOver.includes(pid)) { writePid(home, d.pid); return { stalePid }; }
-    const st = workerStatus(pid, id, d);
-    if (st === 'ours') throw new Refusal(`worker ${id} is already running, pid ${pid}`);
-    if (st === 'unknown') throw cannotTell(id, pid, home);
+    if (!empty) {
+      if (pid && handedOver.includes(pid)) { writePid(home, d.pid); return { stalePid }; }
+      const st = workerStatus(pid, id, d);
+      if (st === 'ours') throw new Refusal(`worker ${id} is already running, pid ${pid}`);
+      if (st === 'unknown') throw cannotTell(id, pid, home);
+    }
     // Take over the stale lock: only the holder of its takeover marker may remove it, and only while the
     // lock still holds the content judged stale. No one else ever removes a lock, so a fresh one is safe.
-    const marker = `${file}.takeover-${pid ?? 'none'}`;
+    const marker = `${file}.takeover-${empty ? 'empty' : pid ?? 'none'}`;
     try {
       writeFileSync(marker, `${d.pid}\n`, { flag: 'wx' });
     } catch (e) {
       if (e.code !== 'EEXIST') throw e;
-      clearAbandonedMarker(marker);
+      clearAbandonedMarker(marker, file, text, d);
       sleepSync(LOCK_WAIT_MS); // another start is taking it over
       continue;
     }
@@ -242,7 +265,9 @@ export function lockRun(home, id, d) {
       rmSync(marker, { force: true });
     }
   }
-  throw new Refusal(`worker ${id} is being started by another process`);
+  throw new Refusal(emptySeen
+    ? `worker ${id} cannot start: ${file} is empty or still being written; if no start is running, remove it`
+    : `worker ${id} is being started by another process (${file} stays locked); if no start is running, remove it and any ${file}.takeover-* files`);
 }
 
 function requireHome(id, d) {

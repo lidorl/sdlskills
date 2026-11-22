@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, utimesSync, writeFileSync } from 'node:fs';
 import { join, dirname, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parse } from 'yaml';
@@ -408,11 +408,16 @@ test('when ps cannot tell whether the pid file names this worker, start and stop
   assert.equal(JSON.parse((await cli(t, ['list', '--json'], over)).out)[0].running, 'unknown');
 });
 
-test('concurrent starts over a stale pid file: exactly one takes the lock, every round', { timeout: 60000 }, async () => {
+test('concurrent starts over a stale pid file (with or without an abandoned marker): exactly one takes the lock, every round', { timeout: 60000 }, async () => {
   const t = setup();
   const dead = spawnSync(process.execPath, ['-e', '0']).pid;
   for (let round = 0; round < 5; round++) {
     writePid(t.home, dead);
+    if (round % 2) { // an abandoned takeover marker from a start that died mid-takeover
+      writeFileSync(join(t.home, `worker.pid.takeover-${dead}`), '1\n');
+      const old = new Date(Date.now() - 60e3);
+      utimesSync(join(t.home, `worker.pid.takeover-${dead}`), old, old);
+    }
     const startAt = Date.now() + 500;
     const runs = Array.from({ length: 6 }, () => new Promise((res) => {
       const c = spawn(process.execPath, [LOCK_RACE, 'worker', 'start', ID, t.home, String(startAt), '700'], { stdio: ['ignore', 'pipe', 'inherit'] });
@@ -425,4 +430,40 @@ test('concurrent starts over a stale pid file: exactly one takes the lock, every
     for (const o of outs.filter((x) => x !== 'WIN')) assert.match(o, /^REFUSE worker alice-aaaaaa is (already running|being started)/);
     assert.deepEqual(readdirSync(t.home).filter((n) => n.includes('.takeover-')), []);
   }
+});
+
+const aged = (file, s = 60) => { const t = new Date(Date.now() - s * 1000); utimesSync(file, t, t); };
+
+test('an empty pid file older than 10 s is abandoned: start takes it over (Ruling P2-18)', async () => {
+  const t = setup();
+  const lock = join(t.home, 'worker.pid');
+  writeFileSync(lock, '');
+  aged(lock);
+  const r = await cli(t, ['start', ID]);
+  assert.equal(r.code, 0, r.err);
+  assert.deepEqual(eventsSince(t.b, t.seed), ['crash', 'request', 'start', 'stop']);
+  assert.equal(existsSync(lock), false);
+});
+
+test('a fresh empty pid file with no writer: start refuses naming the file and the remedy', async () => {
+  const t = setup();
+  const lock = join(t.home, 'worker.pid');
+  writeFileSync(lock, '');
+  const r = await cli(t, ['start', ID]);
+  assert.equal(r.code, 1);
+  assert.ok(r.err.includes(`${lock} is empty or still being written; if no start is running, remove it`), r.err);
+  assert.equal(tip(t.b), t.seed);
+  assert.equal(readFileSync(lock, 'utf8'), '');
+});
+
+test('an abandoned takeover marker is cleared and the stale lock taken over; no marker is left', async () => {
+  const t = setup();
+  const dead = spawnSync(process.execPath, ['-e', '0']).pid;
+  writePid(t.home, dead);
+  const marker = join(t.home, `worker.pid.takeover-${dead}`);
+  writeFileSync(marker, '1\n');
+  aged(marker);
+  const r = await cli(t, ['start', ID]);
+  assert.equal(r.code, 0, r.err);
+  assert.deepEqual(readdirSync(t.home).filter((n) => n.includes('.takeover-')), []);
 });
