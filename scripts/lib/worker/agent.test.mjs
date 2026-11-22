@@ -189,15 +189,17 @@ test('runAgent records the agent pid while it runs and does not pass the detache
   const seen = join(dir, 'seen-pid');
   process.env.SDLC_WORKER_DETACHED = '1';
   process.env.SDLC_WORKER_PARENT_PID = '123';
+  process.env.SDLC_WORKER_LOCK_TOKENS = 'aaa bbb';
   try {
     const r = await fakeRun(dir, {
-      exec: [['.', 'sh', '-c', `cat "$1" > "$2"; echo "[$SDLC_WORKER_DETACHED$SDLC_WORKER_PARENT_PID]" > env.txt`, 'sh', pidFile, seen]],
+      exec: [['.', 'sh', '-c', `cat "$1" > "$2"; echo "[$SDLC_WORKER_DETACHED$SDLC_WORKER_PARENT_PID$SDLC_WORKER_LOCK_TOKENS]" > env.txt`, 'sh', pidFile, seen]],
       pidFile: join(dir, 'own.pid'),
     }, { pidFile });
     assert.equal(r.exitCode, 0);
   } finally {
     delete process.env.SDLC_WORKER_DETACHED;
     delete process.env.SDLC_WORKER_PARENT_PID;
+    delete process.env.SDLC_WORKER_LOCK_TOKENS;
   }
   assert.equal(readFileSync(seen, 'utf8').trim(), readFileSync(join(dir, 'own.pid'), 'utf8').trim());
   assert.equal(existsSync(pidFile), false);

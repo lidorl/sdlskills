@@ -10,7 +10,8 @@ import { workerYaml } from '../board/registry.mjs';
 import { parseDoc } from '../board/frontmatter.mjs';
 import { runAgent } from './agent.mjs';
 import { workerHome, writeConfig, readConfig, readState, writePid, readPid, clearPid, isAlive } from './home.mjs';
-import { runWorker } from './cli.mjs';
+import { runWorker, lockRun } from './cli.mjs';
+import { markerFor, readLock } from './run-lock.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const FAKE = join(HERE, 'fixtures', 'fake-agent.mjs');
@@ -414,9 +415,10 @@ test('concurrent starts over a stale pid file (with or without an abandoned mark
   for (let round = 0; round < 5; round++) {
     writePid(t.home, dead);
     if (round % 2) { // an abandoned takeover marker from a start that died mid-takeover
-      writeFileSync(join(t.home, `worker.pid.takeover-${dead}`), '1\n');
+      const marker = markerFor(join(t.home, 'worker.pid'), readLock(join(t.home, 'worker.pid')));
+      writeFileSync(marker, '1\n');
       const old = new Date(Date.now() - 60e3);
-      utimesSync(join(t.home, `worker.pid.takeover-${dead}`), old, old);
+      utimesSync(marker, old, old);
     }
     const startAt = Date.now() + 500;
     const runs = Array.from({ length: 6 }, () => new Promise((res) => {
@@ -426,9 +428,10 @@ test('concurrent starts over a stale pid file (with or without an abandoned mark
       c.on('exit', () => res(out.trim()));
     }));
     const outs = await Promise.all(runs);
-    assert.equal(outs.filter((o) => o === 'WIN').length, 1, outs.join('\n'));
-    for (const o of outs.filter((x) => x !== 'WIN')) assert.match(o, /^REFUSE worker alice-aaaaaa is (already running|being started)/);
-    assert.deepEqual(readdirSync(t.home).filter((n) => n.includes('.takeover-')), []);
+    // exactly one winner, and it is the start that replaced the stale lock (so it reports the crash)
+    assert.deepEqual(outs.filter((o) => o.startsWith('WIN')), [`WIN ${dead}`], outs.join('\n'));
+    for (const o of outs.filter((x) => !x.startsWith('WIN'))) assert.match(o, /^REFUSE worker alice-aaaaaa is (already running|being started)/);
+    assert.deepEqual(readdirSync(t.home).filter((n) => n.includes('.takeover-') || n.includes('.tmp-')), []);
   }
 });
 
@@ -460,10 +463,85 @@ test('an abandoned takeover marker is cleared and the stale lock taken over; no 
   const t = setup();
   const dead = spawnSync(process.execPath, ['-e', '0']).pid;
   writePid(t.home, dead);
-  const marker = join(t.home, `worker.pid.takeover-${dead}`);
+  const marker = markerFor(join(t.home, 'worker.pid'), readLock(join(t.home, 'worker.pid')));
   writeFileSync(marker, '1\n');
   aged(marker);
   const r = await cli(t, ['start', ID]);
   assert.equal(r.code, 0, r.err);
   assert.deepEqual(readdirSync(t.home).filter((n) => n.includes('.takeover-')), []);
+});
+
+// In-process contenders for the run lock, with injected stalls (lockHooks). `alive` lists the pids that are
+// this worker running; any other pid is dead.
+function contender(t, pid, { alive = [], hooks, env = {} } = {}) {
+  return () => lockRun(t.home, ID, {
+    env, pid, lockHooks: hooks,
+    isAlive: (p) => alive.includes(p),
+    procCommand: (p) => (alive.includes(p) ? `node /x/scripts/sdlc.mjs worker start ${ID}` : null),
+  });
+}
+const LOCK_TEXT = (pid) => new RegExp(`^${pid} [0-9a-z]{12}\\n$`);
+
+test('the run lock is never empty: it holds "<pid> <token>" from the moment it exists (Ruling P2-19)', () => {
+  const t = setup();
+  const lock = join(t.home, 'worker.pid');
+  const seen = [];
+  const r = contender(t, 5001, { hooks: { afterCreate: () => seen.push(readFileSync(lock, 'utf8')) } })();
+  assert.equal(seen.length, 1);
+  assert.match(seen[0], LOCK_TEXT(5001));
+  assert.equal(r.lock, seen[0]);
+  assert.equal(r.stalePid, null);
+  assert.deepEqual(readdirSync(t.home).filter((n) => n.startsWith('worker.pid.')), []); // no temp file left
+});
+
+test('two starts over an old empty lock: the one that judged it abandoned never removes the new lock', () => {
+  const t = setup();
+  const lock = join(t.home, 'worker.pid');
+  writeFileSync(lock, '');
+  aged(lock);
+  let b;
+  // A judges the empty lock abandoned; before it takes the marker, B takes the lock over and holds it.
+  const a = contender(t, 5001, { alive: [5002], hooks: { beforeMarker: () => { b ??= contender(t, 5002)(); } } });
+  assert.throws(a, /worker alice-aaaaaa is already running, pid 5002/);
+  assert.equal(b.stalePid, 0);
+  assert.equal(readFileSync(lock, 'utf8'), b.lock);
+  assert.match(b.lock, LOCK_TEXT(5002));
+  assert.deepEqual(readdirSync(t.home).filter((n) => n.startsWith('worker.pid.')), []);
+});
+
+test('a start whose lock is taken over before its self-check refuses and removes nothing', () => {
+  const t = setup();
+  const lock = join(t.home, 'worker.pid');
+  let b;
+  // A stalls right after creating the lock; B finds A's pid dead and takes the lock over.
+  const a = contender(t, 5001, { hooks: { afterCreate: () => { b ??= contender(t, 5002)(); } } });
+  assert.throws(a, (e) => e.message === `worker ${ID} lost its run lock: ${lock} now names pid 5002 (another start took it over); not starting`);
+  assert.equal(b.stalePid, 5001);
+  assert.equal(readFileSync(lock, 'utf8'), b.lock);
+});
+
+test('a malformed lock: refused while fresh, taken over once older than 10 s', () => {
+  const t = setup();
+  const lock = join(t.home, 'worker.pid');
+  writeFileSync(lock, 'garbage\n');
+  assert.throws(contender(t, 5001), (e) => e.message === `worker ${ID} cannot start: ${lock} does not name a pid; if no start is running, remove it`);
+  assert.equal(readFileSync(lock, 'utf8'), 'garbage\n');
+  aged(lock);
+  const r = contender(t, 5001)();
+  assert.equal(r.stalePid, 0);
+  assert.equal(readFileSync(lock, 'utf8'), r.lock);
+});
+
+test('a detached child takes over only the exact lock its parent took for it', () => {
+  const t = setup();
+  const lock = join(t.home, 'worker.pid');
+  const env = { SDLC_WORKER_DETACHED: '1', SDLC_WORKER_PARENT_PID: '5001', SDLC_WORKER_LOCK_TOKENS: 'parent000001 child0000001' };
+  writeFileSync(lock, '5001 parent000001\n');
+  const r = contender(t, 5002, { alive: [5001], env })();
+  assert.equal(r.lock, '5002 child0000001\n');
+  assert.equal(readFileSync(lock, 'utf8'), r.lock);
+  // the parent's pid, but not its lock (another start of the same pid): the child refuses
+  writeFileSync(lock, '5001 other0000001\n');
+  assert.throws(contender(t, 5002, { alive: [5001], env }), /already running, pid 5001/);
+  assert.equal(readFileSync(lock, 'utf8'), '5001 other0000001\n');
 });

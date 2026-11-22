@@ -67,7 +67,7 @@ export function agentCommand(cfg, prompt, home) {
 }
 
 // Set by `sdlc worker start --detach` for the worker process itself (see worker/cli.mjs).
-export const WORKER_PROCESS_VARS = ['SDLC_WORKER_DETACHED', 'SDLC_WORKER_PARENT_PID'];
+export const WORKER_PROCESS_VARS = ['SDLC_WORKER_DETACHED', 'SDLC_WORKER_PARENT_PID', 'SDLC_WORKER_LOCK_TOKENS'];
 
 const lastLines = (text, n) => text.split('\n').filter((l, i, a) => l !== '' || i < a.length - 1).slice(-n).join('\n');
 

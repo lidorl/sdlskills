@@ -3,8 +3,7 @@
 // the protocol writes for the lifecycle events. Exit codes: 0 ok, 1 refusal or failure, 2 usage.
 import { spawn as realSpawn, execFileSync } from 'node:child_process';
 import {
-  appendFileSync, closeSync, existsSync, linkSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, statSync,
-  writeFileSync,
+  appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, rmSync,
 } from 'node:fs';
 import { hostname } from 'node:os';
 import { basename, join } from 'node:path';
@@ -21,7 +20,7 @@ import { WORKER_ID_RE } from '../board/safe-path.mjs';
 import { isProtected } from '../../clean-env.mjs';
 import { resolveRepoKeys } from '../../assemble-env.mjs';
 import {
-  sdlcHome, workerHome, readConfig, writeConfig, readState, writeState, readPid, writePid, clearPid, isAlive,
+  sdlcHome, workerHome, readConfig, writeConfig, readState, writeState, readPid, clearPid, isAlive,
 } from './home.mjs';
 import { preflight } from './preflight.mjs';
 import { makeContext, step, WorkerFatal } from './loop.mjs';
@@ -29,6 +28,9 @@ import { WORKER_PROCESS_VARS } from './agent.mjs';
 import { letGo } from './outcomes.mjs';
 import { pushCodeBranches } from './code-repos.mjs';
 import { createWorker, CreateError } from './create.mjs';
+import {
+  ABANDONED_MS, newToken, lockContent, lockPid, readLock, createLock, replaceLock, takeOver, clearOldMarkers,
+} from './run-lock.mjs';
 
 class UsageError extends Error {}
 class Refusal extends Error {}
@@ -36,7 +38,7 @@ class Refusal extends Error {}
 const STOP_TIMEOUT_MS = 60_000;
 const STOP_POLL_MS = 250;
 const DEFAULT_IDLE_MS = 60_000;
-const [DETACHED, PARENT_PID] = WORKER_PROCESS_VARS;
+const [DETACHED, PARENT_PID, LOCK_TOKENS] = WORKER_PROCESS_VARS;
 
 const iso = (d) => d.toISOString().replace(/\.\d{3}Z$/, 'Z');
 const firstLine = (e) => String(e?.message ?? e).split('\n')[0];
@@ -187,87 +189,78 @@ function killLeftoverAgent(home, cfg, d, log) {
 }
 
 const sleepSync = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
-const readText = (file) => { try { return readFileSync(file, 'utf8'); } catch (e) { if (e.code === 'ENOENT') return null; throw e; } };
 
 const LOCK_TRIES = 100;
 const LOCK_WAIT_MS = 20;
-// Writing a pid or taking over a lock takes milliseconds: an empty lock or a marker older than this was left
-// by a start that died (Ruling P2-18).
-const ABANDONED_MS = 10_000;
 
-const ageMs = (file) => { try { return Date.now() - statSync(file).mtimeMs; } catch { return null; } };
-
-// An abandoned takeover marker is renamed aside first, so only the start whose rename succeeded removes it.
-// If what it renamed turns out fresh (another start's marker, created after the age check), it goes back.
-// When the lock no longer holds `staleText`, that other takeover is done (it removes the lock before its
-// marker), so a marker put back after it finished is removed again: no one can need it any more.
-function clearAbandonedMarker(marker, file, staleText, d) {
-  if (!(ageMs(marker) > ABANDONED_MS)) return;
-  const aside = `${marker}.abandoned-${d.pid}-${Date.now()}`;
-  try { renameSync(marker, aside); } catch { return; } // another start cleared it
-  try {
-    if (!(ageMs(aside) > ABANDONED_MS)) {
-      try { linkSync(aside, marker); } catch { return; } // a newer marker took its place
-      if (readText(file) !== staleText) rmSync(marker, { force: true });
-    }
-  } finally {
-    rmSync(aside, { force: true });
-  }
+// The lock's content for the detached child and its parent, from the tokens the parent passed on.
+function handoverContents(d) {
+  const [parentToken, childToken] = String(d.env[LOCK_TOKENS] ?? '').split(' ');
+  const parentPid = Number(d.env[PARENT_PID]) || 0;
+  if (!parentToken || !childToken || !parentPid) return null;
+  return { parent: lockContent(parentPid, parentToken), mine: lockContent(d.pid, childToken) };
 }
 
-// The pid file is the run lock: created exclusively, so two starts can never both pass the check. A stale
-// lock is taken over atomically (Ruling P2-17) under an exclusive takeover marker. An empty file is a lock
-// being written; once it is older than ABANDONED_MS it is stale too (Ruling P2-18). A detached worker takes
-// over the lock its parent took for it.
-// -> { stalePid } (the pid a stale lock named, 0 when it named none; null when there was none)
+const lockFile = (home) => join(home, 'worker.pid');
+const holds = (home, lock) => readLock(lockFile(home))?.text === lock;
+
+// Refuses unless the run lock still holds `lock`: a start acts as the worker only while it holds it.
+function assertHolds(home, id, lock) {
+  const now = readLock(lockFile(home));
+  if (now?.text === lock) return;
+  const pid = now && lockPid(now.text);
+  throw new Refusal(`worker ${id} lost its run lock: ${lockFile(home)} ${now ? `now names ${pid ? `pid ${pid}` : 'no pid'}` : 'is gone'}`
+    + ' (another start took it over); not starting');
+}
+
+// The run lock is worker.pid, created whole with "<pid> <token>\n" (run-lock.mjs), so two starts can never
+// both hold it and it is never empty. A lock naming a pid that is not this worker running is stale and is
+// taken over under a takeover marker, only while it still holds the exact content judged stale (Rulings
+// P2-17, P2-19). An empty or malformed lock (legacy or corruption) is stale once older than ABANDONED_MS and
+// is taken over by its inode and mtime. After winning, the start checks it still holds the lock. A detached
+// worker takes over the lock its parent took for it.
+// -> { stalePid (the pid a stale lock named, 0 when it named none; null when there was none), lock (our content) }
 export function lockRun(home, id, d) {
-  const file = join(home, 'worker.pid');
-  const handedOver = d.env[DETACHED] === '1' ? [d.pid, Number(d.env[PARENT_PID]) || 0] : [];
+  const file = lockFile(home);
+  const hooks = d.lockHooks ?? {};
+  const handover = d.env[DETACHED] === '1' ? handoverContents(d) : null;
+  const mine = handover?.mine ?? lockContent(d.pid, newToken());
   let stalePid = null;
-  let emptySeen = false;
+  let unreadable = null; // 'empty' | 'malformed', when the last lock seen named no pid
+  const won = () => {
+    hooks.afterCreate?.();
+    assertHolds(home, id, mine);
+    clearOldMarkers(file, { text: mine });
+    return { stalePid, lock: mine };
+  };
   for (let attempt = 0; attempt < LOCK_TRIES; attempt++) {
-    try {
-      writeFileSync(file, `${d.pid}\n`, { flag: 'wx' });
-      return { stalePid };
-    } catch (e) {
-      if (e.code !== 'EEXIST') throw e;
+    if (createLock(file, mine, d.pid)) return won();
+    const seen = readLock(file);
+    if (!seen) continue; // released meanwhile
+    if (handover && (seen.text === handover.parent || seen.text === mine)) {
+      if (seen.text === handover.parent) replaceLock(file, mine, d.pid);
+      return won();
     }
-    const text = readText(file);
-    if (text === null) continue; // released or taken over meanwhile
-    const empty = text.trim() === '';
-    emptySeen = empty;
-    if (empty && !(ageMs(file) > ABANDONED_MS)) { sleepSync(LOCK_WAIT_MS); continue; } // a start is writing its pid
-    const n = Number.parseInt(text.trim(), 10);
-    const pid = n > 0 ? n : null;
-    if (!empty) {
-      if (pid && handedOver.includes(pid)) { writePid(home, d.pid); return { stalePid }; }
+    const pid = lockPid(seen.text);
+    unreadable = pid ? null : seen.text.trim() === '' ? 'empty' : 'malformed';
+    if (pid) {
       const st = workerStatus(pid, id, d);
       if (st === 'ours') throw new Refusal(`worker ${id} is already running, pid ${pid}`);
       if (st === 'unknown') throw cannotTell(id, pid, home);
-    }
-    // Take over the stale lock: only the holder of its takeover marker may remove it, and only while the
-    // lock still holds the content judged stale. No one else ever removes a lock, so a fresh one is safe.
-    const marker = `${file}.takeover-${empty ? 'empty' : pid ?? 'none'}`;
-    try {
-      writeFileSync(marker, `${d.pid}\n`, { flag: 'wx' });
-    } catch (e) {
-      if (e.code !== 'EEXIST') throw e;
-      clearAbandonedMarker(marker, file, text, d);
-      sleepSync(LOCK_WAIT_MS); // another start is taking it over
+    } else if (!(Date.now() - seen.mtimeMs > ABANDONED_MS)) {
+      sleepSync(LOCK_WAIT_MS); // a legacy start may still be writing its pid
       continue;
     }
-    try {
-      if (readText(file) === text) {
-        rmSync(file, { force: true });
-        stalePid ??= pid ?? 0;
-      }
-    } finally {
-      rmSync(marker, { force: true });
-    }
+    hooks.beforeMarker?.();
+    const r = takeOver(file, seen, d.pid, mine);
+    if (r === 'replaced') { stalePid = pid ?? 0; return won(); }
+    if (r === 'busy') sleepSync(LOCK_WAIT_MS); // another start is taking it over
   }
-  throw new Refusal(emptySeen
+  throw new Refusal(unreadable === 'empty'
     ? `worker ${id} cannot start: ${file} is empty or still being written; if no start is running, remove it`
-    : `worker ${id} is being started by another process (${file} stays locked); if no start is running, remove it and any ${file}.takeover-* files`);
+    : unreadable === 'malformed'
+      ? `worker ${id} cannot start: ${file} does not name a pid; if no start is running, remove it`
+      : `worker ${id} is being started by another process (${file} stays locked); if no start is running, remove it and any ${file}.takeover-* files`);
 }
 
 function requireHome(id, d) {
@@ -417,7 +410,7 @@ async function endProcess(home, pid, d) {
 
 // The worker was killed before its own shutdown ran: release and the stop event from <home>/meta. The stop
 // counts as clean only when both landed (Ruling P2-16); otherwise the next start reports a crash.
-async function cleanUpAfterKill(home, d) {
+async function cleanUpAfterKill(home, d, held) {
   const ctx = context(home, d);
   ctx.deps.log(`worker ${ctx.cfg.id} did not stop within ${d.stopTimeoutMs / 1000}s; killed`);
   refresh(ctx);
@@ -425,13 +418,14 @@ async function cleanUpAfterKill(home, d) {
   try { released = (await releaseHeld(ctx)).ok; } catch (e) { ctx.deps.log(`warning: could not release claims (${firstLine(e)})`); }
   const stopped = await tryEvent(ctx, 'stop', 'killed after it did not stop in time');
   writeState(home, { clean_stop: released && stopped });
-  clearPid(home);
+  if (held) takeOver(lockFile(home), held, d.pid); // the killed worker's lock, unless a new start holds it by now
 }
 
 async function stopRunning(id, home, d) {
+  const held = readLock(lockFile(home));
   const pid = runningPid(home, id, d);
   if (!pid) return false;
-  if (await endProcess(home, pid, d)) await cleanUpAfterKill(home, d);
+  if (await endProcess(home, pid, d)) await cleanUpAfterKill(home, d, held);
   return true;
 }
 
@@ -459,11 +453,15 @@ async function cmdCreate({ flags }, d) {
   }
 }
 
-// Holds the run lock (lockRun) and hands it to the child: the child takes over a lock naming it or us.
-function detach(id, home, d, stalePid) {
+// Holds the run lock (`lock`, from lockRun) and hands it to the child: the parent passes the child the tokens
+// of its own lock and of the child's, and whichever of the two gets there first replaces the parent's content
+// with the child's (the same content either way).
+function detach(id, home, d, { stalePid, lock }) {
   const logFile = join(home, 'logs', 'worker.log');
+  const childToken = newToken();
   let child;
   try {
+    assertHolds(home, id, lock);
     // A stale pid file was just replaced: keep its crash signal for the worker's own start.
     if (stalePid !== null) writeState(home, { clean_stop: false });
     const script = d.scriptPath ?? join(home, 'meta', 'scripts', 'sdlc.mjs');
@@ -473,16 +471,16 @@ function detach(id, home, d, stalePid) {
     try {
       child = d.spawn(process.execPath, [script, 'worker', 'start', id], {
         cwd: join(home, 'meta'), detached: true, stdio: ['ignore', fd, fd],
-        env: { ...d.env, [DETACHED]: '1', [PARENT_PID]: String(d.pid) },
+        env: { ...d.env, [DETACHED]: '1', [PARENT_PID]: String(d.pid), [LOCK_TOKENS]: `${lock.split(' ')[1].trim()} ${childToken}` },
       });
     } finally { closeSync(fd); }
     if (!child.pid) throw new Refusal('could not start the background worker');
   } catch (e) {
-    clearPid(home);
+    if (holds(home, lock)) clearPid(home);
     throw e;
   }
   child.unref();
-  if (readPid(home) === d.pid) writePid(home, child.pid);
+  if (holds(home, lock)) replaceLock(lockFile(home), lockContent(child.pid, childToken), d.pid);
   d.out(`worker ${id} started in the background, pid ${child.pid}; log: ${logFile}\n`);
   return 0;
 }
@@ -490,8 +488,9 @@ function detach(id, home, d, stalePid) {
 // start and once: preflight, crash detection, the start event, the loop (or one cycle), the shutdown.
 async function cmdRun({ flags, positional: [id] }, d, { once }) {
   const home = requireHome(id, d);
-  const { stalePid } = lockRun(home, id, d);
-  if (flags['--detach']) return detach(id, home, d, stalePid);
+  const won = lockRun(home, id, d);
+  const { stalePid, lock } = won;
+  if (flags['--detach']) return detach(id, home, d, won);
 
   const ac = new AbortController();
   let ctx;
@@ -503,8 +502,9 @@ async function cmdRun({ flags, positional: [id] }, d, { once }) {
     const pf = onMain(ctx.clone, (board) => preflight({ home, cfg: ctx.cfg, root: board, gh: { authOk: () => true }, which: () => true }));
     // only fatal problems are checked here; the loop's own preflight handles the rest
     if (!pf.ok) throw new Refusal(pf.problem);
+    assertHolds(home, id, lock); // the first write that assumes this start is the worker comes next
   } catch (e) {
-    clearPid(home); // a refused start leaves nothing behind
+    if (holds(home, lock)) clearPid(home); // a refused start leaves nothing behind
     throw e;
   }
   const { cfg, clone, deps } = ctx;
@@ -541,7 +541,7 @@ async function cmdRun({ flags, positional: [id] }, d, { once }) {
     }
     if (canWrite) await tryEvent(ctx, 'stop', stopping ? `stopped by ${stopping}` : undefined);
     writeState(home, { clean_stop: true });
-    if (readPid(home) === d.pid) clearPid(home);
+    if (holds(home, lock)) clearPid(home);
     deps.log(`worker ${id} stopped`);
   }
   return code;
