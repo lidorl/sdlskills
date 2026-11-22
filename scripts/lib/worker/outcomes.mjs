@@ -245,7 +245,7 @@ export async function interrupted(ctx, slug, status, keys) {
   return { action: 'interrupted', effort: slug };
 }
 
-// Push the code branches, move any leftovers aside, then release. -> the salvage dir or null
+// Push the code branches, move any leftovers aside, then release. -> { dir: the salvage dir or null, released }
 export async function letGo(ctx, slug, keys) {
   const { cfg, deps, clone, identity } = ctx;
   const code = pushCodeBranches(clone, slug, keys);
@@ -254,7 +254,7 @@ export async function letGo(ctx, slug, keys) {
   const r = await release(clone, slug, { claimant: cfg.id, identity, workerId: cfg.id, hooks: deps.hooks });
   if (!r.ok) deps.log(`could not release ${slug} (${r.reason})`);
   endHold(ctx, slug);
-  return dir;
+  return { dir, released: r.ok };
 }
 
 // A blocking effort error: code pushed, leftovers salvaged, error posted with the redacted log tail, and
@@ -303,7 +303,7 @@ export async function workerError(ctx, problem, excerpt, keys) {
   const { cfg, deps, clone, identity } = ctx;
   const held = ctx.holding?.slug;
   const notes = held ? pending(ctx, held, 'in the Decisions section; not carried to a new claim').map((p) => `${held}: ${p}`) : [];
-  const dir = held ? await letGo(ctx, held, keys ?? resolveRepoKeys(clone, held)) : null;
+  const dir = held ? (await letGo(ctx, held, keys ?? resolveRepoKeys(clone, held))).dir : null;
   if (held) clearInput(ctx.home, held);
   fetchMain(clone, identityEnv(identity));
   const snap = snapshotMain(clone);

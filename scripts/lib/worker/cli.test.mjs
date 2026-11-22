@@ -208,6 +208,44 @@ test('`once` per phase reaches close-out: development done is read from the plan
   assert.equal(fmOnMain(t.b, 'alpha').status, 'IMPLEMENTED');
 });
 
+test('shutdown: clean_stop is true only when the release and the stop event landed and this start holds the lock (M4)', async () => {
+  // the stop event fails → not clean, and the next start reports the crash
+  const t = setup();
+  let fail = false;
+  t.loop.hooks = { beforePush: () => { if (fail) throw new Error('network down'); } };
+  assert.equal((await cli(t, ['start', ID], { wait: async () => { fail = true; t.fire?.('SIGTERM'); } })).code, 0);
+  assert.equal(readState(t.home).clean_stop, false);
+  fail = false;
+  const seed = tip(t.b);
+  assert.equal((await cli(t, ['start', ID])).code, 0);
+  assert.deepEqual(eventsSince(t.b, seed), ['crash', 'request', 'start', 'stop']);
+  assert.equal(readState(t.home).clean_stop, true);
+
+  // the release of a held effort fails (the stop event lands) → not clean
+  const u = setup({ featReqs: { alpha: feat() } });
+  let failOnce = false;
+  u.loop.hooks = { beforePush: () => { if (failOnce) { failOnce = false; throw new Error('network down'); } } };
+  u.loop.runAgent = async (o) => {
+    mkdirSync(dirname(o.env.SDLC_RESULT_FILE), { recursive: true });
+    writeFileSync(o.env.SDLC_RESULT_FILE, JSON.stringify({ outcome: 'request', request: { kind: 'clarification', blocking: false, sections: { Request: 'r', Context: 'c', Assumption: 'a' } } }));
+    return { exitCode: 0, signal: null, timedOut: false, stderrTail: '' };
+  };
+  const log = u.loop.log;
+  u.loop.log = (m) => { log(m); if (/^posted clarification/.test(m)) failOnce = true; };
+  assert.equal((await cli(u, ['once', ID])).code, 0);
+  assert.ok(u.logs.some((m) => /could not release alpha/.test(m)), u.logs.join('\n'));
+  assert.equal(fmOnMain(u.b, 'alpha').claimed_by, ID, 'still claimed on main');
+  assert.equal(eventsSince(u.b, u.seed).at(-1), 'stop');
+  assert.equal(readState(u.home).clean_stop, false);
+
+  // a start that lost its lock to another start writes no state and leaves that start's lock alone
+  const v = setup();
+  const other = `${process.pid + 1} othertoken\n`;
+  assert.equal((await cli(v, ['start', ID], { wait: async () => { writeFileSync(join(v.home, 'worker.pid'), other); v.fire?.('SIGTERM'); } })).code, 0);
+  assert.equal(readState(v.home).clean_stop, false);
+  assert.equal(readFileSync(join(v.home, 'worker.pid'), 'utf8'), other);
+});
+
 test('start --detach returns immediately; process survives the parent; stop ends it and pushes stop', async () => {
   const t = setup({ config: 'idle_poll: 1s\n' });
   // The parent is its own process: it must exit while the worker keeps running.

@@ -537,13 +537,21 @@ async function cmdRun({ flags, positional: [id] }, d, { once }) {
     canWrite = onMain(clone, (board) => { const w = readWorker(board, id); return !!w && !w.retired_at; });
   } finally {
     off();
+    // The stop is clean only when the release and the stop event landed (as after a kill, Ruling P2-16), and
+    // only this start's own state is written: a start that lost its lock leaves the new holder's alone.
+    let released = true;
     if (canWrite && ctx.holding) {
       const slug = ctx.holding.slug;
-      try { await letGo(ctx, slug, resolveRepoKeys(clone, slug)); } catch (e) { deps.log(`warning: could not release ${slug} (${firstLine(e)})`); }
+      try { released = (await letGo(ctx, slug, resolveRepoKeys(clone, slug))).released; } catch (e) {
+        released = false;
+        deps.log(`warning: could not release ${slug} (${firstLine(e)})`);
+      }
     }
-    if (canWrite) await tryEvent(ctx, 'stop', stopping ? `stopped by ${stopping}` : undefined);
-    writeState(home, { clean_stop: true });
-    if (holds(home, lock)) clearPid(home);
+    const stopped = canWrite ? await tryEvent(ctx, 'stop', stopping ? `stopped by ${stopping}` : undefined) : true;
+    if (holds(home, lock)) {
+      writeState(home, { clean_stop: released && stopped });
+      clearPid(home);
+    }
     deps.log(`worker ${id} stopped`);
   }
   return code;
