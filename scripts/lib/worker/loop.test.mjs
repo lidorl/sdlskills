@@ -1011,3 +1011,48 @@ test('a report commit left by a kill before its push: the next step unwinds it a
   assert.ok(w.logs.some((l) => /unwound 1 local meta commit/.test(l)), w.logs.join('\n'));
   assert.ok(!w.logs.some((l) => /local commits ahead/.test(l)), w.logs.join('\n'));
 });
+
+// Commit `.sdlc-run` into the meta repo from a person's clone: `link` makes it a symlink to `target`.
+function plantRunDir(b, { link, file }) {
+  const p = b.clone(`plant-${Math.random().toString(36).slice(2, 8)}`);
+  if (link) execFileSync('ln', ['-s', link, join(p, '.sdlc-run')]);
+  if (file) { mkdirSync(join(p, '.sdlc-run'), { recursive: true }); writeFileSync(join(p, '.sdlc-run', file), 'x\n'); }
+  git(p, 'add', '-A');
+  git(p, 'commit', '-q', '-m', 'plant .sdlc-run');
+  git(p, 'push', '-q', 'origin', 'HEAD:main');
+}
+
+test('a committed .sdlc-run symlink: no run, nothing outside the clone touched, worker error naming the path (S6)', async () => {
+  const b = setup({ featReqs: { alpha: feat() } });
+  const outside = join(b.dir, 'outside');
+  mkdirSync(outside);
+  writeFileSync(join(outside, 'result.json'), 'precious\n');
+  plantRunDir(b, { link: outside });
+  const w = worker(b, { script: { result: completed('ACCEPTED') } });
+  assert.deepEqual(await w.step(), { action: 'needs-attention' });
+  assert.equal(w.runs.length, 0, 'the agent never ran');
+  assert.equal(readFileSync(join(outside, 'result.json'), 'utf8'), 'precious\n');
+  assert.deepEqual(readdirSync(outside), ['result.json']);
+  const err = requestsOnMain(b).map((r) => r.text).find((t) => /scope: worker/.test(t));
+  assert.match(err, /meta\/\.sdlc-run is a symlink/);
+  assert.equal(fmOnMain(b, 'alpha').claimed_by, undefined, 'released');
+});
+
+test('a tracked .sdlc-run/ in the meta repo: the run is refused with a worker error (S6)', async () => {
+  const b = setup({ featReqs: { alpha: feat() } });
+  plantRunDir(b, { file: 'x' });
+  const w = worker(b, { script: { result: completed('ACCEPTED') } });
+  assert.deepEqual(await w.step(), { action: 'needs-attention' });
+  assert.equal(w.runs.length, 0);
+  const err = requestsOnMain(b).map((r) => r.text).find((t) => /scope: worker/.test(t));
+  assert.match(err, /meta\/\.sdlc-run is tracked by the meta repo \(\.sdlc-run\/x\)/);
+});
+
+test('a result file the agent replaced with a symlink is not followed: effort error, the target is never read (S6)', async () => {
+  const b = setup({ featReqs: { alpha: feat() } });
+  const outside = join(b.dir, 'elsewhere.json');
+  writeFileSync(outside, JSON.stringify(completed('ACCEPTED')));
+  const w = worker(b, { script: { result: null, exec: [['.', 'mkdir', '-p', '.sdlc-run'], ['.', 'ln', '-s', outside, '.sdlc-run/result.json']] } });
+  assert.deepEqual(await w.step(), { action: 'failed', effort: 'alpha' });
+  assert.match(requestsOnMain(b)[0].text, /result\.json is not a regular file|result file is a symlink/);
+});

@@ -11,7 +11,8 @@ import { reportPaths } from '../board/paths.mjs';
 import { reportEffort } from '../board/report.mjs';
 import { resolveRepoKeys } from '../../assemble-env.mjs';
 import { readState, writeState } from './home.mjs';
-import { readResult, classifyFailure, resultFile } from './agent.mjs';
+import { readResult, classifyFailure, RUN_DIR, runDirProblem } from './agent.mjs';
+import { safePath } from '../board/safe-path.mjs';
 import { pushCodeBranches, dirtyNote } from './code-repos.mjs';
 import { readInput, clearInput } from './agent-input.mjs';
 import { salvage } from './salvage.mjs';
@@ -45,10 +46,12 @@ export function lose(ctx, slug) {
 }
 
 export async function handleResult(ctx, slug, status, { res, keys, logPath, bcfg }) {
-  const { cfg, home, clone, identity } = ctx;
+  const { cfg, clone, identity } = ctx;
   fetchMain(clone, identityEnv(identity));
   if (!holds(clone, slug, cfg.id, { ref: 'origin/main' })) return lose(ctx, slug);
-  const read = readResult(resultFile(home));
+  // The agent could have swapped the run dir for a symlink during the run: check again, read through safePath.
+  const unsafe = runDirProblem(clone);
+  const read = unsafe ? { ok: false, problem: unsafe } : readResult(safePath(clone, `${RUN_DIR}/result.json`));
   const exitFailed = !!res.spawnError || res.exitCode !== 0;
   if (!res.timedOut && exitFailed && classifyFailure(res) === 'worker') {
     const what = res.spawnError ? `agent CLI could not start: ${firstLine(res.spawnError)}` : 'the agent CLI rejected the run (model or CLI problem)';

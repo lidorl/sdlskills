@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, existsSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -204,4 +204,16 @@ test('runAgent records the agent pid while it runs and does not pass the detache
   assert.equal(readFileSync(seen, 'utf8').trim(), readFileSync(join(dir, 'own.pid'), 'utf8').trim());
   assert.equal(existsSync(pidFile), false);
   assert.equal(readFileSync(join(dir, 'env.txt'), 'utf8').trim(), '[]');
+});
+
+test('readResult never follows a symlink and reads only a regular file (S6)', () => {
+  const dir = tmp();
+  const target = join(dir, 'outside.json');
+  writeFileSync(target, JSON.stringify({ outcome: 'completed', phase: 'DESIGNED', summary: 's' }));
+  const link = join(dir, 'result.json');
+  symlinkSync(target, link);
+  assert.deepEqual(readResult(link), { ok: false, problem: 'result file is a symlink' });
+  const sub = join(dir, 'adir');
+  mkdirSync(sub);
+  assert.match(readResult(sub).problem, /not a regular file|unreadable/);
 });

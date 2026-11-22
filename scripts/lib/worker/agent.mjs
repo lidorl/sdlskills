@@ -1,6 +1,8 @@
 // Headless agent invocation: routing, prompt, CLI command, one supervised run, the result file.
-import { spawn } from 'node:child_process';
-import { readFileSync, appendFileSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { spawn, execFileSync } from 'node:child_process';
+import {
+  readFileSync, appendFileSync, mkdirSync, rmSync, writeFileSync, lstatSync, openSync, fstatSync, closeSync, constants,
+} from 'node:fs';
 import { join, dirname } from 'node:path';
 
 const PHASE_STATUSES = ['ACCEPTED', 'DESIGNED', 'PLANNED', 'IN_PROGRESS', 'IMPLEMENTED'];
@@ -55,6 +57,26 @@ export function buildPrompt({ workerId, slug, status, agent, agentInput = [], de
 // meta clone's .git/info/exclude hides from git (see home.mjs excludeRunDir).
 export const RUN_DIR = '.sdlc-run';
 export const resultFile = (home) => join(home, 'meta', RUN_DIR, 'result.json');
+
+// The meta clone mirrors a shared repo, so the repo itself could plant the run dir: a committed symlink would
+// send the result file's mkdir/rm/read outside the clone, a tracked directory would put it under git. Checked
+// before every run. -> a problem naming the path, or null
+export function runDirProblem(clone) {
+  const lst = (rel) => { try { return lstatSync(join(clone, rel), { throwIfNoEntry: false }); } catch (e) { return e; } };
+  const dir = lst(RUN_DIR);
+  if (dir instanceof Error) return `meta/${RUN_DIR} is unsafe: ${dir.message}`;
+  if (dir?.isSymbolicLink()) return `meta/${RUN_DIR} is a symlink (the meta repo must not provide it)`;
+  if (dir && !dir.isDirectory()) return `meta/${RUN_DIR} is not a directory`;
+  let tracked;
+  try {
+    tracked = execFileSync('git', ['ls-files', '--', RUN_DIR], { cwd: clone, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+  } catch (e) { return `cannot check meta/${RUN_DIR} with git ls-files: ${String(e.message).split('\n')[0]}`; }
+  if (tracked) return `meta/${RUN_DIR} is tracked by the meta repo (${tracked.split('\n')[0]}); remove it from the repo`;
+  const file = lst(`${RUN_DIR}/result.json`);
+  if (file instanceof Error) return `meta/${RUN_DIR}/result.json is unsafe: ${file.message}`;
+  if (file && !file.isFile()) return `meta/${RUN_DIR}/result.json is not a regular file`;
+  return null;
+}
 
 export function agentCommand(cfg, prompt, home) {
   const cmd = cfg.agent_cmd ?? cfg.agent;
@@ -161,10 +183,21 @@ export function runAgent({ cmd, args = [], env = {}, cwd, timeoutMs, logPath, on
   });
 }
 
+// Read without following a symlink, and only from a regular file (the agent writes it; see runDirProblem).
+function readRegular(path) {
+  const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+  try {
+    if (!fstatSync(fd).isFile()) throw Object.assign(new Error('not a regular file'), { code: 'ENOTREG' });
+    return readFileSync(fd, 'utf8');
+  } finally { closeSync(fd); }
+}
+
 export function readResult(path) {
   let raw;
-  try { raw = readFileSync(path, 'utf8'); } catch (e) {
-    return { ok: false, problem: e.code === 'ENOENT' ? 'result file missing' : `result file unreadable: ${e.message}` };
+  try { raw = readRegular(path); } catch (e) {
+    if (e.code === 'ENOENT') return { ok: false, problem: 'result file missing' };
+    if (e.code === 'ELOOP') return { ok: false, problem: 'result file is a symlink' };
+    return { ok: false, problem: `result file unreadable: ${e.message}` };
   }
   let r;
   try { r = JSON.parse(raw); } catch (e) { return { ok: false, problem: `result file is not valid JSON: ${e.message}` }; }
