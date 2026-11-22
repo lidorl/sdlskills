@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { readFileSync, writeFileSync, existsSync, readdirSync, mkdirSync, appendFileSync, rmSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, readdirSync, mkdirSync, appendFileSync, rmSync, renameSync } from 'node:fs';
 import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { makeBoard, IDENT } from '../board/fixtures.mjs';
@@ -13,6 +13,7 @@ import { writeConfig, readState, writeState } from './home.mjs';
 import { writeInput } from './agent-input.mjs';
 import { assemble } from '../../assemble-env.mjs';
 import { makeContext, step, continuesOurClaim } from './loop.mjs';
+import { keepFeatEdits } from './outcomes.mjs';
 
 const FAKE = join(dirname(fileURLToPath(import.meta.url)), 'fixtures', 'fake-agent.mjs');
 const T0 = new Date('2026-06-01T10:00:00Z');
@@ -1055,4 +1056,70 @@ test('a result file the agent replaced with a symlink is not followed: effort er
   const w = worker(b, { script: { result: null, exec: [['.', 'mkdir', '-p', '.sdlc-run'], ['.', 'ln', '-s', outside, '.sdlc-run/result.json']] } });
   assert.deepEqual(await w.step(), { action: 'failed', effort: 'alpha' });
   assert.match(requestsOnMain(b)[0].text, /result\.json is not a regular file|result file is a symlink/);
+});
+
+// The agent's design phase: the design doc, plus the feat-req flipped to DESIGNED with a Decisions entry.
+const designRun = (opts) => {
+  mkdirSync(join(opts.cwd, 'docs/design'), { recursive: true });
+  writeFileSync(join(opts.cwd, 'docs/design/alpha.md'), design([]));
+  const f = join(opts.cwd, 'docs/feat-req/alpha.md');
+  writeFileSync(f, `${readFileSync(f, 'utf8').replace('status: ACCEPTED', 'status: DESIGNED')}\n## Decisions\n\n- agent decided X\n`);
+};
+
+test('the network drops during the report push: the agent\'s feat-req edits are put back and land on the next step (I2)', async () => {
+  const b = setup({ featReqs: { alpha: feat() } });
+  let drop = false;
+  const w = worker(b, {
+    script: { result: completed('DESIGNED') },
+    deps: { hooks: { beforePush: () => { if (drop) { drop = false; renameSync(b.remote, `${b.remote}.off`); } } } },
+  });
+  w.beforeRun = (opts) => { designRun(opts); drop = true; w.beforeRun = null; };
+  assert.deepEqual(await w.step(), { action: 'idle' });
+  renameSync(`${b.remote}.off`, b.remote);
+  const fr = readFileSync(join(w.meta, 'docs/feat-req/alpha.md'), 'utf8');
+  assert.match(fr, /status: DESIGNED/);
+  assert.match(fr, /agent decided X/);
+  assert.ok(w.logs.some((l) => /put the agent's docs\/feat-req\/alpha\.md edits back/.test(l)), w.logs.join('\n'));
+  assert.deepEqual(await w.step(), { action: 'reported', effort: 'alpha' });
+  const fm = fmOnMain(b, 'alpha');
+  assert.equal(fm.status, 'DESIGNED');
+  assert.equal(fm.claimed_by, IDA);
+  assert.match(onMain(b, 'docs/feat-req/alpha.md'), /agent decided X/);
+});
+
+test('a report that keeps losing the push race: the feat-req edits go to salvage and the error names it (I2)', async () => {
+  const b = setup({ featReqs: { alpha: feat() } });
+  let race = 0;
+  const w = worker(b, {
+    script: { result: completed('DESIGNED') },
+    deps: { hooks: { beforePush: () => { if (race > 0) b.seed(`other-${race--}.txt`, 'x\n', 'someone else pushes'); } } },
+  });
+  w.beforeRun = (opts) => { designRun(opts); race = 5; }; // every attempt of the report's push loses
+  assert.deepEqual(await w.step(), { action: 'failed', effort: 'alpha' });
+  const [dir] = salvaged(w).filter((d) => existsSync(join(d, 'meta/docs/feat-req/alpha.md')));
+  assert.ok(dir, 'the feat-req edits are in a salvage dir');
+  const kept = readFileSync(join(dir, 'meta/docs/feat-req/alpha.md'), 'utf8');
+  assert.match(kept, /status: DESIGNED/);
+  assert.match(kept, /agent decided X/);
+  const text = requestsOnMain(b).find((q) => /kind: error/.test(q.text)).text;
+  assert.ok(text.includes(dir), 'the error names the salvage path');
+  assert.doesNotMatch(text, /were not kept/);
+});
+
+test('keepFeatEdits: unchanged → nothing; back at origin → put back; anything else → copied to salvage (I2)', () => {
+  const b = setup({ featReqs: { alpha: feat() } });
+  const w = worker(b);
+  const f = join(w.meta, 'docs/feat-req/alpha.md');
+  const origin = readFileSync(f);
+  const mine = Buffer.from(`${origin}\nmine\n`);
+  writeFileSync(f, mine);
+  assert.deepEqual(keepFeatEdits(w.ctx, 'alpha', mine), {});
+  writeFileSync(f, origin);
+  assert.deepEqual(keepFeatEdits(w.ctx, 'alpha', mine), { put: true });
+  assert.deepEqual(readFileSync(f), mine);
+  writeFileSync(f, `${origin}\nsomething else\n`);
+  const { dir } = keepFeatEdits(w.ctx, 'alpha', mine);
+  assert.deepEqual(readFileSync(join(dir, 'meta/docs/feat-req/alpha.md')), mine);
+  assert.match(readFileSync(f, 'utf8'), /something else/, 'the working file is left alone');
+  assert.deepEqual(keepFeatEdits(w.ctx, 'alpha', null), {});
 });

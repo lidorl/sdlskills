@@ -2,7 +2,7 @@
 // that did not land, a stray) would block every later effort and no person could reach them. They move to
 // <home>/salvage/<stamp>/ (same relative paths, each one logged) and the clone goes back to HEAD.
 import { execFileSync } from 'node:child_process';
-import { copyFileSync, existsSync, mkdirSync, readdirSync, rmSync, statSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
 const git = (cwd, args) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
@@ -41,12 +41,27 @@ function moveAside(repo, dirty, dest, log, label) {
   }
 }
 
+function newDir(ctx) {
+  let dir = join(ctx.home, 'salvage', stampOf(ctx.deps.now()));
+  for (let n = 2; existsSync(dir); n++) dir = join(ctx.home, 'salvage', `${stampOf(ctx.deps.now())}-${n}`);
+  return dir;
+}
+
+// Keep `bytes` (a meta file's lost content) as <salvage>/meta/<rel>. -> the salvage directory
+export function salvageFile(ctx, rel, bytes, reason) {
+  const dir = newDir(ctx);
+  const to = join(dir, 'meta', rel);
+  mkdirSync(dirname(to), { recursive: true });
+  writeFileSync(to, bytes);
+  ctx.deps.log(`salvaged ${rel} -> ${to} (${reason})`);
+  return dir;
+}
+
 // Salvage the meta clone's dirty files (all, or `paths`) and, unless `code: false`, every dirty checkout
 // under workspace/. Returns the salvage directory, or null when nothing was dirty.
 export function salvage(ctx, { paths, code = true, reason }) {
-  const { clone, home, deps } = ctx;
-  let dir = join(home, 'salvage', stampOf(deps.now()));
-  for (let n = 2; existsSync(dir); n++) dir = join(home, 'salvage', `${stampOf(deps.now())}-${n}`);
+  const { clone, deps } = ctx;
+  const dir = newDir(ctx);
   const log = (m) => deps.log(`${m} (${reason})`);
   let any = false;
   const meta = dirtyPaths(clone, paths, { skipWorkspace: true });

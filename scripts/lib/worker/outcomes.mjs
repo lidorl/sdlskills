@@ -1,10 +1,11 @@
 // What happens after a step's agent run, and the ways a step lets go of an effort: report, request,
 // effort error, worker error, lost. Shared state: ctx from loop.mjs.
 import { hostname } from 'node:os';
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, writeFileSync, mkdirSync } from 'node:fs';
+import { dirname } from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { fetchMain, snapshotMain, identityEnv } from '../board/git.mjs';
-import { release, holds, committedFm } from '../board/claims.mjs';
+import { fetchMain, snapshotMain, identityEnv, showFile } from '../board/git.mjs';
+import { release, holds, committedFm, featReqPath } from '../board/claims.mjs';
 import { listRequests, postRequest, newRequestId } from '../board/requests.mjs';
 import { redact } from '../board/redact.mjs';
 import { reportPaths } from '../board/paths.mjs';
@@ -15,7 +16,7 @@ import { readResult, classifyFailure, RUN_DIR, runDirProblem } from './agent.mjs
 import { safePath } from '../board/safe-path.mjs';
 import { pushCodeBranches, dirtyNote } from './code-repos.mjs';
 import { readInput, clearInput } from './agent-input.mjs';
-import { salvage } from './salvage.mjs';
+import { salvage, salvageFile } from './salvage.mjs';
 
 const firstLine = (e) => String(e?.message ?? e).split('\n')[0];
 const oneLine = (s) => String(s ?? '').replace(/\s+/g, ' ').trim();
@@ -79,6 +80,26 @@ function effortDirty(clone, slug) {
   return execFileSync('git', ['status', '--porcelain', '--', ...paths], { cwd: clone, encoding: 'utf8' }).trim() !== '';
 }
 
+// Worker reports only (`sdlc report` keeps Ruling 15b): a report that did not land may have taken the agent's
+// feat-req edits with it (keep-work never keeps docs/feat-req/*). With the file back at origin's bytes the
+// snapshot goes back as an uncommitted edit (the next sync merges it, protocol fields overlaid); otherwise the
+// snapshot is copied to a salvage dir. -> { put: true } | { dir } | {} (nothing was lost)
+export function keepFeatEdits(ctx, slug, before) {
+  if (before === null) return {};
+  const rel = featReqPath(slug);
+  const abs = safePath(ctx.clone, rel);
+  const now = existsSync(abs) ? readFileSync(abs) : null;
+  if (now?.equals(before)) return {};
+  const origin = showFile(ctx.clone, 'origin/main', rel);
+  if (now === null || (origin !== null && now.equals(Buffer.from(origin)))) {
+    mkdirSync(dirname(abs), { recursive: true });
+    writeFileSync(abs, before);
+    ctx.deps.log(`put the agent's ${rel} edits back after the report did not land`);
+    return { put: true };
+  }
+  return { dir: salvageFile(ctx, rel, before, `the report of ${slug} did not land`) };
+}
+
 // Push the code branches, then report. -> { ok: true, codeAdvanced } or { ok: false, ret: <step result> }
 async function report(ctx, slug, status, phase, { keys, summary }) {
   const { cfg, deps, clone, identity } = ctx;
@@ -87,17 +108,30 @@ async function report(ctx, slug, status, phase, { keys, summary }) {
     return { ok: false, ret: await effortError(ctx, slug, status, `code push rejected: ${failedPushes(code).join('; ')}`, {}) };
   }
   const body = [summary && oneLine(redact(summary)), code.dirty.length && dirtyNote(code.dirty)].filter(Boolean).join('\n\n');
-  const r = await reportEffort(clone, slug, {
-    phase, claimant: cfg.id, identity, workerId: cfg.id, now: deps.now(), sleep: deps.sleep, hooks: deps.hooks, body, fetched: true,
-  });
+  const featAbs = safePath(clone, featReqPath(slug));
+  const before = existsSync(featAbs) ? readFileSync(featAbs) : null;
+  let r;
+  try {
+    r = await reportEffort(clone, slug, {
+      phase, claimant: cfg.id, identity, workerId: cfg.id, now: deps.now(), sleep: deps.sleep, hooks: deps.hooks, body, fetched: true,
+    });
+  } catch (e) {
+    keepFeatEdits(ctx, slug, before); // the hold stays: the next step reports them again
+    throw e;
+  }
   if (r.ok || r.reason === 'nothing-to-do') {
     deps.log(`reported ${slug} at ${phase}${r.ok ? '' : ' (nothing new)'}`);
     return { ok: true, codeAdvanced: code.advanced.length > 0 };
   }
+  const kept = keepFeatEdits(ctx, slug, before);
   if (['not-holder', 'closed', 'landed'].includes(r.reason)) return { ok: false, ret: lose(ctx, slug) };
-  const what = r.reason === 'unmerged'
-    ? `the edits to ${r.paths.join(', ')} conflict with origin/main`
-    : `the push lost (${r.reason}); kept on disk: ${(r.kept ?? []).join(', ') || 'none'}; feat-req edits were not kept`;
+  let what;
+  if (r.reason === 'unmerged') what = `the edits to ${r.paths.join(', ')} conflict with origin/main`;
+  else {
+    // Everything the push left (feat-req put back included) goes aside now, so the error can name where.
+    const dir = kept.dir ?? salvage(ctx, { code: false, reason: `the report of ${slug} did not land` });
+    what = `the push lost (${r.reason}); the effort's edits (feat-req included) were moved to ${dir ?? '(nothing was left)'} on host ${hostname()}`;
+  }
   return { ok: false, ret: await effortError(ctx, slug, status, `the report did not land: ${what}`, {}) };
 }
 
