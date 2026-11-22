@@ -87,6 +87,7 @@ export async function createWorker({
   host = hostname(), rand = Math.random,
 }) {
   if (!metaUrl) throw new CreateError('meta repo url is required');
+  if (String(metaUrl).startsWith('-')) throw new CreateError(`meta repo url must not start with "-": ${metaUrl}`);
   if (!KIT_SKILL[agent]) throw new CreateError(`unknown agent "${agent}" (claude or copilot)`);
   if (!model) throw new CreateError('model is required');
   const owner = resolveOwner(gh);
@@ -101,7 +102,7 @@ export async function createWorker({
     try {
       mkdirSync(home, { recursive: true });
       const meta = join(home, 'meta');
-      try { git(home, ['clone', '-q', metaUrl, 'meta']); } catch (e) { throw new CreateError(`cannot clone ${metaUrl}: ${firstLine(e)}`); }
+      try { git(home, ['clone', '-q', '--', metaUrl, 'meta']); } catch (e) { throw new CreateError(`cannot clone ${metaUrl}: ${firstLine(e)}`); }
       const skill = KIT_SKILL[agent];
       if (!existsSync(join(meta, skill))) throw new CreateError(`meta repo has no kit for ${agent}: missing ${skill}`);
       git(meta, ['config', 'user.name', owner.name]);

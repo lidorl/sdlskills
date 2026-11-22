@@ -113,3 +113,11 @@ test('push failure leaves no home and no registration', async () => {
   await assert.rejects(createWorker(t.opts), CreateError);
   assert.deepEqual(t.homes(), []);
 });
+
+test('a meta url that starts with "-" is refused before any clone, and leaves no home', async () => {
+  const t = setup();
+  const marker = join(t.dir, 'pwned');
+  await assert.rejects(createWorker({ ...t.opts, probe: false, metaUrl: `--upload-pack=touch ${marker}` }), (e) => e instanceof CreateError && /must not start with "-"/.test(e.message));
+  assert.equal(existsSync(marker), false);
+  assert.deepEqual(t.homes(), []);
+});

@@ -120,7 +120,9 @@ export function assemble({ rootDir, slug, keys, catalog, hooks }) {
     if (!entry) throw new Error(`repos.yml has no entry for "${key}"`);
     const dest = join(wsDir, key);
     if (!existsSync(join(dest, '.git'))) {
-      execFileSync('git', ['clone', '--depth', '1', entry.url, dest], { stdio: ['ignore', 'pipe', 'pipe'] });
+      // An option-looking url (`--upload-pack=…`) would run as a git flag: refuse it, and end options with `--`.
+      if (String(entry.url).startsWith('-')) throw new Error(`repos.yml url for "${key}" must not start with "-": ${entry.url}`);
+      execFileSync('git', ['clone', '--depth', '1', '--', entry.url, dest], { stdio: ['ignore', 'pipe', 'pipe'] });
       cloned.push(key);
     } else {
       git(dest, ['fetch', 'origin']);

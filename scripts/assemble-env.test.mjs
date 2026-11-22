@@ -241,3 +241,13 @@ test('assembling without hooks removes the trailer hook and restores a chained f
   assert.ok(!existsSync(`${hook}.orig`));
   rmSync(dir, { recursive: true });
 });
+
+test('a catalog url that starts with "-" is refused before git sees it as an option', () => {
+  const { dir, root, catalog } = setup();
+  const marker = join(dir, 'pwned');
+  catalog.repos.api = entry(`--upload-pack=touch ${marker}`);
+  assert.throws(() => assemble({ rootDir: root, slug: 'thing', keys: ['api'], catalog }), /must not start with "-"/);
+  assert.equal(existsSync(marker), false);
+  assert.equal(existsSync(join(root, 'workspace', 'api', '.git')), false);
+  rmSync(dir, { recursive: true });
+});
