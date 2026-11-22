@@ -167,7 +167,7 @@ async function handleCompleted(ctx, slug, status, result, keys) {
   if (result.phase !== working) { // the Phase trailer and IMPLEMENTED must be what the feat-req says
     return effortError(ctx, slug, status, `the agent reported phase ${result.phase} but the working feat-req says ${working ?? '(unreadable)'}`, { keys, tried: result.summary });
   }
-  const finished = status === 'IN_PROGRESS' && planDone(clone, slug);
+  const finished = status === 'IN_PROGRESS' && planDone(clone, slug, { log: deps.log });
   if (result.development_done === true && !finished) deps.log(`warning: the agent reported development_done for ${slug} but its plan has unchecked steps; staying in develop`);
   const changed = effortDirty(clone, slug);
   const rep = await report(ctx, slug, status, result.phase, { keys, summary: result.summary });

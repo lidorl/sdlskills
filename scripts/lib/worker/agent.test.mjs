@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, existsSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
@@ -230,4 +231,32 @@ test('planDone: every plan file of the effort IMPLEMENTED or without unchecked s
   assert.equal(planDone(dir, 'alpha'), false);
   writeFileSync(join(plans, 'alpha-2.md'), '---\nstatus: IMPLEMENTED\n---\n\n- [ ] left unticked\n');
   assert.equal(planDone(dir, 'alpha'), true);
+});
+
+test('planDone never follows a symlinked plan or opens a FIFO: not done, logged (S7)', async () => {
+  const dir = tmp();
+  const plans = join(dir, 'docs', 'plans');
+  mkdirSync(plans, { recursive: true });
+  const target = join(dir, 'host-secret.md');
+  writeFileSync(target, '- [x] looks done\n');
+  symlinkSync(target, join(plans, 'alpha.md'));
+  const logs = [];
+  assert.equal(planDone(dir, 'alpha', { log: (m) => logs.push(m) }), false);
+  assert.match(logs[0], /cannot read alpha's plan \(refusing symlinked path: docs\/plans\/alpha\.md\); treating development as not done/);
+
+  const d2 = tmp();
+  mkdirSync(join(d2, 'docs', 'plans'), { recursive: true });
+  execFileSync('mkfifo', [join(d2, 'docs', 'plans', 'alpha.md')]);
+  const logs2 = [];
+  const t0 = Date.now();
+  assert.equal(planDone(d2, 'alpha', { log: (m) => logs2.push(m) }), false); // a blocking open would hang here
+  assert.ok(Date.now() - t0 < 2000);
+  assert.match(logs2[0], /docs\/plans\/alpha\.md is not a regular file/);
+
+  const d3 = tmp();
+  mkdirSync(join(d3, 'docs', 'plans'), { recursive: true });
+  writeFileSync(join(d3, 'docs', 'plans', 'alpha.md'), `- [x] a\n${'x'.repeat(1024 * 1024)}\n`);
+  const logs3 = [];
+  assert.equal(planDone(d3, 'alpha', { log: (m) => logs3.push(m) }), false);
+  assert.match(logs3[0], /larger than/);
 });

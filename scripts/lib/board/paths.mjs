@@ -14,6 +14,8 @@ function ownerPatterns(slug) {
     new RegExp(`^docs/plans/${slug}(-\\d+)?\\.md$`),
   ];
 }
+// Is `rel` one of the effort's own plan files (docs/plans/<slug>.md or <slug>-<n>.md)?
+export const isPlanPath = (slug, rel) => ownerPatterns(slug)[2].test(rel);
 const historyRe = (slug) => new RegExp(`^docs/history/[^/]*_${slug}(-\\d+)?\\.md$`);
 
 // The files a report commits for an effort: its docs, history entries changed since origin/main, and extras.

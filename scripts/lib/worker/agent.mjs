@@ -5,6 +5,8 @@ import {
   existsSync, readdirSync,
 } from 'node:fs';
 import { join, dirname } from 'node:path';
+import { safePath } from '../board/safe-path.mjs';
+import { isPlanPath } from '../board/paths.mjs';
 
 const PHASE_STATUSES = ['ACCEPTED', 'DESIGNED', 'PLANNED', 'IN_PROGRESS', 'IMPLEMENTED'];
 const REQUEST_KINDS = ['gate', 'question', 'clarification', 'error'];
@@ -23,17 +25,38 @@ export function route(status, { developmentDone = false } = {}) {
 }
 
 // Development is done when the effort has a plan and every plan file is IMPLEMENTED or has no unchecked step.
-// Durable (the plan is on main), unlike the agent's development_done, which is only a hint.
-export function planDone(root, slug) {
-  const dir = join(root, 'docs', 'plans');
-  const re = new RegExp(`^${slug}(-\\d+)?\\.md$`);
-  const files = existsSync(dir) ? readdirSync(dir).filter((n) => re.test(n)) : [];
-  if (!files.length) return false;
-  return files.every((n) => {
-    const text = readFileSync(join(dir, n), 'utf8');
-    const status = text.match(/^---\r?\n([\s\S]*?)\r?\n---/)?.[1].match(/^status:\s*(\S+)/m)?.[1];
-    return status === 'IMPLEMENTED' || !/^\s*[-*] \[ \]/m.test(text);
-  });
+// Durable (the plan is on main), unlike the agent's development_done, which is only a hint. The plans come
+// from a shared repo: only the effort's own names, no symlinks or escapes (safePath), regular files only (a
+// FIFO is never opened), at most PLAN_MAX_BYTES. Anything wrong counts as "not done" and is logged.
+const PLAN_MAX_BYTES = 1024 * 1024;
+
+function readPlan(root, rel) {
+  const abs = safePath(root, rel);
+  const st = lstatSync(abs);
+  if (!st.isFile()) throw new Error(`${rel} is not a regular file`);
+  if (st.size > PLAN_MAX_BYTES) throw new Error(`${rel} is larger than ${PLAN_MAX_BYTES} bytes`);
+  const fd = openSync(abs, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  try {
+    const fst = fstatSync(fd);
+    if (!fst.isFile() || fst.size > PLAN_MAX_BYTES) throw new Error(`${rel} changed while being read`);
+    return readFileSync(fd, 'utf8');
+  } finally { closeSync(fd); }
+}
+
+export function planDone(root, slug, { log = () => {} } = {}) {
+  try {
+    const dir = safePath(root, 'docs/plans');
+    const files = existsSync(dir) ? readdirSync(dir).filter((n) => isPlanPath(slug, `docs/plans/${n}`)) : [];
+    if (!files.length) return false;
+    return files.every((n) => {
+      const text = readPlan(root, `docs/plans/${n}`);
+      const status = text.match(/^---\r?\n([\s\S]*?)\r?\n---/)?.[1].match(/^status:\s*(\S+)/m)?.[1];
+      return status === 'IMPLEMENTED' || !/^\s*[-*] \[ \]/m.test(text);
+    });
+  } catch (e) {
+    log(`warning: cannot read ${slug}'s plan (${String(e?.message ?? e).split('\n')[0]}); treating development as not done`);
+    return false;
+  }
 }
 
 // The routed phase a worker records in the Context of a request it posts, so the answer goes back to it.

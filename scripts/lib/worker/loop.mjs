@@ -275,7 +275,7 @@ async function runHeld(ctx, slug, bcfg, board) {
     syncKeepingWork(clone, env);
   }
   // Development is done when the plan says so (durable); answers go back to the phase that asked for them.
-  const developmentDone = fm.status === 'IN_PROGRESS' && (phase ? phase === 'close-out' : planDone(clone, slug));
+  const developmentDone = fm.status === 'IN_PROGRESS' && (phase ? phase === 'close-out' : planDone(clone, slug, { log: deps.log }));
   const r = route(fm.status, { developmentDone });
   if (!r) { // an answer parked or rejected it
     await letGo(ctx, slug, []);

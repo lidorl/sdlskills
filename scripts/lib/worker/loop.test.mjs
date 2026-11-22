@@ -1316,3 +1316,19 @@ test('saved agent input from an earlier hold is not folded into a new claim (M5)
   assert.deepEqual(await w.step(), { action: 'reported', effort: 'alpha' });
   assert.match(w.prompt(), /Option Y/);
 });
+
+test('a committed symlinked plan is never read: development counts as not done, the warning is logged (S7)', async () => {
+  const b = setup({ featReqs: { alpha: feat({ status: 'IN_PROGRESS' }) } });
+  const outside = join(b.dir, 'host-file.md');
+  writeFileSync(outside, '- [x] all done\n');
+  const p = b.clone('plant-plan');
+  mkdirSync(join(p, 'docs/plans'), { recursive: true });
+  execFileSync('ln', ['-s', outside, join(p, 'docs/plans/alpha.md')]);
+  git(p, 'add', '-A');
+  git(p, 'commit', '-q', '-m', 'plant a symlinked plan');
+  git(p, 'push', '-q', 'origin', 'HEAD:main');
+  const w = worker(b, { script: { result: completed('IN_PROGRESS') } });
+  await w.step();
+  assert.match(w.prompt(), /Phase: develop/);
+  assert.ok(w.logs.some((l) => /cannot read alpha's plan \(refusing symlinked path/.test(l)), w.logs.join('\n'));
+});
