@@ -9,7 +9,7 @@ import { makeBoard } from '../board/fixtures.mjs';
 import { workerYaml } from '../board/registry.mjs';
 import { parseDoc } from '../board/frontmatter.mjs';
 import { runAgent } from './agent.mjs';
-import { workerHome, writeConfig, readConfig, readState, writePid, readPid, clearPid, isAlive } from './home.mjs';
+import { workerHome, writeConfig, readConfig, readState, writeState, writePid, readPid, clearPid, isAlive } from './home.mjs';
 import { runWorker, lockRun } from './cli.mjs';
 import { markerFor, readLock } from './run-lock.mjs';
 
@@ -167,6 +167,20 @@ test('stale pid file on start → crash event + worker error request', async () 
   assert.doesNotMatch(text, new RegExp(secret));
   assert.ok(t.logs.some((m) => /needs attention/.test(m)), t.logs.join('\n'));
   assert.equal(readState(t.home).clean_stop, true);
+});
+
+test('a killed worker left a report commit unpushed: start unwinds it, so the crash report and start event land (C1)', async () => {
+  const t = setup();
+  writeState(t.home, { clean_stop: false });
+  mkdirSync(join(t.meta, 'docs/design'), { recursive: true });
+  writeFileSync(join(t.meta, 'docs/design/alpha.md'), '# d\n');
+  git(t.meta, 'add', '-A');
+  git(t.meta, '-c', 'user.name=x', '-c', 'user.email=x@x', 'commit', '-q', '-m', 'board(report): alpha');
+  const r = await cli(t, ['start', ID]);
+  assert.equal(r.code, 0);
+  assert.deepEqual(eventsSince(t.b, t.seed), ['crash', 'request', 'start', 'stop']);
+  assert.equal(git(t.meta, 'rev-list', '--count', 'origin/main..HEAD').trim(), '0');
+  assert.ok(t.logs.some((m) => /unwound 1 local meta commit/.test(m)), t.logs.join('\n'));
 });
 
 test('start --detach returns immediately; process survives the parent; stop ends it and pushes stop', async () => {

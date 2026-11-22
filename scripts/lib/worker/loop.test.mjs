@@ -972,3 +972,42 @@ test('the result file is inside meta/ (the agent\'s cwd), hidden by info/exclude
   assert.ok(existsSync(rf));
   assert.ok(salvaged(w).every((d) => !existsSync(join(d, 'meta/.sdlc-run'))));
 });
+
+const metaCommit = (cwd, msg) => {
+  git(cwd, 'add', '-A');
+  git(cwd, '-c', 'user.name=x', '-c', 'user.email=x@x', 'commit', '-q', '-m', msg);
+};
+
+test('an agent that commits in meta during its run: the commit is unwound into edits and reported (C1)', async () => {
+  const b = setup({ featReqs: { alpha: feat(), beta: feat({ priority: 'low' }) } });
+  const w = worker(b, { script: { result: completed('ACCEPTED') } });
+  w.beforeRun = (opts) => {
+    mkdirSync(join(opts.cwd, 'docs/design'), { recursive: true });
+    writeFileSync(join(opts.cwd, 'docs/design/alpha.md'), design(['api']));
+    metaCommit(opts.cwd, 'agent commits the design doc');
+  };
+  assert.deepEqual(await w.step(), { action: 'reported', effort: 'alpha' });
+  assert.equal(onMain(b, 'docs/design/alpha.md'), design(['api']));
+  assert.match(headMsg(b), /^board\(report\): alpha/);
+  assert.ok(!git(b.remote, 'log', '--format=%s', 'main').includes('agent commits the design doc'), 'the agent\'s own commit is never pushed');
+  assert.equal(git(w.meta, 'rev-list', '--count', 'origin/main..HEAD').trim(), '0');
+  assert.ok(w.logs.some((l) => /unwound 1 local meta commit\(s\).*agent commits the design doc/.test(l)), w.logs.join('\n'));
+  // the worker keeps working: the next step writes to the board again
+  w.beforeRun = null;
+  w.script({ result: { outcome: 'request', request: { kind: 'question', blocking: true, sections: { Request: 'r', Context: 'c', Options: 'A) x\nB) y' } } } });
+  assert.deepEqual(await w.step(), { action: 'requested', effort: 'alpha' });
+  assert.equal(requestsOnMain(b).length, 1);
+});
+
+test('a report commit left by a kill before its push: the next step unwinds it and the edits are reported (C1)', async () => {
+  const b = setup({ featReqs: { alpha: feat() } });
+  const w = worker(b, { script: { result: completed('ACCEPTED') } });
+  mkdirSync(join(w.meta, 'docs/design'), { recursive: true });
+  writeFileSync(join(w.meta, 'docs/design/alpha.md'), design(['web']));
+  metaCommit(w.meta, 'board(report): alpha');
+  assert.deepEqual(await w.step(), { action: 'reported', effort: 'alpha' });
+  assert.equal(onMain(b, 'docs/design/alpha.md'), design(['web']));
+  assert.equal(fmOnMain(b, 'alpha').claimed_by, IDA);
+  assert.ok(w.logs.some((l) => /unwound 1 local meta commit/.test(l)), w.logs.join('\n'));
+  assert.ok(!w.logs.some((l) => /local commits ahead/.test(l)), w.logs.join('\n'));
+});

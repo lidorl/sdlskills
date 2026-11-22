@@ -3,6 +3,7 @@
 // What follows the agent run (report, request, errors) is in outcomes.mjs.
 import { join, dirname } from 'node:path';
 import { writeFileSync, existsSync, mkdirSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { fetchMain, snapshotMain, boardWrite, identityEnv, BoardError } from '../board/git.mjs';
 import { claim, renew, holds, committedFm, claimState } from '../board/claims.mjs';
 import { loadEfforts, rank, overlaps } from '../board/queue.mjs';
@@ -59,6 +60,26 @@ export function makeContext({ home, deps = {}, signal }) {
   };
 }
 
+// Every board write refuses while local main is ahead of origin/main, so a commit in the meta clone (an agent
+// that commits a doc, a report commit whose push a kill cut off) would stop the worker for good. The worker
+// turns such commits back into uncommitted edits (reset --mixed to the merge base), which the normal report and
+// salvage paths then handle. The interactive boardWrite keeps refusing. -> true when it unwound something
+export function unwindLocalCommits(ctx) {
+  const g = (args) => execFileSync('git', args, { cwd: ctx.clone, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+  let ahead;
+  try { ahead = g(['rev-list', '--count', 'origin/main..HEAD']); } catch { return false; }
+  if (ahead === '0') return false;
+  try {
+    const commits = g(['log', '--format=%h %s', 'origin/main..HEAD']).split('\n').join('; ');
+    g(['reset', '-q', '--mixed', g(['merge-base', 'HEAD', 'origin/main'])]);
+    ctx.deps.log(`unwound ${ahead} local meta commit(s) not on origin/main (${commits}); their changes are uncommitted edits now`);
+    return true;
+  } catch (e) {
+    ctx.deps.log(`warning: could not unwind the local meta commits: ${firstLine(e)}`);
+    return false;
+  }
+}
+
 // ---- the step ---------------------------------------------------------------------------------
 
 export async function step(ctx) {
@@ -68,6 +89,7 @@ export async function step(ctx) {
     ctx.deps.log(`cannot reach origin: ${firstLine(e)}; staying idle`);
     return { action: 'idle' };
   }
+  unwindLocalCommits(ctx);
   const snap = snapshotMain(ctx.clone);
   try {
     const r = await stepOn(ctx, snap.dir);
@@ -291,6 +313,7 @@ async function runHeld(ctx, slug, bcfg) {
     ctx.signal?.removeEventListener('abort', stopRun);
   }
   await inflight.catch(() => {}); // a renew still pushing must land before the report touches the clone
+  unwindLocalCommits(ctx); // the agent may have committed in meta despite the prompt
   if (takenOver) return lose(ctx, slug);
   if (res.aborted) return interrupted(ctx, slug, fm.status, keys);
   return handleResult(ctx, slug, fm.status, { res, keys, logPath, bcfg });
