@@ -61,6 +61,18 @@ function parseSections(body) {
 // gets one leading space. `###` and deeper (review findings) are left alone; they never end a section.
 export const defangHeadings = (text) => String(text).replace(/^(#{1,2})(?!#)/gm, ' $1');
 
+// A code fence left open at the end of a section would swallow every heading after it: close it.
+export function balanceFences(text) {
+  const t = String(text);
+  const inFence = fenceTracker();
+  for (const line of t.split(/\r?\n/)) inFence(line);
+  const open = inFence.open();
+  return open ? `${t.replace(/\n*$/, '')}\n${open}` : t;
+}
+
+// What the worker puts into a request section from agent-derived text: redacted, headings defanged, fences closed.
+export const agentText = (text, redact) => balanceFences(defangHeadings(redact(String(text))));
+
 // Replace the body of the LAST `## heading` outside code fences (the Answer section is always last).
 function replaceSection(text, heading, content) {
   const lines = text.split('\n');
@@ -145,11 +157,17 @@ export function validateRequest(text, filename) {
   if (typeof fm.blocking !== 'boolean') p.push('blocking must be true or false');
   else if (!fm.blocking && fm.kind !== 'clarification') p.push('blocking: false is allowed only for clarifications');
   if (!fm.created_at) p.push('created_at is required');
-  // A later duplicate would replace the first section's text (e.g. a forged Context): refuse it.
+  // A later duplicate would replace the first section's text (e.g. a forged Context): refuse it. The known
+  // sections must also come in canonical order (Answer last), as buildRequest writes them.
   const seen = new Set();
+  const ORDER = [...SECTION_ORDER, 'Answer'];
+  let last = null;
   for (const h of headings(parsed.body).filter(Boolean)) {
     if (seen.has(h)) p.push(`duplicate section ## ${h}`);
     seen.add(h);
+    if (!ORDER.includes(h)) continue;
+    if (last !== null && ORDER.indexOf(h) < ORDER.indexOf(last)) p.push(`section ## ${h} must come before ## ${last}`);
+    else last = h;
   }
   for (const h of ['Request', 'Context']) if (!sections[h]) p.push(`## ${h} section is required`);
   if (fm.kind === 'question' && !sections.Options) p.push('## Options section is required for a question');

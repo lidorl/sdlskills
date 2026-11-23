@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, existsSync, symlinkSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, existsSync, symlinkSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -259,4 +259,18 @@ test('planDone never follows a symlinked plan or opens a FIFO: not done, logged 
   const logs3 = [];
   assert.equal(planDone(d3, 'alpha', { log: (m) => logs3.push(m) }), false);
   assert.match(logs3[0], /larger than/);
+});
+
+test('P3-9: readResult rejects a request section whose value is not a string', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'result-'));
+  const f = join(dir, 'result.json');
+  for (const v of [{ a: 1 }, ['x'], 3, true]) {
+    writeFileSync(f, JSON.stringify({ outcome: 'request', request: { kind: 'question', blocking: true, sections: { Request: 'r', Context: 'c', Options: v } } }));
+    const r = readResult(f);
+    assert.equal(r.ok, false, JSON.stringify(v));
+    assert.match(r.problem, /request\.sections\.Options must be a string/);
+  }
+  writeFileSync(f, JSON.stringify({ outcome: 'request', request: { kind: 'question', blocking: true, sections: ['r', 'c'] } }));
+  assert.equal(readResult(f).ok, false);
+  rmSync(dir, { recursive: true, force: true });
 });

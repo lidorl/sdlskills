@@ -51,9 +51,10 @@ const FENCE = /^\s*(`{3,}|~{3,})(.*)$/;
 
 // Stateful per-line fence tracker: returns true for fence delimiter lines and lines inside a fence.
 // A fence closes only on the same marker character, at least as long, with nothing after it.
+// `.open()` is the marker of the fence still open after the lines seen so far, or null.
 export function fenceTracker() {
   let open = null;
-  return (line) => {
+  const track = (line) => {
     const m = FENCE.exec(line);
     if (!open) {
       if (m) { open = m[1]; return true; }
@@ -62,6 +63,8 @@ export function fenceTracker() {
     if (m && m[1][0] === open[0] && m[1].length >= open.length && m[2].trim() === '') open = null;
     return true;
   };
+  track.open = () => open;
+  return track;
 }
 
 // Locate a level-2 section outside code fences: { start, end } line indexes (end = next #/## heading or EOF).

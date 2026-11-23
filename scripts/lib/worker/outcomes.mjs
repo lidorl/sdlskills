@@ -6,7 +6,7 @@ import { dirname } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fetchMain, snapshotMain, identityEnv, showFile, BoardError } from '../board/git.mjs';
 import { release, holds, committedFm, featReqPath } from '../board/claims.mjs';
-import { listRequests, postRequest, newRequestId, defangHeadings } from '../board/requests.mjs';
+import { listRequests, postRequest, newRequestId, agentText } from '../board/requests.mjs';
 import { redact } from '../board/redact.mjs';
 import { reportPaths } from '../board/paths.mjs';
 import { reportEffort, PROTOCOL_FIELDS } from '../board/report.mjs';
@@ -211,9 +211,10 @@ async function handleRequest(ctx, slug, status, result, keys) {
     for (const f of failedPushes(code)) deps.log(`warning: ${f}; the commits stay in the local branch`);
     progressed = code.advanced.length > 0;
   }
-  // Every section is the agent's text, bound for a shared repo: redact all of them (Error is also fenced), and
-  // defang their headings so none can open a section of its own (a forged Context or phase marker).
-  const sections = Object.fromEntries(Object.entries(q.sections).map(([k, v]) => [k, typeof v === 'string' ? defangHeadings(redact(v)) : v]));
+  // Every section is the agent's text (strings only: readResult checks), bound for a shared repo: redact all of
+  // them (Error is also fenced), defang their headings and close any open fence, so none can open a section of its
+  // own or hide the ones after it (a forged Context or phase marker).
+  const sections = Object.fromEntries(Object.entries(q.sections).map(([k, v]) => [k, agentText(v, redact)]));
   // The phase marker routes the answer: only the worker writes one, as the Context's last line.
   sections.Context = [stripPhaseNotes(sections.Context), ...phaseLine(ctx)].filter(Boolean).join('\n\n');
   const now = deps.now();
@@ -304,8 +305,10 @@ export async function effortError(ctx, slug, status, message, { keys = [], logPa
     id: newRequestId(now, deps.rand), kind: 'error', scope: 'effort', effort: slug, phase: status, worker: cfg.id,
     for: cfg.owner, blocking: true, now,
     sections: {
-      Request: redact(`Worker ${cfg.id} could not finish ${slug} (${status}): ${message}. Answer retry to resume, park to park it, or text with instructions.`),
-      Context: redact(context),
+      // message and the context carry agent text (error.message, the summary, answers): one line where one
+      // line will do, and never a heading or an open fence (postRequest fences Error on its own).
+      Request: agentText(`Worker ${cfg.id} could not finish ${slug} (${status}): ${oneLine(message)}. Answer retry to resume, park to park it, or text with instructions.`, redact),
+      Context: agentText(context, redact),
       Error: tail || message,
     },
   };
@@ -352,8 +355,8 @@ export async function workerError(ctx, problem, excerpt, keys) {
   const r = await postRequest(clone, {
     id: newRequestId(now, deps.rand), kind: 'error', scope: 'worker', worker: cfg.id, for: cfg.owner, blocking: true, now,
     sections: {
-      Request: redact(`Worker ${cfg.id} needs attention: ${problem}. Fix it, then answer resolved.`),
-      Context: redact(context),
+      Request: agentText(`Worker ${cfg.id} needs attention: ${oneLine(problem)}. Fix it, then answer resolved.`, redact),
+      Context: agentText(context, redact),
       Error: excerpt || problem,
     },
   }, { identity, workerId: cfg.id, sleep: deps.sleep, hooks: deps.hooks });

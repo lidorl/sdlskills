@@ -8,7 +8,7 @@ import { makeBoard, IDENT } from './fixtures.mjs';
 import { BoardError } from './git.mjs';
 import { parseDoc } from './frontmatter.mjs';
 import {
-  newRequestId, buildRequest, validateRequest, listRequests, postRequest, answerRequest, withdrawRequest, answeredFor,
+  newRequestId, buildRequest, validateRequest, balanceFences, listRequests, postRequest, answerRequest, withdrawRequest, answeredFor,
 } from './requests.mjs';
 
 const g = (cwd, ...args) => execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();
@@ -353,4 +353,18 @@ test('P3-7: validateRequest rejects a body with a duplicate `## ` section headin
   assert.ok(p.some((x) => /duplicate section ## Options/.test(x)), p.join('; '));
   const fencedOk = buildRequest({ ...base, kind: 'question', sections: { Request: 'r', Context: 'c\n```\n## Context\n```', Options: 'A) x' } });
   assert.deepEqual(validateRequest(fencedOk, `${ID}.md`), [], 'a heading inside a code fence is not a section');
+});
+
+test('P3-9: validateRequest requires the section headings in canonical order', () => {
+  const good = buildRequest({ ...base, kind: 'question', sections: { Request: 'r', Context: 'c', Options: 'A) x' } });
+  assert.deepEqual(validateRequest(good, `${ID}.md`), []);
+  const swapped = good.replace('## Request\n\nr\n', 'XX').replace('## Context\n\nc\n', '## Context\n\nc\n\n## Request\n\nr\n').replace('XX', '');
+  assert.match(validateRequest(swapped, `${ID}.md`).join('; '), /section ## Request must come before ## Context/);
+});
+
+test('P3-9: balanceFences closes a fence left open at the end of a text, and leaves balanced text alone', () => {
+  assert.equal(balanceFences('a\n```js\nx'), 'a\n```js\nx\n```');
+  assert.equal(balanceFences('a\n~~~~\nx\n```'), 'a\n~~~~\nx\n```\n~~~~');
+  assert.equal(balanceFences('a\n```\nx\n```'), 'a\n```\nx\n```');
+  assert.equal(balanceFences('plain'), 'plain');
 });

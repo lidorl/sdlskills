@@ -3,7 +3,7 @@
 // <home>/salvage/<stamp>/ (same relative paths, each one logged) and the clone goes back to HEAD.
 import { execFileSync } from 'node:child_process';
 import {
-  copyFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readlinkSync, realpathSync, rmSync, unlinkSync, writeFileSync,
+  constants as fsConstants, copyFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readlinkSync, realpathSync, rmSync, unlinkSync, writeFileSync,
 } from 'node:fs';
 import { dirname, join, sep } from 'node:path';
 
@@ -38,51 +38,64 @@ function destInside(root, to) {
   return p === r || p.startsWith(`${r}${sep}`);
 }
 
+// `to`, or `to~2`, `to~3`, ... when that name is already taken under salvage.
+function freeName(to) {
+  let name = to;
+  for (let n = 2; lstatSync(name, { throwIfNoEntry: false }); n++) name = `${to}~${n}`;
+  return name;
+}
+
+const firstLine = (e) => String(e?.message ?? e).split('\n')[0];
+
 // Copy each dirty file under `dest`, then put the repo back to HEAD for those paths. A symlink is kept as
 // `<path>.symlink`, a text file holding its target: no link is ever created under salvage/ and the target is
 // never read. A path under a symlinked parent is skipped (logged): it is restored from HEAD once the link is gone.
+// Each path is handled on its own: one that cannot be saved is logged and left in place, never discarded.
 function moveAside(repo, dirty, dest, log, label) {
   mkdirSync(dest, { recursive: true });
-  const skipped = [];
+  const linked = []; // under a symlinked parent: nothing of the repo's own to save, restored from HEAD below
+  const saved = [];
   for (const d of dirty) {
     const { path } = d;
-    const src = join(repo, path);
-    if (underLink(repo, path)) { log(`skipped ${label}${path}: a parent is a symlink (not read through it)`); skipped.push(d); continue; }
-    const st = lstatSync(src, { throwIfNoEntry: false });
-    const to = join(dest, st?.isSymbolicLink() ? `${path}.symlink` : path);
-    if ((st?.isSymbolicLink() || st?.isFile()) && !destInside(dest, to)) {
-      log(`skipped ${label}${path}: its salvage path ${to} leaves ${dest}`);
-      skipped.push(d);
-      continue;
-    }
-    if (st?.isSymbolicLink()) {
-      const target = readlinkSync(src);
-      writeFileSync(to, target);
-      log(`salvaged ${label}${path} -> ${to} (symlink to ${target})`);
-    } else if (st?.isFile()) {
-      copyFileSync(src, to);
-      log(`salvaged ${label}${path} -> ${to}`);
-    } else {
-      log(`salvaged ${label}${path} (deleted locally; restored from HEAD)`);
-    }
-  }
-  const rest = dirty.filter((d) => !skipped.includes(d));
-  const tracked = rest.filter((d) => d.inHead).map((d) => d.path);
-  const untracked = rest.filter((d) => !d.inHead).map((d) => d.path);
-  if (untracked.length) {
-    git(repo, ['rm', '-q', '-r', '--cached', '--ignore-unmatch', '--', ...untracked]);
-    for (const p of untracked) {
-      const abs = join(repo, p);
-      if (lstatSync(abs, { throwIfNoEntry: false })?.isSymbolicLink()) unlinkSync(abs); // rmSync misses a dangling link
-      else rmSync(abs, { force: true, recursive: true });
+    try {
+      const src = join(repo, path);
+      if (underLink(repo, path)) { log(`skipped ${label}${path}: a parent is a symlink (not read through it)`); linked.push(d); continue; }
+      const st = lstatSync(src, { throwIfNoEntry: false });
+      if (st?.isSymbolicLink() || st?.isFile()) {
+        const want = join(dest, st.isSymbolicLink() ? `${path}.symlink` : path);
+        if (!destInside(dest, want)) { log(`skipped ${label}${path}: its salvage path ${want} leaves ${dest}; left in place`); continue; }
+        const to = freeName(want);
+        if (st.isSymbolicLink()) {
+          const target = readlinkSync(src);
+          writeFileSync(to, target, { flag: 'wx' });
+          log(`salvaged ${label}${path} -> ${to} (symlink to ${target})`);
+        } else {
+          copyFileSync(src, to, fsConstants.COPYFILE_EXCL);
+          log(`salvaged ${label}${path} -> ${to}`);
+        }
+      } else {
+        log(`salvaged ${label}${path} (deleted locally; restored from HEAD)`);
+      }
+      saved.push(d);
+    } catch (e) {
+      log(`could not salvage ${label}${path} (${firstLine(e)}); left in place`);
     }
   }
-  if (tracked.length) git(repo, ['checkout', 'HEAD', '--', ...tracked]);
+  const undo = (list, what, fn) => {
+    for (const d of list) {
+      try { fn(d.path); } catch (e) { log(`warning: could not ${what} ${label}${d.path}: ${firstLine(e)}`); }
+    }
+  };
+  undo(saved.filter((d) => !d.inHead), 'remove', (p) => {
+    git(repo, ['rm', '-q', '-r', '--cached', '--ignore-unmatch', '--', p]);
+    const abs = join(repo, p);
+    if (lstatSync(abs, { throwIfNoEntry: false })?.isSymbolicLink()) unlinkSync(abs); // rmSync misses a dangling link
+    else rmSync(abs, { force: true, recursive: true });
+  });
+  const restore = (p) => git(repo, ['checkout', 'HEAD', '--', p]);
+  undo(saved.filter((d) => d.inHead), 'restore', restore);
   // With the links gone, the skipped tracked paths can come back from HEAD.
-  const back = skipped.filter((d) => d.inHead && !underLink(repo, d.path)).map((d) => d.path);
-  if (back.length) {
-    try { git(repo, ['checkout', 'HEAD', '--', ...back]); } catch (e) { log(`warning: could not restore ${back.join(', ')} from HEAD: ${String(e.message).split('\n')[0]}`); }
-  }
+  undo(linked.filter((d) => d.inHead && !underLink(repo, d.path)), 'restore', restore);
 }
 
 function newDir(ctx) {
@@ -110,10 +123,17 @@ export function salvage(ctx, { paths, code = true, reason }) {
   let any = false;
   const meta = dirtyPaths(clone, paths, { skipWorkspace: true });
   if (meta.length) { moveAside(clone, meta, join(dir, 'meta'), log, ''); any = true; }
-  if (code) {
+  // A symlinked workspace or checkout points at a repo outside the clone: never run git or rm against it.
+  const linkedDir = (rel) => {
+    if (!lstatSync(join(clone, rel), { throwIfNoEntry: false })?.isSymbolicLink()) return false;
+    log(`skipped ${rel}: it is a symlink (not salvaged through it)`);
+    return true;
+  };
+  if (code && !linkedDir('workspace')) {
     const ws = join(clone, 'workspace');
     for (const key of existsSync(ws) ? readdirSync(ws).filter((k) => !k.startsWith('.')) : []) {
       const repo = join(ws, key);
+      if (linkedDir(`workspace/${key}`)) continue;
       if (!existsSync(join(repo, '.git'))) continue;
       const dirty = dirtyPaths(repo);
       if (dirty.length) { moveAside(repo, dirty, join(dir, 'workspace', key), log, `workspace/${key}/`); any = true; }

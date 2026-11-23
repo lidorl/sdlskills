@@ -261,7 +261,10 @@ export function readResult(path) {
       const q = r.request;
       if (!q || typeof q !== 'object') return bad('request result needs a request object');
       if (!REQUEST_KINDS.includes(q.kind)) return bad(`request.kind must be one of ${REQUEST_KINDS.join('|')}`);
-      if (!q.sections || typeof q.sections !== 'object') return bad('request.sections is required');
+      if (!q.sections || typeof q.sections !== 'object' || Array.isArray(q.sections)) return bad('request.sections is required');
+      for (const [k, v] of Object.entries(q.sections)) {
+        if (typeof v !== 'string') return bad(`request.sections.${k} must be a string`);
+      }
       if (!str(q.sections.Request)) return bad('request.sections.Request must be a non-empty string');
       if (!str(q.sections.Context)) return bad('request.sections.Context must be a non-empty string');
       if (typeof q.blocking !== 'boolean') return bad('request.blocking must be a boolean');

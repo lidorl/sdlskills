@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { makeBoard } from '../board/fixtures.mjs';
 import { salvage } from './salvage.mjs';
@@ -62,4 +62,42 @@ test('S9: a tracked file under a directory replaced by a symlink is skipped, nev
   assert.ok(lstatSync(join(clone, 'd')).isDirectory(), 'the link is gone and the tracked dir is back');
   assert.equal(readFileSync(join(clone, 'd/x.md'), 'utf8'), 'orig\n');
   assert.equal(execFileSync('git', ['status', '--porcelain'], { cwd: clone, encoding: 'utf8' }), '');
+});
+
+test('P3-10: a salvage name already taken gets a unique suffix; one unreadable path never stops the rest', () => {
+  const b = makeBoard();
+  const clone = b.clone('meta');
+  symlinkSync('/nowhere/target', join(clone, 'a'));
+  writeFileSync(join(clone, 'a.symlink'), 'a regular file\n');
+  writeFileSync(join(clone, 'locked.md'), 'unreadable\n');
+  chmodSync(join(clone, 'locked.md'), 0o000);
+  writeFileSync(join(clone, 'z.md'), 'after the bad one\n');
+  const logs = [];
+  try {
+    const dir = salvage(ctxFor(b, clone, logs), { code: false, reason: 'test' });
+    const kept = readdirSync(join(dir, 'meta')).sort();
+    assert.deepEqual(kept, ['a.symlink', 'a.symlink~2', 'z.md'], logs.join('\n'));
+    const texts = kept.slice(0, 2).map((n) => readFileSync(join(dir, 'meta', n), 'utf8')).sort();
+    assert.deepEqual(texts, ['/nowhere/target', 'a regular file\n']);
+    assert.ok(logs.some((l) => /could not salvage locked\.md/.test(l)), logs.join('\n'));
+    assert.ok(lstatSync(join(clone, 'locked.md')).isFile(), 'a path that could not be saved is left in place');
+    assert.equal(lstatSync(join(clone, 'z.md'), { throwIfNoEntry: false }), undefined, 'the paths after it were salvaged');
+  } finally { chmodSync(join(clone, 'locked.md'), 0o644); }
+});
+
+test('P3-10: salvage with code never touches a workspace or workspace/<key> that is a symlink', () => {
+  for (const linkWorkspace of [true, false]) {
+    const b = makeBoard({ files: { '.gitignore': 'workspace/\n' } });
+    const clone = b.clone('meta');
+    const outside = b.clone('outside-repo'); // a real repo elsewhere, with a dirty file
+    writeFileSync(join(outside, 'README.md'), 'precious edit\n');
+    writeFileSync(join(outside, 'new.md'), 'precious new\n');
+    if (linkWorkspace) symlinkSync(join(b.dir), join(clone, 'workspace'));
+    else { mkdirSync(join(clone, 'workspace')); symlinkSync(outside, join(clone, 'workspace', 'api')); }
+    const logs = [];
+    salvage(ctxFor(b, clone, logs), { reason: 'test' });
+    assert.equal(readFileSync(join(outside, 'README.md'), 'utf8'), 'precious edit\n');
+    assert.equal(readFileSync(join(outside, 'new.md'), 'utf8'), 'precious new\n');
+    assert.ok(logs.some((l) => /skipped workspace.* is a symlink/.test(l)), logs.join('\n'));
+  }
 });

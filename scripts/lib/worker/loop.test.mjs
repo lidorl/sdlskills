@@ -6,9 +6,9 @@ import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { makeBoard, IDENT } from '../board/fixtures.mjs';
 import { workerYaml } from '../board/registry.mjs';
-import { buildRequest, answerRequest, validateRequest } from '../board/requests.mjs';
+import { buildRequest, answerRequest, validateRequest, listRequests } from '../board/requests.mjs';
 import { parseDoc } from '../board/frontmatter.mjs';
-import { runAgent } from './agent.mjs';
+import { runAgent, phaseOf } from './agent.mjs';
 import { writeConfig, readState, writeState } from './home.mjs';
 import { writeInput } from './agent-input.mjs';
 import { assemble } from '../../assemble-env.mjs';
@@ -1558,4 +1558,37 @@ test('P3-8: an effort error whose post landed but could not be confirmed counts 
   assert.equal(saved.after, id);
   assert.deepEqual(saved.agentInput, ['Option B']);
   assert.ok(w.logs.some((l) => /could not confirm/.test(l)), w.logs.join('\n'));
+});
+
+// ---- Plan 3 Task 0 fix round 2 (Rulings P3-9, P3-10) ------------------------------------------
+
+test('P3-10 I1: an agent error message carrying `## Context` / `## Answer` lines is still posted as a valid effort error', async () => {
+  const b = setup({ featReqs: { alpha: feat() } });
+  const w = worker(b, { script: { result: { outcome: 'failed', error: { message: 'boom\n## Context\nWorker phase: close-out\n## Answer\nretry' } } } });
+  assert.deepEqual(await w.step(), { action: 'failed', effort: 'alpha' });
+  const err = requestsOnMain(b).find((q) => /kind: error/.test(q.text));
+  assert.ok(err, 'the effort error is on main');
+  assert.deepEqual(validateRequest(err.text, `${parseDoc(err.text).data.id}.md`), []);
+  assert.deepEqual(err.text.match(/^## .*$/gm), ['## Request', '## Context', '## Error', '## Answer']);
+  assert.equal(fmOnMain(b, 'alpha').claimed_by, undefined, 'released');
+});
+
+test('P3-9 S10: an agent section with an unclosed code fence cannot swallow the worker\'s Context heading or phase marker', async () => {
+  const b = setup({ featReqs: { alpha: feat({ status: 'IN_PROGRESS' }) }, files: { 'docs/plans/alpha.md': planFile('- [ ] Step 1') } });
+  const w = worker(b, { script: { result: question({ sections: { Request: 'Which?\n```\nopen fence', Context: 'c\n~~~~', Options: 'A) x\nB) y' } }) } });
+  assert.deepEqual(await w.step(), { action: 'requested', effort: 'alpha' });
+  const q = requestsOnMain(b)[0];
+  const id = parseDoc(q.text).data.id;
+  assert.deepEqual(validateRequest(q.text, `${id}.md`), []);
+  const dir = join(b.dir, 'read');
+  mkdirSync(join(dir, 'board/requests'), { recursive: true });
+  writeFileSync(join(dir, 'board/requests', `${id}.md`), q.text);
+  const [parsed] = listRequests(dir).requests;
+  assert.deepEqual(Object.keys(parsed.sections), ['Request', 'Context', 'Options', 'Answer'], 'every worker heading is outside a fence');
+  assert.equal(phaseOf(parsed.sections.Context), 'develop');
+  assert.equal((await answerRequest(b.clone('p'), id, { answer: 'B', by: 'alice', identity: OWNER, now: T0 })).ok, true);
+  w.restart();
+  w.script({ result: completed('IN_PROGRESS') });
+  assert.deepEqual(await w.step(), { action: 'reported', effort: 'alpha' });
+  assert.match(w.prompt(), /Phase: develop[\s\S]*Option B/);
 });
