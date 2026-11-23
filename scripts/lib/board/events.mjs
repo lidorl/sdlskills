@@ -31,7 +31,7 @@ export function parseLog(root, { ref = 'origin/main', limit = 2000, sinceSha } =
   const out = execFileSync('git', [
     'log', range, '-n', String(limit),
     '--format=%H%x00%an%x00%aI%x00%s%x00%(trailers:unfold,only)%x1e',
-  ], { cwd: root, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+  ], { cwd: root, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] });
   const events = [];
   for (const rec of out.split('\x1e')) {
     if (!rec.trim()) continue;

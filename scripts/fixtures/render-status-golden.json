@@ -1,0 +1,85 @@
+{
+  "generated": "2026-11-23 00:54",
+  "features": [
+    {
+      "name": "alpha",
+      "title": "Alpha feature",
+      "status": "IN_PROGRESS",
+      "priority": "high",
+      "severity": "major",
+      "date": "2026-11-01",
+      "feat_req": "docs/feat-req/alpha.md",
+      "design": "docs/design/alpha.md",
+      "plan": [
+        "docs/plans/alpha.md"
+      ],
+      "plan_progress": "1/2",
+      "pr_progress": "1/2 merged"
+    },
+    {
+      "name": "beta",
+      "title": "Beta feature",
+      "status": "PLANNED",
+      "priority": "medium",
+      "severity": "minor",
+      "date": "2026-11-02",
+      "feat_req": "docs/feat-req/beta.md",
+      "design": null,
+      "plan": [],
+      "plan_progress": null,
+      "pr_progress": null
+    },
+    {
+      "name": "delta",
+      "title": "Delta | feature",
+      "status": "ACCEPTED",
+      "priority": "high",
+      "severity": "critical",
+      "date": "2026-11-04",
+      "feat_req": "docs/feat-req/delta.md",
+      "design": null,
+      "plan": [],
+      "plan_progress": null,
+      "pr_progress": null
+    },
+    {
+      "name": "eps",
+      "title": "Epsilon feature",
+      "status": "PARKED",
+      "priority": "low",
+      "severity": "minor",
+      "date": "2026-11-05",
+      "feat_req": "docs/feat-req/eps.md",
+      "design": null,
+      "plan": [],
+      "plan_progress": null,
+      "pr_progress": null
+    },
+    {
+      "name": "gamma",
+      "title": "Gamma feature",
+      "status": "DESIGNED",
+      "priority": "low",
+      "severity": "minor",
+      "date": "2026-11-03",
+      "feat_req": "docs/feat-req/gamma.md",
+      "design": null,
+      "plan": [],
+      "plan_progress": null,
+      "pr_progress": null
+    },
+    {
+      "name": "zeta",
+      "title": "Zeta feature",
+      "status": "IMPLEMENTED",
+      "priority": "medium",
+      "severity": "minor",
+      "date": "2026-11-06",
+      "feat_req": "docs/feat-req/zeta.md",
+      "design": null,
+      "plan": [],
+      "plan_progress": null,
+      "pr_progress": null
+    }
+  ]
+}
