@@ -5,7 +5,7 @@ import { parse } from 'yaml';
 export const DEFAULT_CONFIG_YAML = `# board/config.yml — board and worker settings, shared by everyone on this board
 lease_ttl: 4h            # a claim with no report or renewal for this long is stale, and anyone may take it over
 idle_poll: 60s           # how often an idle worker pulls the board
-phase_timeout: 3h        # the longest one agent run may take
+phase_timeout: 3h        # the longest one agent run may take; must be shorter than lease_ttl
 backoff: [5m, 15m, 60m]  # waits after consecutive effort errors
 watch_interval: 30s      # default poll interval for \`sdlc watch\`
 `;
@@ -58,11 +58,12 @@ export function validateConfig(obj) {
   // taken over. Checked against the defaults for whichever of the two is not set.
   // A bad value is already reported above, so it is skipped here.
   const value = (key) => (key in obj ? obj[key] : DEFAULTS[key]);
+  const shown = (key) => (key in obj ? String(obj[key]) : `${DEFAULTS[key]} (default)`);
   const ms = (key) => { try { return parseDuration(value(key)); } catch { return null; } };
   const phase = ms('phase_timeout');
   const lease = ms('lease_ttl');
   if (phase !== null && lease !== null && phase >= lease) {
-    problems.push(`phase_timeout (${value('phase_timeout')}) must be shorter than lease_ttl (${value('lease_ttl')})`);
+    problems.push(`phase_timeout (${shown('phase_timeout')}) must be shorter than lease_ttl (${shown('lease_ttl')}): set a shorter phase_timeout or a longer lease_ttl`);
   }
   return problems;
 }

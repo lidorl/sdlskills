@@ -6,7 +6,7 @@ import { dirname } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fetchMain, snapshotMain, identityEnv, showFile, BoardError } from '../board/git.mjs';
 import { release, holds, committedFm, featReqPath } from '../board/claims.mjs';
-import { listRequests, postRequest, newRequestId } from '../board/requests.mjs';
+import { listRequests, postRequest, newRequestId, defangHeadings } from '../board/requests.mjs';
 import { redact } from '../board/redact.mjs';
 import { reportPaths } from '../board/paths.mjs';
 import { reportEffort, PROTOCOL_FIELDS } from '../board/report.mjs';
@@ -198,7 +198,7 @@ async function handleCompleted(ctx, slug, status, result, keys) {
 }
 
 async function handleRequest(ctx, slug, status, result, keys) {
-  const { cfg, deps, home, clone, identity } = ctx;
+  const { cfg, deps, home, clone } = ctx;
   const q = result.request;
   let progressed = false;
   if (effortDirty(clone, slug)) { // a gate asks about what the agent wrote: publish it first
@@ -211,8 +211,9 @@ async function handleRequest(ctx, slug, status, result, keys) {
     for (const f of failedPushes(code)) deps.log(`warning: ${f}; the commits stay in the local branch`);
     progressed = code.advanced.length > 0;
   }
-  // Every section is the agent's text, bound for a shared repo: redact all of them (Error is also fenced).
-  const sections = Object.fromEntries(Object.entries(q.sections).map(([k, v]) => [k, typeof v === 'string' ? redact(v) : v]));
+  // Every section is the agent's text, bound for a shared repo: redact all of them (Error is also fenced), and
+  // defang their headings so none can open a section of its own (a forged Context or phase marker).
+  const sections = Object.fromEntries(Object.entries(q.sections).map(([k, v]) => [k, typeof v === 'string' ? defangHeadings(redact(v)) : v]));
   // The phase marker routes the answer: only the worker writes one, as the Context's last line.
   sections.Context = [stripPhaseNotes(sections.Context), ...phaseLine(ctx)].filter(Boolean).join('\n\n');
   const now = deps.now();
@@ -222,17 +223,8 @@ async function handleRequest(ctx, slug, status, result, keys) {
     id: newRequestId(now, deps.rand), kind: q.kind, gate: q.gate ?? null, scope: 'effort', effort: slug, phase: status,
     worker: cfg.id, for: forWho, blocking: q.blocking, now, sections,
   };
-  let r;
-  try {
-    r = await postRequest(clone, req, {
-      identity, workerId: cfg.id, releaseFrom: q.blocking ? { slug, claimant: cfg.id } : undefined, sleep: deps.sleep, hooks: deps.hooks,
-    });
-  } catch (e) {
-    // Pushed but not confirmed: the request is on main, so handling this result again would post it twice.
-    if (!(e instanceof BoardError && e.pushed)) throw e;
-    deps.log(`posted ${req.id} for ${slug} but could not confirm it (${firstLine(e)}); not posting it again`);
-    r = { ok: true, id: req.id };
-  }
+  // Pushed but not confirmed: the request is on main, so handling this result again would post it twice.
+  const r = await postLanded(ctx, slug, req, { releaseFrom: q.blocking ? { slug, claimant: cfg.id } : undefined });
   if (!r.ok) {
     if (r.reason === 'replaced') return lose(ctx, slug);
     if (r.reason === 'invalid') return effortError(ctx, slug, status, `the agent's request is invalid: ${r.problems.join('; ')}`, {});
@@ -249,6 +241,19 @@ async function handleRequest(ctx, slug, status, result, keys) {
     return effortError(ctx, slug, status, `no progress: ${STALL_LIMIT} runs in a row changed nothing (the last one only posted ${q.kind} ${r.id})`, { keys, tried: result.summary });
   }
   return { action: 'requested', effort: slug };
+}
+
+// postRequest, where a post that pushed but could not be confirmed counts as posted (it is on main; posting it
+// again would make a duplicate). -> postRequest's result
+async function postLanded(ctx, slug, req, { releaseFrom }) {
+  const { cfg, deps, clone, identity } = ctx;
+  try {
+    return await postRequest(clone, req, { identity, workerId: cfg.id, releaseFrom, sleep: deps.sleep, hooks: deps.hooks });
+  } catch (e) {
+    if (!(e instanceof BoardError && e.pushed)) throw e;
+    deps.log(`posted ${req.id} for ${slug} but could not confirm it (${firstLine(e)}); not posting it again`);
+    return { ok: true, id: req.id };
+  }
 }
 
 // The worker was stopped mid-run: publish what the agent got done (code branches, the effort's changed docs,
@@ -281,7 +286,7 @@ export async function letGo(ctx, slug, keys) {
 // A blocking effort error: code pushed, leftovers salvaged, error posted with the redacted log tail, and
 // released in the same commit. Unapplied answers stay saved and are listed.
 export async function effortError(ctx, slug, status, message, { keys = [], logPath, tried }) {
-  const { cfg, deps, home, clone, identity } = ctx;
+  const { cfg, deps, home, clone } = ctx;
   const code = pushCodeBranches(clone, slug, keys);
   const dir = salvage(ctx, { reason: `effort error on ${slug}` });
   const tail = logPath && existsSync(logPath) ? lastLines(readFileSync(logPath, 'utf8'), 50) : '';
@@ -304,7 +309,7 @@ export async function effortError(ctx, slug, status, message, { keys = [], logPa
       Error: tail || message,
     },
   };
-  const r = await postRequest(clone, req, { identity, workerId: cfg.id, releaseFrom: { slug, claimant: cfg.id }, sleep: deps.sleep, hooks: deps.hooks });
+  const r = await postLanded(ctx, slug, req, { releaseFrom: { slug, claimant: cfg.id } });
   // Unapplied answers wait for this error's answer, which re-claims the effort.
   const input = readInput(home, slug);
   if (r.ok && input.length) writeInput(home, slug, input, { after: r.id, phase });

@@ -3,9 +3,9 @@
 // <home>/salvage/<stamp>/ (same relative paths, each one logged) and the clone goes back to HEAD.
 import { execFileSync } from 'node:child_process';
 import {
-  copyFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readlinkSync, rmSync, symlinkSync, unlinkSync, writeFileSync,
+  copyFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readlinkSync, realpathSync, rmSync, unlinkSync, writeFileSync,
 } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, join, sep } from 'node:path';
 
 const git = (cwd, args) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
 const stampOf = (d) => d.toISOString().replace(/\.\d{3}Z$/, 'Z').replace(/[-:]/g, '');
@@ -21,28 +21,54 @@ function dirtyPaths(repo, only, { skipWorkspace = false } = {}) {
   return paths.map((path) => ({ path, inHead: git(repo, ['ls-tree', '--name-only', 'HEAD', '--', path]).trim() !== '' }));
 }
 
-// Copy each dirty file under `dest`, then put the repo back to HEAD for those paths. A symlink is kept as a link
-// (its target is never read or copied: it may point anywhere on the host).
+// A path with a symlink among its parents: reading or restoring it would go through the link.
+function underLink(repo, path) {
+  const parts = path.split('/');
+  for (let i = 1; i < parts.length; i++) {
+    if (lstatSync(join(repo, ...parts.slice(0, i)), { throwIfNoEntry: false })?.isSymbolicLink()) return true;
+  }
+  return false;
+}
+
+// Make `to`'s parent directory; -> false unless it resolves inside `root` (nothing is ever written through a link).
+function destInside(root, to) {
+  mkdirSync(dirname(to), { recursive: true });
+  const r = realpathSync(root);
+  const p = realpathSync(dirname(to));
+  return p === r || p.startsWith(`${r}${sep}`);
+}
+
+// Copy each dirty file under `dest`, then put the repo back to HEAD for those paths. A symlink is kept as
+// `<path>.symlink`, a text file holding its target: no link is ever created under salvage/ and the target is
+// never read. A path under a symlinked parent is skipped (logged): it is restored from HEAD once the link is gone.
 function moveAside(repo, dirty, dest, log, label) {
-  for (const { path } of dirty) {
+  mkdirSync(dest, { recursive: true });
+  const skipped = [];
+  for (const d of dirty) {
+    const { path } = d;
     const src = join(repo, path);
+    if (underLink(repo, path)) { log(`skipped ${label}${path}: a parent is a symlink (not read through it)`); skipped.push(d); continue; }
     const st = lstatSync(src, { throwIfNoEntry: false });
-    const to = join(dest, path);
+    const to = join(dest, st?.isSymbolicLink() ? `${path}.symlink` : path);
+    if ((st?.isSymbolicLink() || st?.isFile()) && !destInside(dest, to)) {
+      log(`skipped ${label}${path}: its salvage path ${to} leaves ${dest}`);
+      skipped.push(d);
+      continue;
+    }
     if (st?.isSymbolicLink()) {
-      mkdirSync(dirname(to), { recursive: true });
-      symlinkSync(readlinkSync(src), to);
-      log(`salvaged ${label}${path} -> ${to} (symlink)`);
+      const target = readlinkSync(src);
+      writeFileSync(to, target);
+      log(`salvaged ${label}${path} -> ${to} (symlink to ${target})`);
     } else if (st?.isFile()) {
-      mkdirSync(dirname(to), { recursive: true });
       copyFileSync(src, to);
       log(`salvaged ${label}${path} -> ${to}`);
     } else {
       log(`salvaged ${label}${path} (deleted locally; restored from HEAD)`);
     }
   }
-  const tracked = dirty.filter((d) => d.inHead).map((d) => d.path);
-  const untracked = dirty.filter((d) => !d.inHead).map((d) => d.path);
-  if (tracked.length) git(repo, ['checkout', 'HEAD', '--', ...tracked]);
+  const rest = dirty.filter((d) => !skipped.includes(d));
+  const tracked = rest.filter((d) => d.inHead).map((d) => d.path);
+  const untracked = rest.filter((d) => !d.inHead).map((d) => d.path);
   if (untracked.length) {
     git(repo, ['rm', '-q', '-r', '--cached', '--ignore-unmatch', '--', ...untracked]);
     for (const p of untracked) {
@@ -50,6 +76,12 @@ function moveAside(repo, dirty, dest, log, label) {
       if (lstatSync(abs, { throwIfNoEntry: false })?.isSymbolicLink()) unlinkSync(abs); // rmSync misses a dangling link
       else rmSync(abs, { force: true, recursive: true });
     }
+  }
+  if (tracked.length) git(repo, ['checkout', 'HEAD', '--', ...tracked]);
+  // With the links gone, the skipped tracked paths can come back from HEAD.
+  const back = skipped.filter((d) => d.inHead && !underLink(repo, d.path)).map((d) => d.path);
+  if (back.length) {
+    try { git(repo, ['checkout', 'HEAD', '--', ...back]); } catch (e) { log(`warning: could not restore ${back.join(', ')} from HEAD: ${String(e.message).split('\n')[0]}`); }
   }
 }
 

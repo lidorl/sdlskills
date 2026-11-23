@@ -526,10 +526,12 @@ test('P2-20a: with a local commit ahead, `sdlc claim` (a protocol write) lands b
   writeFileSync(join(c, 'mine.md'), 'x\n');
   git(c, 'add', 'mine.md'); git(c, 'commit', '-q', '-m', 'person work');
   assert.equal((await cli(c, ['claim', 'bulk-export'])).code, 0);
+  assert.equal(parseDoc(git(b.remote, 'show', 'main:docs/feat-req/bulk-export.md')).data.claimed_by, 'lidorl', 'the claim is on origin');
   const before = git(b.remote, 'rev-parse', 'main');
   writeFileSync(join(c, 'docs/feat-req/bulk-export.md'), readFileSync(join(c, 'docs/feat-req/bulk-export.md'), 'utf8').replace('status: ACCEPTED', 'status: DESIGNED'));
   const r = await cli(c, ['report', 'bulk-export', '--phase', 'DESIGNED'], { now: hours(1) });
   assert.notEqual(r.code, 0);
+  assert.match(r.err, /local commits ahead of origin\/main/);
   assert.equal(git(b.remote, 'rev-parse', 'main'), before, 'nothing pushed');
   assert.ok(!git(b.remote, 'log', '--format=%s', 'main').includes('person work'));
 });

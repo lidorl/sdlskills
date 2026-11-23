@@ -112,3 +112,9 @@ test('P2-20a: validateConfig refuses phase_timeout >= lease_ttl (defaults filled
   const t = withConfig('lease_ttl: 2h\n');
   try { assert.throws(() => loadConfig(t.root), /board\/config\.yml: phase_timeout/); } finally { t.done(); }
 });
+
+test('P3-8: the phase_timeout/lease_ttl error marks defaulted values and says how to fix it; the template states the rule', () => {
+  assert.deepEqual(validateConfig({ lease_ttl: '2h' }), ['phase_timeout (3h (default)) must be shorter than lease_ttl (2h): set a shorter phase_timeout or a longer lease_ttl']);
+  assert.deepEqual(validateConfig({ phase_timeout: '5h' }), ['phase_timeout (5h) must be shorter than lease_ttl (4h (default)): set a shorter phase_timeout or a longer lease_ttl']);
+  assert.match(DEFAULT_CONFIG_YAML, /phase_timeout:.*shorter than lease_ttl/);
+});

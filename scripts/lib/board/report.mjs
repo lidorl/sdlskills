@@ -66,7 +66,7 @@ export function syncKeepingWork(clone, env, { fetch = true } = {}) {
   const head = git(clone, ['rev-parse', 'HEAD'], { env }).trim();
   if (head === git(clone, ['rev-parse', 'origin/main'], { env }).trim()) return;
   if (git(clone, ['merge-base', '--is-ancestor', 'HEAD', 'origin/main'], { env, allowFail: true }) === null) {
-    throw new BoardError('cannot fast-forward to origin/main');
+    throw new BoardError('local commits ahead of origin/main: cannot fast-forward (move them off main first)');
   }
   const dirty = git(clone, ['status', '--porcelain=v1', '-z', '--no-renames', '--untracked-files=all'], { env })
     .split('\0').filter(Boolean).map((rec) => rec.slice(3));

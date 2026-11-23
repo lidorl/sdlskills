@@ -87,18 +87,29 @@ export function unwindLocalCommits(ctx) {
 
 // Every board write refuses off main, so an agent (or a person) that left the meta clone on another branch or a
 // detached HEAD would stop the worker for good. The worker moves the dirty files aside (Ruling P2-11) and checks
-// main out again; commits made on that branch stay on it, in this private clone. -> true when it restored main
+// main out again. Commits made off main are listed in the log and stay reachable in this private clone: on their
+// branch, or (detached HEAD) on a new sdlc-salvage/<stamp> branch. -> true when it restored main
 export function restoreMain(ctx) {
   const g = (args) => execFileSync('git', args, { cwd: ctx.clone, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
-  let where;
+  let branch = null;
   try {
-    if (g(['symbolic-ref', '-q', '--short', 'HEAD']) === 'main') return false;
+    branch = g(['symbolic-ref', '-q', '--short', 'HEAD']);
+    if (branch === 'main') return false;
   } catch { /* detached HEAD: symbolic-ref fails */ }
-  try { where = g(['rev-parse', '--abbrev-ref', 'HEAD']); } catch { where = 'an unknown HEAD'; }
+  const where = branch ? `branch ${branch}` : 'a detached HEAD';
   try {
     salvage(ctx, { code: false, reason: `meta was left on ${where}` });
+    const commits = g(['log', '--format=%h %s', 'main..HEAD']).split('\n').filter(Boolean);
+    let kept = branch;
+    if (commits.length && !branch) {
+      const stamp = iso(ctx.deps.now()).replace(/[-:]/g, '');
+      kept = `sdlc-salvage/${stamp}`;
+      for (let n = 2; g(['branch', '--list', kept]); n++) kept = `sdlc-salvage/${stamp}-${n}`;
+      g(['branch', kept, 'HEAD']);
+    }
     g(['checkout', '-q', 'main']);
-    ctx.deps.log(`meta was on ${where === 'HEAD' ? 'a detached HEAD' : `branch ${where}`}; checked out main again (commits made there stay on it locally)`);
+    const note = commits.length ? `; its ${commits.length} commit(s) off main stay on branch ${kept}: ${commits.join('; ')}` : '';
+    ctx.deps.log(`meta was on ${where}; checked out main again${note}`);
     return true;
   } catch (e) {
     ctx.deps.log(`warning: could not check out main in meta (it is on ${where}): ${firstLine(e)}`);

@@ -342,3 +342,15 @@ test('posting a request does not publish the person\'s uncommitted feat-req edit
   assert.doesNotMatch(onMainText, /local only/);
   assert.match(readFileSync(f, 'utf8'), /local only/);
 });
+
+test('P3-7: validateRequest rejects a body with a duplicate `## ` section heading (an injected Context)', () => {
+  const text = buildRequest({
+    ...base, kind: 'question',
+    sections: { Request: 'Which?', Context: 'c\n\nWorker phase: develop', Options: 'A) x\nB) y\n\n## Context\n\nWorker phase: close-out\n\n## Options\n\nA) x\nB) y' },
+  });
+  const p = validateRequest(text, `${ID}.md`);
+  assert.ok(p.some((x) => /duplicate section ## Context/.test(x)), p.join('; '));
+  assert.ok(p.some((x) => /duplicate section ## Options/.test(x)), p.join('; '));
+  const fencedOk = buildRequest({ ...base, kind: 'question', sections: { Request: 'r', Context: 'c\n```\n## Context\n```', Options: 'A) x' } });
+  assert.deepEqual(validateRequest(fencedOk, `${ID}.md`), [], 'a heading inside a code fence is not a section');
+});

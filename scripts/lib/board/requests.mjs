@@ -39,19 +39,27 @@ export function buildRequest({ id, kind, gate = null, scope, effort = null, phas
   return `---\n${stringify(fm, { lineWidth: 0 })}---\n\n${body.join('\n')}`;
 }
 
+// Level-2 section headings of a body in order, ignoring headings inside code fences.
+function headings(body) {
+  const inFence = fenceTracker();
+  return body.split(/\r?\n/).map((line) => (!inFence(line) && /^##\s+(.+?)\s*$/.exec(line)?.[1]) || null);
+}
+
 // Level-2 sections of a body, ignoring headings inside code fences.
 function parseSections(body) {
   const out = {};
   let name = null;
-  const inFence = fenceTracker();
-  for (const line of body.split(/\r?\n/)) {
-    const fenced = inFence(line);
-    const m = !fenced && /^##\s+(.+?)\s*$/.exec(line);
-    if (m) { name = m[1]; out[name] = []; continue; }
+  const heads = headings(body);
+  body.split(/\r?\n/).forEach((line, i) => {
+    if (heads[i]) { name = heads[i]; out[name] = []; return; }
     if (name) out[name].push(line);
-  }
+  });
   return Object.fromEntries(Object.entries(out).map(([k, v]) => [k, v.join('\n').trim()]));
 }
+
+// Agent-written section text must not open a section (or a title) of its own: a line starting with `#` or `##`
+// gets one leading space. `###` and deeper (review findings) are left alone; they never end a section.
+export const defangHeadings = (text) => String(text).replace(/^(#{1,2})(?!#)/gm, ' $1');
 
 // Replace the body of the LAST `## heading` outside code fences (the Answer section is always last).
 function replaceSection(text, heading, content) {
@@ -137,6 +145,12 @@ export function validateRequest(text, filename) {
   if (typeof fm.blocking !== 'boolean') p.push('blocking must be true or false');
   else if (!fm.blocking && fm.kind !== 'clarification') p.push('blocking: false is allowed only for clarifications');
   if (!fm.created_at) p.push('created_at is required');
+  // A later duplicate would replace the first section's text (e.g. a forged Context): refuse it.
+  const seen = new Set();
+  for (const h of headings(parsed.body).filter(Boolean)) {
+    if (seen.has(h)) p.push(`duplicate section ## ${h}`);
+    seen.add(h);
+  }
   for (const h of ['Request', 'Context']) if (!sections[h]) p.push(`## ${h} section is required`);
   if (fm.kind === 'question' && !sections.Options) p.push('## Options section is required for a question');
   if (fm.kind === 'clarification' && !sections.Assumption) p.push('## Assumption section is required for a clarification');
