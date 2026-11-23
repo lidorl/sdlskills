@@ -253,3 +253,14 @@ test('re-running --board reports the board as kept, not created', () => {
   assert.ok(!r.actions.some((a) => /created board/.test(a)));
   rmSync(dir, { recursive: true });
 });
+
+test('F3: installing into "." names the package after the directory, not "."', () => {
+  const dir = target();
+  const prev = process.cwd();
+  try {
+    process.chdir(dir);
+    install(opts('.'));
+  } finally { process.chdir(prev); }
+  const name = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8')).name;
+  assert.match(name, /^inst-/);
+});

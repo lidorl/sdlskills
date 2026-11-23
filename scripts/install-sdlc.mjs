@@ -27,7 +27,7 @@ import {
   cpSync,
   rmSync,
 } from 'node:fs';
-import { join, dirname, basename, relative, sep } from 'node:path';
+import { join, dirname, basename, resolve, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import { isEntryPoint } from './lib/is-entry-point.mjs';
@@ -245,7 +245,7 @@ export function install({
   const pkgExisted = existsSync(pkgPath);
   const pkg = pkgExisted ? JSON.parse(readFileSync(pkgPath, 'utf8')) : {};
   const before = JSON.stringify(pkg);
-  pkg.name ??= basename(targetDir);
+  pkg.name ??= basename(resolve(targetDir)).toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^[-._]+|[-._]+$/g, '') || 'sdlc-project';
   pkg.type ??= PKG_DEFAULTS.type;
   pkg.private ??= PKG_DEFAULTS.private;
   pkg.scripts = { ...PKG_DEFAULTS.scripts, ...pkg.scripts };
