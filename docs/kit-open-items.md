@@ -4,7 +4,15 @@ Unresolved design questions about the SDLC kit itself (not about any project tha
 
 ## Open Items
 
-- [ ] **Parallel agents / task claiming.** The current process (`select-next-task`, unified queue, `status: IN_PROGRESS`) assumes a single worker. Supporting 2+ agents needs: task claiming vs. locking, stale-claim recovery, worktree/branch isolation, merge/review ordering, and how `render-status.mjs` reflects concurrent work. Decided for now: **single worker**. **Promoted to a feature request on 2026-11-19:** [`feat-req/workers.md`](feat-req/workers.md). (The broader multi-repo *execution environment* idea is [`BRAINSTORMING.md`](../BRAINSTORMING.md) §1 — related but a separate axis.)
+- [ ] **Workers: deferred follow-ups.** The workers effort (`docs/feat-req/workers.md`, implemented across `docs/plans/workers-1..3.md`) left these decided-for-now items. Each is safe today; revisit when it bites.
+  - *Run lock.* Two starts can both win if one stalls >10 s exactly between the identity check and the rename during a takeover, or if a `--detach` parent dies between spawning the child and handing it the lock (no portable fix without `flock`). A running worker never re-checks the lock. `linkSync` fails on filesystems without hard links (exFAT, some network mounts) with an unclear error.
+  - *Process identity.* The agent's leftover process is verified by its command line's basename, so an exact pid reuse landing on a person's own interactive `claude` would match. Crash attribution can name a different start than the one that judged the lock stale.
+  - *Salvage.* A crafted pair of names (a link `x` and a dir `x.symlink/`) leaves one path dirty; a symlinked `workspace/<key>` is skipped but left in place. Salvage folders and saved agent input accumulate in the worker home with no cleanup.
+  - *Answers across workers.* An answer applied just before a takeover stays only in the losing worker's `run/agent-input/`; the Decisions line keeps the text, but the new holder's run doesn't receive it.
+  - *Visibility.* A worker that crashes while idle looks idle until its next start. STATUS.md derives worker state from the last 2000 board commits, so a long-running worker on a busy board can show as stopped.
+  - *Installer.* The "created board/" message over-claims when the board exists only partly. `npm ci` in a worker's clone has no timeout and runs the meta repo's lifecycle scripts (you trust your own meta repo). `start --detach` reports success before preflight runs in the child.
+  - *Smaller.* Registry rewrites drop hand-added keys; `retire --force` doesn't list what it deletes; a second Ctrl-C is ignored; `sdlc` uses plain prompts rather than the installer's menus; `:(icase)` over-refuses on case-sensitive filesystems.
+  - *Larger directions* stay in `BRAINSTORMING.md` §12 (control app), §13 (Slack bridge), §14 (workflow as claim arbiter), §15 (stop-all switch).
 
 - [ ] **`writing-plans` frontmatter contract.** `write-execution-plan` stamps `status`/`feat_req`/`design` onto the plan file *after* `superpowers:writing-plans` runs. If the upstream skill's output format changes, the stamp step may need updating. Watch for drift on `superpowers` upgrades.
 

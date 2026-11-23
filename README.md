@@ -112,6 +112,42 @@ Follow the **Next steps** the installer prints. In short:
 3. Open the SDLC repo in Claude Code or Copilot and run `/setup-sdlc`. It builds `repos.yml` and runs the autonomy interview.
 4. Start the loop: `/write-feature-request`, then `/select-next-task`.
 
+### Workers (optional)
+
+Workers let more than one agent work on your queue at once, on any number of machines. Each worker is a persistent process you own: it takes the next effort from the queue, runs Claude Code or Copilot headless on it one phase at a time, and reports back. Whenever it needs a person (an approval, a question, an error) it posts a request and moves on to other work instead of waiting.
+
+The SDLC repo's `main` branch is the shared **board**: claims, progress and requests are small commits there. Interactive sessions use the same board, so a person and the workers never pick the same effort.
+
+**Before you start:**
+
+- Every worker owner can push to the SDLC repo's `main` directly. A `main` that requires pull requests blocks the protocol. Forbid force-pushes on it.
+- `gh` is installed and logged in (`gh auth login`, then `gh auth setup-git`).
+- The agent CLI (`claude` or `copilot`) is installed and logged in on each worker machine.
+- Copilot runs shell commands without a sandbox, so give a Copilot worker its own OS user or VM.
+
+**Turn the board on:** answer Yes to "Will this project run workers, or share one board across several people?" during the guided install, or pass `--board`. That creates `board/` and `board/config.yml` (lease length, poll intervals, timeouts). Commit and push them.
+
+**Run a worker:**
+
+```bash
+npx sdlc worker create --agent claude --model <model>   # once; registers the worker on the board
+npx sdlc worker start <id> --detach                     # runs in the background; logs to ~/.sdlc/workers/<id>/logs/
+npx sdlc worker stop <id>                               # releases its claim and stops cleanly
+```
+
+On a machine without a clone of the SDLC repo, run the same command through `npx -p github:<org>/<sdlc-repo> sdlc worker create …`. A worker runs the `scripts/sdlc.mjs` on the SDLC repo's `main`, so it follows whatever kit version you have installed there.
+
+**Answer what workers ask:**
+
+```bash
+npx sdlc inbox             # your open requests, oldest first
+npx sdlc answer <id>       # approve, reject, pick an option, or reply
+npx sdlc watch             # follow claims, reports and requests as they land
+npx sdlc status            # workers, efforts in flight and the inbox
+```
+
+`docs/STATUS.md` shows the same board after `npm run status`. Without `board/`, none of this applies and the kit works as a single interactive session.
+
 ### Troubleshooting
 
 - **I installed into my code repository by mistake.** `git status` shows exactly what was added. Delete the untracked files and folders (the skills folder, the copied `scripts/`, `CLAUDE.process.md` or `.github/instructions/`, `repos.example.yml`, and the new `docs/` folders), then restore your own `package.json` and `.gitignore` with `git checkout -- package.json .gitignore`. Run the installer again against a new folder.
@@ -168,6 +204,7 @@ Three things keep it practical:
 | [`scripts/install-sdlc.mjs`](scripts/install-sdlc.mjs) | The Claude Code installer: scaffolds the kit into a target project. `scripts/install-sdlc-copilot.mjs` is the Copilot one. |
 | [`scripts/render-status.mjs`](scripts/render-status.mjs) | Derives `docs/STATUS.md` from feature-request frontmatter. Wired to a `Stop` hook. |
 | [`scripts/assemble-env.mjs`](scripts/assemble-env.mjs) / [`clean-env.mjs`](scripts/clean-env.mjs) | Reconstruct / tear down `workspace/` for a multi-repo effort (see the execution-environment feature). |
+| [`scripts/sdlc.mjs`](scripts/sdlc.mjs) | The `sdlc` CLI: the board (`next`, `claim`, `report`, `release`, `inbox`, `answer`, `watch`, `status`) and workers (`sdlc worker …`). Built on [`scripts/lib/board/`](scripts/lib/board/) and [`scripts/lib/worker/`](scripts/lib/worker/). |
 | [`repos.yml`](repos.yml) / [`repos/`](repos/) | The repository catalog — which repo does what. `repos.example.yml` is the annotated template. |
 | [`examples/react-components/`](examples/react-components/) | Optional React admin-console conventions skill. |
 | [`docs/design/STYLE_GUIDE.template.md`](docs/design/STYLE_GUIDE.template.md) | Starting point for a project style guide. |

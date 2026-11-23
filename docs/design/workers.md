@@ -159,13 +159,24 @@ Home: `${SDLC_HOME:-~/.sdlc}/workers/<id>/`
 
 ```
 config.json        { id, owner, meta_url, agent, model, cli_args, name, author: {name, email} }
-meta/              clone of the meta repo; code repos under meta/workspace/ (assemble-env, unchanged)
-state.json         local only: clean_stop flag, consecutive failures, backoff_until
-worker.pid         present while running
+meta/              clone of the meta repo (with its npm dependencies); code repos under meta/workspace/
+state.json         local only: clean_stop, failures, backoff_until, prepared { slug, claimed_at }
+worker.pid         the run lock: "<pid> <token>", created atomically; takeover markers worker.pid.takeover-* beside it
+agent-settings.json   Claude Code settings for the agent run (sandbox on)
 logs/worker.log    runtime log (detached stdout/stderr)
 logs/runs/<ts>-<effort>-<phase>.log   one agent run's transcript
+run/agent.pid      the running agent's process group (verified before any kill)
+run/agent-input/<slug>.json   answers applied to an effort but not yet acted on by a run
+salvage/<ts>/      leftovers moved out of the clone after a lost or failed effort (logged; links stored as <name>.symlink)
 meta/.sdlc-run/result.json   the result file for the current agent run (inside the agent's cwd; hidden by meta's .git/info/exclude)
 ```
+
+As shipped (Plans 1–3), these behaviours refine the design above:
+- **Board writes** (claim, renew, release, request, answer, apply) build their commit from `origin/main` in a temporary index and never touch the working tree; only `sdlc report` commits working-tree files.
+- **Salvage**: a worker never leaves another effort's leftovers in its clone. Dirty files go to `salvage/`, agent commits made in the meta clone are unwound into edits, and commits on a detached HEAD are pinned to an `sdlc-salvage/<stamp>` branch.
+- **Continuation**: a worker keeps unpushed code commits on re-claim only when `state.json`'s `prepared` marker proves it is continuing its own claim.
+- **Development done** is read from the plan (no unchecked steps). The agent's `development_done` is a hint.
+- **`for: owner`** in an agent's request addresses the worker's owner.
 
 Each worker has its own `meta/` clone and holds at most one effort at a time. So `workspace/.current-effort` stays a correct per-worker marker, and ADR 001's single `workspace/` holds unchanged inside each worker. That's the ADR 001 amendment (ADR 005): **per-worker meta clones** replace the deferred per-effort directories.
 

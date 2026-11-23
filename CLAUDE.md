@@ -12,7 +12,8 @@ A reusable, artifact-driven SDLC process for Claude Code plus the skills that im
 - [`install-sdlc.mjs`](install-sdlc.mjs) — the entry point: asks which tool the adopter uses (Claude Code or Copilot), then runs the matching installer below.
 - [`scripts/install-sdlc.mjs`](scripts/install-sdlc.mjs) — scaffolds the kit into a target project (vendors skills, copies scripts, docs skeleton, plugin, `package.json` / `.gitignore` wiring). See "Adopting the kit" below.
 - [`scripts/install-sdlc-copilot.mjs`](scripts/install-sdlc-copilot.mjs) — same installer for GitHub Copilot (VS Code, CLI): renames paths and rewrites references as files land in the target. [`copilot/skills/`](copilot/skills/) holds the review skills only that target gets.
-- [`scripts/render-status.mjs`](scripts/render-status.mjs) — derives `docs/STATUS.md` from feature-request frontmatter.
+- [`scripts/render-status.mjs`](scripts/render-status.mjs) — derives `docs/STATUS.md` from feature-request frontmatter (plus the board view in board mode).
+- [`scripts/sdlc.mjs`](scripts/sdlc.mjs) — the `sdlc` CLI for the work board and workers. The protocol lives in [`scripts/lib/board/`](scripts/lib/board/), the worker runtime in [`scripts/lib/worker/`](scripts/lib/worker/); see [`docs/design/workers.md`](docs/design/workers.md).
 - [`scripts/assemble-env.mjs`](scripts/assemble-env.mjs) / [`clean-env.mjs`](scripts/clean-env.mjs) — reconstruct / tear down `workspace/` for a multi-repo effort.
 - [`repos.yml`](repos.yml) / [`repos/`](repos/) — the repository catalog (multi-repo execution environment). [`repos.example.yml`](repos.example.yml) is the template.
 - [`examples/react-components/`](examples/react-components/) — optional React admin-console conventions skill.
