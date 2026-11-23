@@ -2,7 +2,9 @@
 // that did not land, a stray) would block every later effort and no person could reach them. They move to
 // <home>/salvage/<stamp>/ (same relative paths, each one logged) and the clone goes back to HEAD.
 import { execFileSync } from 'node:child_process';
-import { copyFileSync, existsSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import {
+  copyFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readlinkSync, rmSync, symlinkSync, unlinkSync, writeFileSync,
+} from 'node:fs';
 import { dirname, join } from 'node:path';
 
 const git = (cwd, args) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
@@ -19,12 +21,18 @@ function dirtyPaths(repo, only, { skipWorkspace = false } = {}) {
   return paths.map((path) => ({ path, inHead: git(repo, ['ls-tree', '--name-only', 'HEAD', '--', path]).trim() !== '' }));
 }
 
-// Copy each dirty file under `dest`, then put the repo back to HEAD for those paths.
+// Copy each dirty file under `dest`, then put the repo back to HEAD for those paths. A symlink is kept as a link
+// (its target is never read or copied: it may point anywhere on the host).
 function moveAside(repo, dirty, dest, log, label) {
   for (const { path } of dirty) {
     const src = join(repo, path);
-    if (existsSync(src) && statSync(src).isFile()) {
-      const to = join(dest, path);
+    const st = lstatSync(src, { throwIfNoEntry: false });
+    const to = join(dest, path);
+    if (st?.isSymbolicLink()) {
+      mkdirSync(dirname(to), { recursive: true });
+      symlinkSync(readlinkSync(src), to);
+      log(`salvaged ${label}${path} -> ${to} (symlink)`);
+    } else if (st?.isFile()) {
       mkdirSync(dirname(to), { recursive: true });
       copyFileSync(src, to);
       log(`salvaged ${label}${path} -> ${to}`);
@@ -37,7 +45,11 @@ function moveAside(repo, dirty, dest, log, label) {
   if (tracked.length) git(repo, ['checkout', 'HEAD', '--', ...tracked]);
   if (untracked.length) {
     git(repo, ['rm', '-q', '-r', '--cached', '--ignore-unmatch', '--', ...untracked]);
-    for (const p of untracked) rmSync(join(repo, p), { force: true, recursive: true });
+    for (const p of untracked) {
+      const abs = join(repo, p);
+      if (lstatSync(abs, { throwIfNoEntry: false })?.isSymbolicLink()) unlinkSync(abs); // rmSync misses a dangling link
+      else rmSync(abs, { force: true, recursive: true });
+    }
   }
 }
 

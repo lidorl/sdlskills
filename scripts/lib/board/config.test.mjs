@@ -29,10 +29,10 @@ test('parseDuration', () => {
 });
 
 test('loadConfig falls back per key', () => {
-  const t = withConfig('lease_ttl: 1h\n');
+  const t = withConfig('lease_ttl: 5h\n');
   try {
     const c = loadConfig(t.root);
-    assert.equal(c.leaseTtlMs, 3600e3);
+    assert.equal(c.leaseTtlMs, 5 * 3600e3);
     assert.equal(c.idlePollMs, 60e3);
     assert.equal(c.phaseTimeoutMs, 3 * 3600e3);
     assert.equal(c.watchIntervalMs, 30e3);
@@ -100,4 +100,15 @@ test('zero durations are refused: parseDuration, validateConfig and loadConfig',
   assert.equal(validateConfig({ idle_poll: '0s', backoff: ['5m', '0m'] }).length, 2);
   const t = withConfig('lease_ttl: 0s\n');
   try { assert.throws(() => loadConfig(t.root), /board\/config\.yml: lease_ttl/); } finally { t.done(); }
+});
+
+test('P2-20a: validateConfig refuses phase_timeout >= lease_ttl (defaults filled in for the missing one)', () => {
+  assert.match(validateConfig({ phase_timeout: '4h', lease_ttl: '4h' }).join(), /phase_timeout .*lease_ttl/);
+  assert.match(validateConfig({ phase_timeout: '5h' }).join(), /phase_timeout .*lease_ttl/);
+  assert.match(validateConfig({ lease_ttl: '2h' }).join(), /phase_timeout .*lease_ttl/);
+  assert.deepEqual(validateConfig({ phase_timeout: '1h', lease_ttl: '2h' }), []);
+  assert.equal(validateConfig({ phase_timeout: 'x', lease_ttl: '2h' }).length, 1, 'a bad duration is reported once');
+  assert.equal(validateConfig({ lease_ttl: null }).length, 1, 'an empty value is reported once');
+  const t = withConfig('lease_ttl: 2h\n');
+  try { assert.throws(() => loadConfig(t.root), /board\/config\.yml: phase_timeout/); } finally { t.done(); }
 });

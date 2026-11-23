@@ -60,8 +60,12 @@ export function planDone(root, slug, { log = () => {} } = {}) {
 }
 
 // The routed phase a worker records in the Context of a request it posts, so the answer goes back to it.
+// The worker strips any marker-like line from the agent's Context and appends its own, so the last marker is
+// the worker's: phaseOf reads that one.
 export const phaseNote = (phase) => `Worker phase: ${phase}`;
-export const PHASE_MARK = /^Worker phase: (develop|close-out)\s*$/m;
+const PHASE_MARK = /^Worker phase: (develop|close-out)\s*$/gm;
+export const stripPhaseNotes = (text) => String(text ?? '').replace(/^[ \t]*worker phase:.*(?:\r?\n|$)/gim, '').replace(/\n+$/, '');
+export const phaseOf = (context) => [...String(context ?? '').matchAll(PHASE_MARK)].at(-1)?.[1] ?? null;
 
 const SUPERPOWERS = new Set(['executing-plans']);
 
@@ -111,7 +115,8 @@ export function runDirProblem(clone) {
   if (dir && !dir.isDirectory()) return `meta/${RUN_DIR} is not a directory`;
   let tracked;
   try {
-    tracked = execFileSync('git', ['ls-files', '--', RUN_DIR], { cwd: clone, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+    // :(icase): on a case-insensitive filesystem a tracked .Sdlc-Run/ is the same directory as .sdlc-run/
+    tracked = execFileSync('git', ['ls-files', '--', `:(icase)${RUN_DIR}`], { cwd: clone, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
   } catch (e) { return `cannot check meta/${RUN_DIR} with git ls-files: ${String(e.message).split('\n')[0]}`; }
   if (tracked) return `meta/${RUN_DIR} is tracked by the meta repo (${tracked.split('\n')[0]}); remove it from the repo`;
   const file = lst(`${RUN_DIR}/result.json`);

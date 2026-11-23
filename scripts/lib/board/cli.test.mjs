@@ -519,3 +519,17 @@ test('report whose edit truly conflicts with main exits 1, pushes nothing and le
   assert.equal(readFileSync(join(c, 'docs/design/bulk-export.md'), 'utf8'), '# design\nmine\n');
   assert.equal(git(c, 'stash', 'list'), '');
 });
+
+test('P2-20a: with a local commit ahead, `sdlc claim` (a protocol write) lands but `sdlc report` refuses and pushes nothing', async () => {
+  const b = makeBoard({ featReqs: { 'bulk-export': feat() } });
+  const c = b.clone('c');
+  writeFileSync(join(c, 'mine.md'), 'x\n');
+  git(c, 'add', 'mine.md'); git(c, 'commit', '-q', '-m', 'person work');
+  assert.equal((await cli(c, ['claim', 'bulk-export'])).code, 0);
+  const before = git(b.remote, 'rev-parse', 'main');
+  writeFileSync(join(c, 'docs/feat-req/bulk-export.md'), readFileSync(join(c, 'docs/feat-req/bulk-export.md'), 'utf8').replace('status: ACCEPTED', 'status: DESIGNED'));
+  const r = await cli(c, ['report', 'bulk-export', '--phase', 'DESIGNED'], { now: hours(1) });
+  assert.notEqual(r.code, 0);
+  assert.equal(git(b.remote, 'rev-parse', 'main'), before, 'nothing pushed');
+  assert.ok(!git(b.remote, 'log', '--format=%s', 'main').includes('person work'));
+});

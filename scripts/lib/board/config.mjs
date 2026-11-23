@@ -54,6 +54,16 @@ export function validateConfig(obj) {
       problems.push(`${key}: unknown key`);
     }
   }
+  // A run must end inside one lease: a renew can fail while it runs, and a lease that runs out mid-run is
+  // taken over. Checked against the defaults for whichever of the two is not set.
+  // A bad value is already reported above, so it is skipped here.
+  const value = (key) => (key in obj ? obj[key] : DEFAULTS[key]);
+  const ms = (key) => { try { return parseDuration(value(key)); } catch { return null; } };
+  const phase = ms('phase_timeout');
+  const lease = ms('lease_ttl');
+  if (phase !== null && lease !== null && phase >= lease) {
+    problems.push(`phase_timeout (${value('phase_timeout')}) must be shorter than lease_ttl (${value('lease_ttl')})`);
+  }
   return problems;
 }
 

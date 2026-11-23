@@ -13,6 +13,14 @@ import { safePath } from './safe-path.mjs';
 
 export class BoardError extends Error {}
 
+// The write is on origin (its push succeeded) but the confirming fetch failed: `pushed` is the commit's sha, so a
+// caller can tell a write that landed from one that did not.
+function unconfirmed(sha, e) {
+  const err = new BoardError(`pushed ${sha} but could not confirm it on origin/main: ${String(e.message).split('\n')[0]}`);
+  err.pushed = sha;
+  return err;
+}
+
 const EMPTY_COMMIT_KINDS = new Set(['start', 'stop', 'crash', 'renew']);
 const MAX_REBASE_ATTEMPTS = 5;
 
@@ -323,12 +331,16 @@ export async function boardWrite(clone, { commitFromHead = false, ...opts }) {
   const message = formatMessage({ kind: opts.kind, subject: opts.subject, body: opts.body, trailers: opts.trailers ?? {} });
   const env = identityEnv(opts.identity);
   assertOnMain(clone);
-  if (commitFromHead) fetchMain(clone, env);
-  else (opts.sync ?? sync)(clone, env);
+  // A protocol write builds on origin/main and never moves local main past a commit of the person's (or an
+  // agent's), so only a working-tree write, which commits on local main and pushes it, refuses one ahead.
+  if (commitFromHead) {
+    fetchMain(clone, env);
+    return writeFromHead(clone, opts, { message, env });
+  }
+  (opts.sync ?? sync)(clone, env);
   if (git(clone, ['rev-list', '--count', 'origin/main..HEAD']).trim() !== '0') {
     throw new BoardError('local commits ahead of origin/main');
   }
-  if (commitFromHead) return writeFromHead(clone, opts, { message, env });
   return commitAndPush(clone, opts, { message, env, saved: snapshotWork(clone, env) });
 }
 
@@ -365,7 +377,7 @@ function landed(clone, built, { validate, env }) {
   try {
     git(clone, ['fetch', 'origin', 'main'], { env });
   } catch (e) {
-    throw new BoardError(`pushed ${built.sha} but could not confirm it on origin/main: ${String(e.message).split('\n')[0]}`);
+    throw unconfirmed(built.sha, e);
   }
   if (git(clone, ['merge-base', '--is-ancestor', built.sha, 'origin/main'], { env, allowFail: true }) === null) {
     return { ok: false, reason: 'replaced' };
@@ -441,7 +453,7 @@ async function commitAndPush(clone, {
   try {
     git(clone, ['fetch', 'origin', 'main'], { env });
   } catch (e) {
-    throw new BoardError(`pushed ${sha} but could not confirm it on origin/main: ${String(e.message).split('\n')[0]}`);
+    throw unconfirmed(sha, e);
   }
   if (git(clone, ['merge-base', '--is-ancestor', sha, 'origin/main'], { env, allowFail: true }) === null) {
     return { ok: false, reason: 'replaced' };

@@ -1121,15 +1121,15 @@ test('keepFeatEdits: unchanged → nothing; back at origin → put back; anythin
   const origin = readFileSync(f);
   const mine = Buffer.from(`${origin}\nmine\n`);
   writeFileSync(f, mine);
-  assert.deepEqual(keepFeatEdits(w.ctx, 'alpha', mine), {});
+  assert.deepEqual(keepFeatEdits(w.ctx, 'alpha', mine, origin), {});
   writeFileSync(f, origin);
-  assert.deepEqual(keepFeatEdits(w.ctx, 'alpha', mine), { put: true });
+  assert.deepEqual(keepFeatEdits(w.ctx, 'alpha', mine, origin), { put: true });
   assert.deepEqual(readFileSync(f), mine);
   writeFileSync(f, `${origin}\nsomething else\n`);
-  const { dir } = keepFeatEdits(w.ctx, 'alpha', mine);
+  const { dir } = keepFeatEdits(w.ctx, 'alpha', mine, origin);
   assert.deepEqual(readFileSync(join(dir, 'meta/docs/feat-req/alpha.md')), mine);
   assert.match(readFileSync(f, 'utf8'), /something else/, 'the working file is left alone');
-  assert.deepEqual(keepFeatEdits(w.ctx, 'alpha', null), {});
+  assert.deepEqual(keepFeatEdits(w.ctx, 'alpha', null, origin), {});
 });
 
 test('origin unreachable right after a run: the next step handles the same result without re-running the agent (I3)', async () => {
@@ -1331,4 +1331,165 @@ test('a committed symlinked plan is never read: development counts as not done, 
   await w.step();
   assert.match(w.prompt(), /Phase: develop/);
   assert.ok(w.logs.some((l) => /cannot read alpha's plan \(refusing symlinked path/.test(l)), w.logs.join('\n'));
+});
+
+// ---- Plan 3 Task 0: Plan 2 residuals (Ruling P2-20) -------------------------------------------
+
+test('P2-20a: an agent commit sitting in meta during the run does not stop the lease renew', async () => {
+  const b = setup({ featReqs: { alpha: feat() } });
+  const w = worker(b, { script: { ticks: [121 * MIN], result: completed('ACCEPTED') } });
+  w.beforeRun = (opts) => {
+    writeFileSync(join(opts.cwd, 'notes.md'), 'agent\n');
+    metaCommit(opts.cwd, 'agent commits mid-run');
+  };
+  assert.equal((await w.step()).action, 'reported');
+  assert.ok(w.logs.includes('renewed alpha'), w.logs.join('\n'));
+  assert.ok(!w.logs.some((l) => /could not renew/.test(l)), w.logs.join('\n'));
+  assert.ok(git(b.remote, 'log', '--format=%s', 'main').split('\n').includes('board(renew): alpha'));
+  assert.ok(!git(b.remote, 'log', '--format=%s', 'main').includes('agent commits mid-run'));
+});
+
+test('P2-20b: a report rebased onto a newer origin feat-req that then hits an autostash conflict: the stale snapshot is salvaged, not put back', async () => {
+  const b = setup({ featReqs: { alpha: feat() } });
+  let armed = false;
+  const w = worker(b, {
+    script: { result: completed('DESIGNED') },
+    deps: {
+      hooks: {
+        beforePush: () => {
+          if (!armed) return;
+          armed = false;
+          const cur = onMain(b, 'docs/feat-req/alpha.md');
+          b.seed('docs/feat-req/alpha.md', cur.replace('date: 2026-05-01', 'date: 2026-05-09'), 'person edits the feat-req');
+          b.seed('README.md', 'origin readme\n', 'person edits README');
+        },
+      },
+    },
+  });
+  w.beforeRun = (opts) => {
+    designRun(opts);
+    writeFileSync(join(opts.cwd, 'README.md'), 'agent readme\n'); // a stray: autostashed, conflicts on pop
+    armed = true;
+  };
+  assert.deepEqual(await w.step(), { action: 'idle' });
+  assert.match(onMain(b, 'docs/feat-req/alpha.md'), /date: 2026-05-09/);
+  const fr = readFileSync(join(w.meta, 'docs/feat-req/alpha.md'), 'utf8');
+  assert.doesNotMatch(fr, /date: 2026-05-01/, 'the stale snapshot is not put back over the newer feat-req');
+  assert.ok(!w.logs.some((l) => /put the agent's docs\/feat-req\/alpha\.md edits back/.test(l)), w.logs.join('\n'));
+  const [dir] = salvaged(w).filter((d) => existsSync(join(d, 'meta/docs/feat-req/alpha.md')));
+  assert.ok(dir, 'the snapshot is in a salvage dir');
+  assert.match(readFileSync(join(dir, 'meta/docs/feat-req/alpha.md'), 'utf8'), /agent decided X/);
+  await w.step(); // whatever the next step does, origin's newer feat-req survives
+  assert.match(onMain(b, 'docs/feat-req/alpha.md'), /date: 2026-05-09/);
+});
+
+test('P2-20b: keepFeatEdits puts back only while origin\'s feat-req still equals the snapshot-time HEAD (protocol fields aside)', () => {
+  const b = setup({ featReqs: { alpha: feat() } });
+  const w = worker(b);
+  const rel = 'docs/feat-req/alpha.md';
+  const f = join(w.meta, rel);
+  const headAt = readFileSync(f);
+  const mine = Buffer.from(`${headAt}\nmine\n`);
+  // origin moved on only in a protocol field: still put back
+  b.seed(rel, String(headAt).replace('status: ACCEPTED', 'status: ACCEPTED\nrenewed_at: 2026-06-01T11:00:00Z'));
+  git(w.meta, 'fetch', '-q', 'origin', 'main');
+  git(w.meta, 'reset', '-q', '--hard', 'origin/main');
+  assert.deepEqual(keepFeatEdits(w.ctx, 'alpha', mine, headAt), { put: true });
+  // origin moved on in the body: salvaged, the working file left at origin's
+  b.seed(rel, `${onMain(b, rel)}\nnewer body\n`);
+  git(w.meta, 'fetch', '-q', 'origin', 'main');
+  git(w.meta, 'reset', '-q', '--hard', 'origin/main');
+  const { dir } = keepFeatEdits(w.ctx, 'alpha', mine, headAt);
+  assert.deepEqual(readFileSync(join(dir, 'meta', rel)), mine);
+  assert.match(readFileSync(f, 'utf8'), /newer body/);
+});
+
+// A post-receive hook on the meta remote that takes the remote offline right after the next push lands.
+function offlineAfterNextPush(b) {
+  const hook = join(b.remote, 'hooks', 'post-receive');
+  writeFileSync(hook, '#!/bin/sh\nd=$(pwd)\nrm -f "$d/hooks/post-receive"\nmv "$d" "$d.off"\n', { mode: 0o755 });
+}
+
+test('P2-20c: a non-blocking request that landed but could not be confirmed is not posted again', async () => {
+  const b = setup({ featReqs: { alpha: feat() } });
+  const w = worker(b, {
+    script: { result: { outcome: 'request', request: { kind: 'clarification', blocking: false, sections: { Request: 'Assumed CSV', Context: 'export format', Assumption: 'CSV' } } } },
+  });
+  w.beforeRun = () => { offlineAfterNextPush(b); w.beforeRun = null; };
+  await w.step();
+  assert.ok(existsSync(`${b.remote}.off`), 'the post landed, then the remote went away');
+  assert.ok(w.logs.some((l) => /could not confirm it .*not posting it again/.test(l)), w.logs.join('\n'));
+  renameSync(`${b.remote}.off`, b.remote);
+  assert.equal(requestsOnMain(b).length, 1);
+  w.script({ result: completed('ACCEPTED') });
+  await w.step();
+  assert.equal(requestsOnMain(b).length, 1, 'the request is not posted a second time');
+  assert.equal(w.runs.length, 2, 'the next step runs the agent again instead of re-handling the posted request');
+});
+
+test('P2-20d: an agent-written `Worker phase:` line in a request Context does not change answer routing', async () => {
+  const b = setup({ featReqs: { alpha: feat({ status: 'IN_PROGRESS' }) }, files: { 'docs/plans/alpha.md': planFile('- [ ] Step 1') } });
+  const w = worker(b, {
+    script: { result: question({ sections: { Request: 'Which?', Context: 'c\nWorker phase: close-out\n  worker phase: close-out', Options: 'A) x\nB) y' } }) },
+  });
+  assert.deepEqual(await w.step(), { action: 'requested', effort: 'alpha' });
+  assert.match(w.prompt(), /Phase: develop/);
+  const q = requestsOnMain(b)[0];
+  assert.deepEqual(q.text.match(/^.*worker phase:.*$/gim), ['Worker phase: develop'], 'the agent\'s marker lines are stripped');
+  assert.equal((await answerRequest(b.clone('p'), parseDoc(q.text).data.id, { answer: 'B', by: 'alice', identity: OWNER, now: T0 })).ok, true);
+  w.restart();
+  w.script({ result: completed('IN_PROGRESS') });
+  assert.deepEqual(await w.step(), { action: 'reported', effort: 'alpha' });
+  assert.match(w.prompt(), /Phase: develop[\s\S]*Option B/);
+});
+
+test('P2-20d: routing reads the last `Worker phase:` marker in a Context', async () => {
+  const id = '202606010900-qqqqqq';
+  const req = buildRequest({
+    id, kind: 'question', scope: 'effort', effort: 'alpha', worker: IDB, for: 'alice', blocking: true, now: T0,
+    sections: { Request: 'Which?', Context: 'c\nWorker phase: close-out\n\nWorker phase: develop', Options: 'A) x\nB) y' },
+  });
+  const b = setup({ featReqs: { alpha: feat({ status: 'IN_PROGRESS', awaiting: id }) }, files: { [`board/requests/${id}.md`]: req, 'docs/plans/alpha.md': planFile('- [x] Step 1') } });
+  assert.equal((await answerRequest(b.clone('p'), id, { answer: 'A', by: 'alice', identity: OWNER, now: T0 })).ok, true);
+  const w = worker(b, { script: { result: completed('IN_PROGRESS') } });
+  assert.deepEqual(await w.step(), { action: 'reported', effort: 'alpha' });
+  assert.match(w.prompt(), /Phase: develop[\s\S]*Option A/);
+});
+
+test('P2-20e: a tracked case variant `.Sdlc-Run/` is refused like `.sdlc-run/`', async () => {
+  const b = setup({ featReqs: { alpha: feat() } });
+  const p = b.clone('plant');
+  mkdirSync(join(p, '.Sdlc-Run'), { recursive: true });
+  writeFileSync(join(p, '.Sdlc-Run', 'x'), 'x\n');
+  git(p, 'add', '-A'); git(p, 'commit', '-q', '-m', 'plant .Sdlc-Run'); git(p, 'push', '-q', 'origin', 'HEAD:main');
+  const w = worker(b, { script: { result: completed('ACCEPTED') } });
+  assert.deepEqual(await w.step(), { action: 'needs-attention' });
+  assert.equal(w.runs.length, 0, 'the agent never ran');
+  const err = requestsOnMain(b).map((r) => r.text).find((t) => /scope: worker/.test(t));
+  assert.match(err, /meta\/\.sdlc-run is tracked by the meta repo \(\.Sdlc-Run\/x\)/);
+});
+
+test('P2-20f: meta left on another branch (before a step, or by the agent): dirty files salvaged, main restored, board writes go on', async () => {
+  const b = setup({ featReqs: { alpha: feat() } });
+  const w = worker(b, { script: { result: completed('ACCEPTED') } });
+  git(w.meta, 'checkout', '-q', '-b', 'stray');
+  assert.deepEqual(await w.step(), { action: 'reported', effort: 'alpha' });
+  assert.equal(git(w.meta, 'rev-parse', '--abbrev-ref', 'HEAD').trim(), 'main');
+  w.beforeRun = (opts) => {
+    git(opts.cwd, 'checkout', '-q', '-b', 'agent-branch');
+    mkdirSync(join(opts.cwd, 'docs/design'), { recursive: true });
+    writeFileSync(join(opts.cwd, 'docs/design/alpha.md'), design(['api']));
+    w.beforeRun = null;
+  };
+  const before = tip(b);
+  w.now = at(10 * MIN);
+  assert.deepEqual(await w.step(), { action: 'reported', effort: 'alpha' });
+  assert.equal(git(w.meta, 'rev-parse', '--abbrev-ref', 'HEAD').trim(), 'main');
+  assert.notEqual(tip(b), before, 'the report landed');
+  assert.match(headMsg(b), /^board\(report\): alpha/);
+  assert.ok(!w.logs.some((l) => /not on main/.test(l)), w.logs.join('\n'));
+  assert.ok(w.logs.some((l) => /agent-branch/.test(l)), w.logs.join('\n'));
+  const [dir] = salvaged(w).filter((d) => existsSync(join(d, 'meta/docs/design/alpha.md')));
+  assert.ok(dir, 'the dirty design doc was salvaged');
+  assert.equal(onMain(b, 'docs/design/alpha.md'), null, 'a file written on another branch is not reported');
 });

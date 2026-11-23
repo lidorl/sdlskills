@@ -389,3 +389,23 @@ test('origin/main moved under a dirty edit to the same lines: renew still lands,
   assert.equal(revParse(a, 'HEAD'), before); // behind origin/main, never ahead
   assert.match(g(fx.remote, 'show', `main:${FEAT}`), /renewed_at: 2026-11-20T12:00:00Z/);
 });
+
+test('P2-20a: a commitFromHead renew lands while a local commit sits ahead in meta; the commit stays local and unpublished', async () => {
+  const fm = '---\nclaimed_by: a-w\nclaimed_at: 2026-11-20T11:00:00Z\nrenewed_at: 2026-11-20T11:00:00Z\nstatus: DESIGNED\n---\n\n# s\n';
+  const fx = makeBoard({ files: { 'docs/feat-req/s.md': fm } });
+  const a = fx.clone('a');
+  writeFileSync(join(a, 'docs/agent.md'), 'agent\n'); g(a, 'add', 'docs/agent.md'); g(a, 'commit', '-m', 'agent commit');
+  const mine = revParse(a, 'HEAD');
+  const r = await renew(a, 's', { claimant: 'a-w', identity: IDENT, now: new Date('2026-11-20T12:00:00Z'), sleep: noSleep });
+  assert.equal(r.ok, true);
+  assert.match(g(fx.remote, 'show', 'main:docs/feat-req/s.md'), /renewed_at: 2026-11-20T12:00:00Z/);
+  assert.equal(originHas(a, mine), false, 'the local commit is never pushed');
+  assert.equal(revParse(a, 'HEAD'), mine, 'local main is left where it was');
+});
+
+test('P2-20a: a working-tree write still refuses while a local commit sits ahead', async () => {
+  const a = makeBoard().clone('a');
+  writeFileSync(join(a, 'mine.md'), 'x\n'); g(a, 'add', 'mine.md'); g(a, 'commit', '-m', 'person work');
+  await assert.rejects(boardWrite(a, { ...base, kind: 'report', subject: 's', onReject: 'rebase', sync: () => {}, mutate: writer('x.md', 'a\n') }),
+    (e) => e instanceof BoardError && /local commits ahead/.test(e.message));
+});

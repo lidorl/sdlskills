@@ -9,14 +9,14 @@ import { release, holds, committedFm, featReqPath } from '../board/claims.mjs';
 import { listRequests, postRequest, newRequestId } from '../board/requests.mjs';
 import { redact } from '../board/redact.mjs';
 import { reportPaths } from '../board/paths.mjs';
-import { reportEffort } from '../board/report.mjs';
+import { reportEffort, PROTOCOL_FIELDS } from '../board/report.mjs';
 import { resolveRepoKeys } from '../../assemble-env.mjs';
 import { readState, writeState } from './home.mjs';
-import { readResult, classifyFailure, RUN_DIR, runDirProblem, planDone, phaseNote } from './agent.mjs';
+import { readResult, classifyFailure, RUN_DIR, runDirProblem, planDone, phaseNote, stripPhaseNotes } from './agent.mjs';
 import { safePath } from '../board/safe-path.mjs';
 import { pushCodeBranches, dirtyNote } from './code-repos.mjs';
 import { readInput, writeInput, clearInput } from './agent-input.mjs';
-import { parseDoc } from '../board/frontmatter.mjs';
+import { parseDoc, setFields } from '../board/frontmatter.mjs';
 import { salvage, salvageFile } from './salvage.mjs';
 
 const firstLine = (e) => String(e?.message ?? e).split('\n')[0];
@@ -101,23 +101,34 @@ function effortDirty(clone, slug) {
 }
 
 // Worker reports only (`sdlc report` keeps Ruling 15b): a report that did not land may have taken the agent's
-// feat-req edits with it (keep-work never keeps docs/feat-req/*). With the file back at origin's bytes the
-// snapshot goes back as an uncommitted edit (the next sync merges it, protocol fields overlaid); otherwise the
-// snapshot is copied to a salvage dir. -> { put: true } | { dir } | {} (nothing was lost)
-export function keepFeatEdits(ctx, slug, before) {
+// feat-req edits with it (keep-work never keeps docs/feat-req/*). `before` is the agent's copy and `base` the
+// HEAD copy it was edited from, both taken before the report. The snapshot goes back as an uncommitted edit only
+// when the file is back at origin's bytes and origin's copy is still `base` (protocol fields aside: the report
+// takes those from origin): a put-back over a newer origin copy would make the next report revert it. Otherwise
+// the snapshot is copied to a salvage dir. -> { put: true } | { dir } | {} (nothing was lost)
+export function keepFeatEdits(ctx, slug, before, base) {
   if (before === null) return {};
   const rel = featReqPath(slug);
   const abs = safePath(ctx.clone, rel);
   const now = existsSync(abs) ? readFileSync(abs) : null;
   if (now?.equals(before)) return {};
   const origin = showFile(ctx.clone, 'origin/main', rel);
-  if (now === null || (origin !== null && now.equals(Buffer.from(origin)))) {
+  const backAtOrigin = now === null || (origin !== null && now.equals(Buffer.from(origin)));
+  if (backAtOrigin && sameBase(origin, base)) {
     mkdirSync(dirname(abs), { recursive: true });
     writeFileSync(abs, before);
     ctx.deps.log(`put the agent's ${rel} edits back after the report did not land`);
     return { put: true };
   }
   return { dir: salvageFile(ctx, rel, before, `the report of ${slug} did not land`) };
+}
+
+// Origin's feat-req is still the copy the agent edited, protocol fields aside.
+function sameBase(origin, base) {
+  if (origin === null || base == null) return origin === null && base == null;
+  if (String(origin) === String(base)) return true;
+  const strip = (text) => setFields(text, Object.fromEntries(PROTOCOL_FIELDS.map((k) => [k, null])));
+  try { return strip(String(origin)) === strip(String(base)); } catch { return false; }
 }
 
 // Push the code branches, then report. -> { ok: true, codeAdvanced } or { ok: false, ret: <step result> }
@@ -130,20 +141,21 @@ async function report(ctx, slug, status, phase, { keys, summary }) {
   const body = [summary && oneLine(redact(summary)), code.dirty.length && dirtyNote(code.dirty)].filter(Boolean).join('\n\n');
   const featAbs = safePath(clone, featReqPath(slug));
   const before = existsSync(featAbs) ? readFileSync(featAbs) : null;
+  const base = showFile(clone, 'HEAD', featReqPath(slug));
   let r;
   try {
     r = await reportEffort(clone, slug, {
       phase, claimant: cfg.id, identity, workerId: cfg.id, now: deps.now(), sleep: deps.sleep, hooks: deps.hooks, body, fetched: true,
     });
   } catch (e) {
-    keepFeatEdits(ctx, slug, before); // the hold stays: the next step reports them again
+    keepFeatEdits(ctx, slug, before, base); // the hold stays: the next step reports them again
     throw e;
   }
   if (r.ok || r.reason === 'nothing-to-do') {
     deps.log(`reported ${slug} at ${phase}${r.ok ? '' : ' (nothing new)'}`);
     return { ok: true, codeAdvanced: code.advanced.length > 0 };
   }
-  const kept = keepFeatEdits(ctx, slug, before);
+  const kept = keepFeatEdits(ctx, slug, before, base);
   if (['not-holder', 'closed', 'landed'].includes(r.reason)) return { ok: false, ret: lose(ctx, slug) };
   let what;
   if (r.reason === 'unmerged') what = `the edits to ${r.paths.join(', ')} conflict with origin/main`;
@@ -201,7 +213,8 @@ async function handleRequest(ctx, slug, status, result, keys) {
   }
   // Every section is the agent's text, bound for a shared repo: redact all of them (Error is also fenced).
   const sections = Object.fromEntries(Object.entries(q.sections).map(([k, v]) => [k, typeof v === 'string' ? redact(v) : v]));
-  sections.Context = [sections.Context, ...phaseLine(ctx)].join('\n\n');
+  // The phase marker routes the answer: only the worker writes one, as the Context's last line.
+  sections.Context = [stripPhaseNotes(sections.Context), ...phaseLine(ctx)].filter(Boolean).join('\n\n');
   const now = deps.now();
   // v1: `for: owner` (or none) goes to the worker's owner; see the task 5 report.
   const forWho = !q.for || q.for === 'owner' ? cfg.owner : q.for;
@@ -209,9 +222,17 @@ async function handleRequest(ctx, slug, status, result, keys) {
     id: newRequestId(now, deps.rand), kind: q.kind, gate: q.gate ?? null, scope: 'effort', effort: slug, phase: status,
     worker: cfg.id, for: forWho, blocking: q.blocking, now, sections,
   };
-  const r = await postRequest(clone, req, {
-    identity, workerId: cfg.id, releaseFrom: q.blocking ? { slug, claimant: cfg.id } : undefined, sleep: deps.sleep, hooks: deps.hooks,
-  });
+  let r;
+  try {
+    r = await postRequest(clone, req, {
+      identity, workerId: cfg.id, releaseFrom: q.blocking ? { slug, claimant: cfg.id } : undefined, sleep: deps.sleep, hooks: deps.hooks,
+    });
+  } catch (e) {
+    // Pushed but not confirmed: the request is on main, so handling this result again would post it twice.
+    if (!(e instanceof BoardError && e.pushed)) throw e;
+    deps.log(`posted ${req.id} for ${slug} but could not confirm it (${firstLine(e)}); not posting it again`);
+    r = { ok: true, id: req.id };
+  }
   if (!r.ok) {
     if (r.reason === 'replaced') return lose(ctx, slug);
     if (r.reason === 'invalid') return effortError(ctx, slug, status, `the agent's request is invalid: ${r.problems.join('; ')}`, {});

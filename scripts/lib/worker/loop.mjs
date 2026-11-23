@@ -15,7 +15,7 @@ import { loadCatalog } from '../catalog.mjs';
 import { assemble as realAssemble, resolveRepoKeys } from '../../assemble-env.mjs';
 import { readConfig, readState, writeState, excludeRunDir } from './home.mjs';
 import {
-  route, buildPrompt, agentCommand, runAgent as realRunAgent, RUN_DIR, runDirProblem, planDone, PHASE_MARK,
+  route, buildPrompt, agentCommand, runAgent as realRunAgent, RUN_DIR, runDirProblem, planDone, phaseOf,
 } from './agent.mjs';
 import { preflight, realDeps as preflightDeps } from './preflight.mjs';
 import { lose, letGo, effortError, workerError, handleResult, interrupted } from './outcomes.mjs';
@@ -85,6 +85,27 @@ export function unwindLocalCommits(ctx) {
   }
 }
 
+// Every board write refuses off main, so an agent (or a person) that left the meta clone on another branch or a
+// detached HEAD would stop the worker for good. The worker moves the dirty files aside (Ruling P2-11) and checks
+// main out again; commits made on that branch stay on it, in this private clone. -> true when it restored main
+export function restoreMain(ctx) {
+  const g = (args) => execFileSync('git', args, { cwd: ctx.clone, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+  let where;
+  try {
+    if (g(['symbolic-ref', '-q', '--short', 'HEAD']) === 'main') return false;
+  } catch { /* detached HEAD: symbolic-ref fails */ }
+  try { where = g(['rev-parse', '--abbrev-ref', 'HEAD']); } catch { where = 'an unknown HEAD'; }
+  try {
+    salvage(ctx, { code: false, reason: `meta was left on ${where}` });
+    g(['checkout', '-q', 'main']);
+    ctx.deps.log(`meta was on ${where === 'HEAD' ? 'a detached HEAD' : `branch ${where}`}; checked out main again (commits made there stay on it locally)`);
+    return true;
+  } catch (e) {
+    ctx.deps.log(`warning: could not check out main in meta (it is on ${where}): ${firstLine(e)}`);
+    return false;
+  }
+}
+
 // ---- the step ---------------------------------------------------------------------------------
 
 export async function step(ctx) {
@@ -94,6 +115,7 @@ export async function step(ctx) {
     ctx.deps.log(`cannot reach origin: ${firstLine(e)}; staying idle`);
     return { action: 'idle' };
   }
+  restoreMain(ctx);
   unwindLocalCommits(ctx);
   const snap = snapshotMain(ctx.clone);
   try {
@@ -237,7 +259,7 @@ function runLogPath(home, now, slug, phase) {
 // phase (develop|close-out) a worker recorded in their Context when it posted them.
 function answeredOn(board, slug) {
   const qs = listRequests(board).requests.filter((q) => q.fm.status === 'answered' && q.fm.scope === 'effort' && q.fm.effort === slug);
-  const phase = qs.map((q) => String(q.sections?.Context ?? '').match(PHASE_MARK)?.[1]).find(Boolean) ?? null;
+  const phase = qs.map((q) => phaseOf(q.sections?.Context)).find(Boolean) ?? null;
   return { ids: qs.map((q) => q.id), phase };
 }
 
@@ -346,7 +368,8 @@ async function runHeld(ctx, slug, bcfg, board) {
     ctx.signal?.removeEventListener('abort', stopRun);
   }
   await inflight.catch(() => {}); // a renew still pushing must land before the report touches the clone
-  unwindLocalCommits(ctx); // the agent may have committed in meta despite the prompt
+  restoreMain(ctx); // the agent may have switched branches in meta
+  unwindLocalCommits(ctx); // or committed there, despite the prompt
   if (takenOver) return lose(ctx, slug);
   if (res.aborted) return interrupted(ctx, slug, fm.status, keys);
   ctx.holding.pending = { status: fm.status, res, keys, logPath };

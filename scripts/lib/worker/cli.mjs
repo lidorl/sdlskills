@@ -23,7 +23,7 @@ import {
   sdlcHome, workerHome, readConfig, writeConfig, readState, writeState, readPid, clearPid, isAlive, excludeRunDir,
 } from './home.mjs';
 import { preflight } from './preflight.mjs';
-import { makeContext, step, WorkerFatal, unwindLocalCommits } from './loop.mjs';
+import { makeContext, step, WorkerFatal, unwindLocalCommits, restoreMain } from './loop.mjs';
 import { WORKER_PROCESS_VARS, RUN_DIR } from './agent.mjs';
 import { letGo } from './outcomes.mjs';
 import { pushCodeBranches } from './code-repos.mjs';
@@ -500,7 +500,8 @@ async function cmdRun({ flags, positional: [id] }, d, { once }) {
     killLeftoverAgent(home, ctx.cfg, d, ctx.deps.log);
     excludeRunDir(ctx.clone, RUN_DIR);
     refresh(ctx);
-    unwindLocalCommits(ctx); // a report commit a kill cut off before its push would block the crash report
+    restoreMain(ctx); // a meta clone left on another branch would block the crash report
+    unwindLocalCommits(ctx); // so would a report commit a kill cut off before its push
     const pf = onMain(ctx.clone, (board) => preflight({ home, cfg: ctx.cfg, root: board, gh: { authOk: () => true }, which: () => true }));
     // only fatal problems are checked here; the loop's own preflight handles the rest
     if (!pf.ok) throw new Refusal(pf.problem);
