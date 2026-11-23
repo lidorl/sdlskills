@@ -4,6 +4,8 @@ Unresolved design questions about the SDLC kit itself (not about any project tha
 
 ## Open Items
 
+- [ ] **Same-model review for single-model adopters.** The independent verification spec ([`feat-req/independent-verification.md`](feat-req/independent-verification.md)) requires the verify run to differ from the implement run in model or worker, so an adopter with one agent CLI and one model always reviews by hand at the gate. Option: allow a same-model, same-worker review only when policy opts in (`require_different: none`), record it as `independence: weak`, and flag it prominently at the human gate. Decided for now: **strict**, a same-model review never counts. (From the 2026-11-23 interview for that spec.)
+
 - [ ] **Parallel agents / task claiming.** The current process (`select-next-task`, unified queue, `status: IN_PROGRESS`) assumes a single worker. Supporting 2+ agents needs: task claiming vs. locking, stale-claim recovery, worktree/branch isolation, merge/review ordering, and how `render-status.mjs` reflects concurrent work. Decided for now: **single worker**. (The broader multi-repo *execution environment* idea is [`BRAINSTORMING.md`](../BRAINSTORMING.md) §1 — related but a separate axis.)
 
 - [ ] **`writing-plans` frontmatter contract.** `write-execution-plan` stamps `status`/`feat_req`/`design` onto the plan file *after* `superpowers:writing-plans` runs. If the upstream skill's output format changes, the stamp step may need updating. Watch for drift on `superpowers` upgrades.
