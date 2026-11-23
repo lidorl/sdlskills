@@ -216,6 +216,32 @@ test('reportPaths gathers the effort docs, changed history, and extras', () => {
   assert.throws(() => reportPaths(c, 'bulk-export', ['../x']));
 });
 
+test('F1: reportPaths includes new or changed ADRs and design companion docs; --paths accepts them', async () => {
+  const b = makeBoard({ featReqs: { 'bulk-export': feat() }, files: { 'docs/design/architecture.md': '# a\n', 'docs/design/data-model.md': '# d\n', 'docs/decisions/001_old.md': '# old\n' } });
+  const c = b.clone('c');
+  assert.deepEqual(reportPaths(c, 'bulk-export'), ['docs/feat-req/bulk-export.md']);
+  writeFileSync(join(c, 'docs/decisions/002_new.md'), '# new\n');
+  writeFileSync(join(c, 'docs/decisions/001_old.md'), '# old v2\n');
+  writeFileSync(join(c, 'docs/design/data-model.md'), '# d2\n');
+  assert.deepEqual(reportPaths(c, 'bulk-export'), [
+    'docs/feat-req/bulk-export.md', 'docs/decisions/001_old.md', 'docs/decisions/002_new.md', 'docs/design/data-model.md',
+  ]);
+  assert.doesNotThrow(() => reportPaths(c, 'bulk-export', ['docs/design/architecture.md']));
+  assert.throws(() => reportPaths(c, 'bulk-export', ['docs/design/other.md']), /does not belong/);
+});
+
+test('F1: interactive `sdlc report` publishes a new ADR', async () => {
+  const b = makeBoard({ featReqs: { 'bulk-export': feat() } });
+  const c = b.clone('c');
+  assert.equal((await cli(c, ['claim', 'bulk-export'])).code, 0);
+  mkdirSync(join(c, 'docs/decisions'), { recursive: true });
+  writeFileSync(join(c, 'docs/decisions/001_pick.md'), '# adr\n');
+  writeFileSync(join(c, 'docs/feat-req/bulk-export.md'), readFileSync(join(c, 'docs/feat-req/bulk-export.md'), 'utf8').replace('status: ACCEPTED', 'status: DESIGNED'));
+  const r = await cli(c, ['report', 'bulk-export', '--phase', 'DESIGNED'], { now: hours(1) });
+  assert.equal(r.code, 0, r.err);
+  assert.match(git(b.remote, 'show', '--name-only', '--format=', 'main'), /docs\/decisions\/001_pick\.md/);
+});
+
 test('worker subcommand dispatches to the worker CLI', async () => {
   const c = makeBoard().clone('c');
   const r = await cli(c, ['worker', 'bogus']);

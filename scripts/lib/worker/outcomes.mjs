@@ -1,14 +1,14 @@
 // What happens after a step's agent run, and the ways a step lets go of an effort: report, request,
 // effort error, worker error, lost. Shared state: ctx from loop.mjs.
 import { hostname } from 'node:os';
-import { readFileSync, existsSync, writeFileSync, mkdirSync } from 'node:fs';
+import { readFileSync, existsSync, writeFileSync, mkdirSync, readdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fetchMain, snapshotMain, identityEnv, showFile, BoardError } from '../board/git.mjs';
 import { release, holds, committedFm, featReqPath } from '../board/claims.mjs';
 import { listRequests, postRequest, newRequestId, agentText } from '../board/requests.mjs';
 import { redact } from '../board/redact.mjs';
-import { reportPaths } from '../board/paths.mjs';
+import { reportPaths, isPlanPath } from '../board/paths.mjs';
 import { reportEffort, PROTOCOL_FIELDS } from '../board/report.mjs';
 import { resolveRepoKeys } from '../../assemble-env.mjs';
 import { readState, writeState } from './home.mjs';
@@ -167,10 +167,12 @@ async function report(ctx, slug, status, phase, { keys, summary }) {
   return { ok: false, ret: await effortError(ctx, slug, status, `the report did not land: ${what}`, {}) };
 }
 
-function warnStrays(ctx, slug) {
+// Dirty meta-repo paths a report would not publish: work that would be dropped.
+function strays(ctx, slug) {
   const out = execFileSync('git', ['status', '--porcelain=v1', '-z', '--untracked-files=all'], { cwd: ctx.clone, encoding: 'utf8' });
-  const strays = out.split('\0').filter(Boolean).map((rec) => rec.slice(3));
-  if (strays.length) ctx.deps.log(`warning: edits outside ${slug}'s docs were not committed: ${strays.join(', ')}`);
+  const dirty = out.split('\0').filter(Boolean).map((rec) => rec.slice(3));
+  const publish = new Set(reportPaths(ctx.clone, slug));
+  return dirty.filter((p) => !publish.has(p));
 }
 
 async function handleCompleted(ctx, slug, status, result, keys) {
@@ -180,13 +182,21 @@ async function handleCompleted(ctx, slug, status, result, keys) {
     return effortError(ctx, slug, status, `the agent reported phase ${result.phase} but the working feat-req says ${working ?? '(unreadable)'}`, { keys, tried: result.summary });
   }
   const finished = status === 'IN_PROGRESS' && planDone(clone, slug, { log: deps.log });
-  if (result.development_done === true && !finished) deps.log(`warning: the agent reported development_done for ${slug} but its plan has unchecked steps; staying in develop`);
+  let hasPlan = true; // unreadable counts as a plan: the warning stays
+  try {
+    const dir = safePath(clone, 'docs/plans');
+    hasPlan = existsSync(dir) && readdirSync(dir).some((n) => isPlanPath(slug, `docs/plans/${n}`));
+  } catch { /* keep the warning */ }
+  if (result.development_done === true && !finished && hasPlan) deps.log(`warning: the agent reported development_done for ${slug} but its plan has unchecked steps; staying in develop`);
+  const dropped = strays(ctx, slug);
+  if (dropped.length) { // never report success while work is dropped; effortError salvages it and names where
+    return effortError(ctx, slug, status, `the agent changed ${dropped.join(', ')} outside the effort's publishable docs; the changes were not published`, { keys, tried: result.summary });
+  }
   const changed = effortDirty(clone, slug);
   const rep = await report(ctx, slug, status, result.phase, { keys, summary: result.summary });
   if (!rep.ok) return rep.ret;
   writeState(home, { failures: 0, backoff_until: null });
   clearInput(home, slug);
-  warnStrays(ctx, slug);
   if (result.phase === 'IMPLEMENTED') {
     await letGo(ctx, slug, keys);
     return { action: 'done', effort: slug };

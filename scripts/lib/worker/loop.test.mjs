@@ -363,7 +363,7 @@ test('code branch feat/<slug> pushed before report; dirty code repo named in rep
   assert.match(msg, /workspace\/api has uncommitted changes/);
 });
 
-test('stray edit to CLAUDE.process.md is not committed, is logged as a warning, and stays on disk (Ruling P2-2)', async () => {
+test('F1: a stray edit to CLAUDE.process.md is an effort error naming it and the salvage dir; nothing is reported (Ruling P3-13)', async () => {
   const b = setup({ featReqs: { alpha: feat(), beta: feat({ priority: 'low' }) }, files: { 'CLAUDE.process.md': 'contract\n' } });
   const w = worker(b, {
     script: {
@@ -371,15 +371,40 @@ test('stray edit to CLAUDE.process.md is not committed, is logged as a warning, 
       result: completed('ACCEPTED'),
     },
   });
-  assert.deepEqual(await w.step(), { action: 'reported', effort: 'alpha' });
+  assert.deepEqual(await w.step(), { action: 'failed', effort: 'alpha' });
   assert.equal(onMain(b, 'CLAUDE.process.md'), 'contract\n');
-  assert.equal(onMain(b, 'docs/design/alpha.md'), design(['api']));
-  assert.ok(w.logs.some((l) => /warning/.test(l) && /CLAUDE\.process\.md/.test(l)), w.logs.join('\n'));
-  assert.equal(readFileSync(join(w.meta, 'CLAUDE.process.md'), 'utf8'), 'edited by agent\n');
+  assert.equal(onMain(b, 'docs/design/alpha.md'), null);
+  const [dir] = salvaged(w);
+  const text = requestsOnMain(b)[0].text;
+  assert.match(text, /changed CLAUDE\.process\.md outside the effort's publishable docs/);
+  assert.ok(text.includes(dir), 'the error names the salvage dir');
+  assert.equal(readFileSync(join(dir, 'meta/CLAUDE.process.md'), 'utf8'), 'edited by agent\n');
+});
 
-  w.script({ result: completed('ACCEPTED') });
-  assert.equal((await w.step()).action, 'reported');
-  assert.equal(onMain(b, 'CLAUDE.process.md'), 'contract\n');
+test('F1: a stray deliverable (docs/notes/x.md) fails the run; the effort is not IMPLEMENTED', async () => {
+  const b = setup({ featReqs: { alpha: feat({ status: 'IN_PROGRESS' }) } });
+  const w = worker(b, { script: { writes: { 'docs/notes/x.md': 'deliverable\n' }, result: completed('IMPLEMENTED') } });
+  assert.deepEqual(await w.step(), { action: 'failed', effort: 'alpha' });
+  assert.notEqual(fmOnMain(b, 'alpha').status, 'IMPLEMENTED');
+  const [dir] = salvaged(w);
+  const text = requestsOnMain(b)[0].text;
+  assert.match(text, /docs\/notes\/x\.md/);
+  assert.ok(text.includes(dir));
+  assert.equal(readFileSync(join(dir, 'meta/docs/notes/x.md'), 'utf8'), 'deliverable\n');
+});
+
+test('F1: an ADR and a changed architecture.md written in a run land on main with the report', async () => {
+  const b = setup({ featReqs: { alpha: feat() }, files: { 'docs/design/architecture.md': '# arch\n' } });
+  const w = worker(b, {
+    script: {
+      writes: { 'docs/design/alpha.md': design(['api']), 'docs/decisions/001_baseline.md': '# adr\n', 'docs/design/architecture.md': '# arch v2\n' },
+      result: completed('ACCEPTED'),
+    },
+  });
+  assert.deepEqual(await w.step(), { action: 'reported', effort: 'alpha' });
+  assert.equal(onMain(b, 'docs/decisions/001_baseline.md'), '# adr\n');
+  assert.equal(onMain(b, 'docs/design/architecture.md'), '# arch v2\n');
+  assert.equal(git(w.meta, 'status', '--porcelain'), '');
 });
 
 test('remote unreachable → idle with a log line, no worker error posted', async () => {
@@ -572,6 +597,13 @@ test('report after a renew during the run keeps the agent\'s edit to the line ne
   assert.equal(fm.claimed_by, IDA);
   assert.equal(git(w.meta, 'stash', 'list'), '');
   assert.equal(git(w.meta, 'status', '--porcelain'), '');
+});
+
+test('F2: a trivial effort with no plan reports development_done without the unchecked-steps warning', async () => {
+  const b = setup({ featReqs: { alpha: feat({ status: 'IN_PROGRESS' }) } });
+  const w = worker(b, { script: { writes: { 'docs/history/2026-06-01_alpha.md': 'h\n' }, result: completed('IN_PROGRESS', { development_done: true }) } });
+  assert.deepEqual(await w.step(), { action: 'reported', effort: 'alpha' });
+  assert.ok(!w.logs.some((l) => /unchecked steps/.test(l)), w.logs.join('\n'));
 });
 
 test('development_done routes to close-out; an IMPLEMENTED report releases and returns done', async () => {
@@ -1339,7 +1371,8 @@ test('P2-20a: an agent commit sitting in meta during the run does not stop the l
   const b = setup({ featReqs: { alpha: feat() } });
   const w = worker(b, { script: { ticks: [121 * MIN], result: completed('ACCEPTED') } });
   w.beforeRun = (opts) => {
-    writeFileSync(join(opts.cwd, 'notes.md'), 'agent\n');
+    mkdirSync(join(opts.cwd, 'docs/decisions'), { recursive: true });
+    writeFileSync(join(opts.cwd, 'docs/decisions/001_x.md'), 'agent\n');
     metaCommit(opts.cwd, 'agent commits mid-run');
   };
   assert.equal((await w.step()).action, 'reported');
@@ -1362,13 +1395,13 @@ test('P2-20b: a report rebased onto a newer origin feat-req that then hits an au
           const cur = onMain(b, 'docs/feat-req/alpha.md');
           b.seed('docs/feat-req/alpha.md', cur.replace('date: 2026-05-01', 'date: 2026-05-09'), 'person edits the feat-req');
           b.seed('README.md', 'origin readme\n', 'person edits README');
+          writeFileSync(join(w.meta, 'README.md'), 'agent readme\n'); // a stray appearing after the pre-report check: autostashed, conflicts on pop
         },
       },
     },
   });
   w.beforeRun = (opts) => {
     designRun(opts);
-    writeFileSync(join(opts.cwd, 'README.md'), 'agent readme\n'); // a stray: autostashed, conflicts on pop
     armed = true;
   };
   assert.deepEqual(await w.step(), { action: 'idle' });

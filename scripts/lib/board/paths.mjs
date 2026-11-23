@@ -16,9 +16,13 @@ function ownerPatterns(slug) {
 }
 // Is `rel` one of the effort's own plan files (docs/plans/<slug>.md or <slug>-<n>.md)?
 export const isPlanPath = (slug, rel) => ownerPatterns(slug)[2].test(rel);
+// Shared docs a design run may write beside the effort's own: ADRs (new or changed) and the two design companions.
+const ADR_RE = /^docs\/decisions\/[^/]+\.md$/;
+const COMPANION_RE = /^docs\/design\/(architecture|data-model)\.md$/;
 const historyRe = (slug) => new RegExp(`^docs/history/[^/]*_${slug}(-\\d+)?\\.md$`);
 
-// The files a report commits for an effort: its docs, history entries changed since origin/main, and extras.
+// The files a report commits for an effort: its docs, history entries, ADRs and design companion docs changed
+// since origin/main, and extras.
 export function reportPaths(root, slug, extra = []) {
   const out = [];
   const add = (rel) => { if (!out.includes(rel) && existsSync(safePath(root, rel))) out.push(rel); };
@@ -35,11 +39,16 @@ export function reportPaths(root, slug, extra = []) {
   ].filter(Boolean));
   const hist = historyRe(slug);
   for (const rel of [...changed].sort()) if (hist.test(rel)) add(rel);
+  const shared = new Set([
+    ...gitOut(root, ['ls-files', '--others', '--exclude-standard', '--', 'docs/decisions']).split('\n'),
+    ...gitOut(root, ['diff', '--name-only', 'origin/main', '--', 'docs/decisions', 'docs/design/architecture.md', 'docs/design/data-model.md']).split('\n'),
+  ].filter(Boolean));
+  for (const rel of [...shared].sort()) if (ADR_RE.test(rel) || COMPANION_RE.test(rel)) add(rel);
   for (const p of extra) {
     safePath(root, p);
     const rel = posix.normalize(p.replaceAll('\\', '/'));
     if (rel === 'board' || rel.startsWith('board/')) throw new Error(`--paths: ${p} is under board/; reports never write there`);
-    if (/^docs\/(feat-req|design|plans)\//.test(rel) && ![featRe, designRe, planRe].some((re) => re.test(rel))) {
+    if (/^docs\/(feat-req|design|plans)\//.test(rel) && ![featRe, designRe, planRe, COMPANION_RE].some((re) => re.test(rel))) {
       throw new Error(`--paths: ${p} does not belong to ${slug}`);
     }
     if (!existsSync(join(root, rel))) throw new Error(`--paths: ${p} does not exist`);
