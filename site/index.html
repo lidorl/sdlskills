@@ -98,6 +98,59 @@
       </div>
       <p>A <strong>software factory</strong> turns a stream of feature requests into reviewed, merged changes with as little babysitting as possible. Agents do the work at each station; people step in only where a decision is theirs to make. The kit builds that out of parts you can see: a queue in git, workers you own, and requests that wait for you instead of blocking.</p>
 
+      <figure class="flow-fig">
+        <svg viewBox="0 28 1000 306" role="img" aria-labelledby="flow-title">
+          <title id="flow-title">Feature requests go onto the board. Workers claim them and run each station: spec, design, plan, build, review, close-out. Merged PRs and a docs trail come out. The board sends gates and questions to people, and their answers go back to the board.</title>
+          <defs>
+            <marker id="fa" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="fd-head" d="M0,0 L10,5 L0,10 z"/></marker>
+            <marker id="fs" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="fd-head-stop" d="M0,0 L10,5 L0,10 z"/></marker>
+          </defs>
+          <g class="fd-edge">
+            <path d="M150,150 H198" marker-end="url(#fa)"/>
+            <path d="M402,138 L458,64" marker-start="url(#fa)" marker-end="url(#fa)"/>
+            <path d="M402,150 H458" marker-start="url(#fa)" marker-end="url(#fa)"/>
+            <path d="M402,162 L458,236" marker-start="url(#fa)" marker-end="url(#fa)"/>
+            <path d="M580,64 L638,140" marker-end="url(#fa)"/>
+            <path d="M580,150 H638" marker-end="url(#fa)"/>
+            <path d="M580,236 L638,160" marker-end="url(#fa)"/>
+            <path d="M850,150 H873" marker-end="url(#fa)"/>
+            <path d="M325,272 V196" marker-end="url(#fa)"/>
+          </g>
+          <path class="fd-edge-stop" d="M275,196 V272" marker-end="url(#fs)"/>
+          <text class="fd-lbl fd-lbl-stop" x="265" y="238" text-anchor="end">gates and questions</text>
+          <text class="fd-lbl" x="335" y="238">answers</text>
+
+          <rect class="fd-box" x="10" y="120" width="140" height="60" rx="3"/>
+          <text class="fd-t" x="80" y="146" text-anchor="middle">Feature requests</text>
+          <text class="fd-s" x="80" y="166" text-anchor="middle">people write them</text>
+
+          <path class="fd-board" d="M200,122 a100,12 0 0 1 200,0 v56 a100,12 0 0 1 -200,0 z"/>
+          <path class="fd-board-rim" d="M200,122 a100,12 0 0 0 200,0"/>
+          <text class="fd-t" x="300" y="158" text-anchor="middle">The board</text>
+          <text class="fd-s" x="300" y="178" text-anchor="middle">queue · claims · requests</text>
+
+          <rect class="fd-box" x="460" y="40" width="120" height="44" rx="3"/>
+          <text class="fd-t" x="520" y="67" text-anchor="middle">Worker A</text>
+          <rect class="fd-box" x="460" y="128" width="120" height="44" rx="3"/>
+          <text class="fd-t" x="520" y="155" text-anchor="middle">Worker B</text>
+          <rect class="fd-box" x="460" y="216" width="120" height="44" rx="3"/>
+          <text class="fd-t" x="520" y="243" text-anchor="middle">Worker C</text>
+
+          <rect class="fd-box" x="640" y="110" width="210" height="80" rx="3"/>
+          <text class="fd-t" x="745" y="138" text-anchor="middle">Stations</text>
+          <text class="fd-s" x="745" y="160" text-anchor="middle">spec → design → plan</text>
+          <text class="fd-s" x="745" y="177" text-anchor="middle">build → review → close-out</text>
+
+          <rect class="fd-box fd-out" x="875" y="120" width="120" height="60" rx="3"/>
+          <text class="fd-t" x="935" y="146" text-anchor="middle">Merged PRs</text>
+          <text class="fd-s" x="935" y="166" text-anchor="middle">+ a docs trail</text>
+
+          <rect class="fd-box fd-people" x="200" y="274" width="200" height="52" rx="26"/>
+          <text class="fd-t" x="300" y="297" text-anchor="middle">People</text>
+          <text class="fd-s" x="300" y="315" text-anchor="middle">inbox · answer</text>
+        </svg>
+      </figure>
+
       <div class="mr-frame">
         <span class="mr-frame-label">your SDLC repo's <code>main</code> branch is the board — nothing else coordinates the work</span>
         <div class="mr-flow">

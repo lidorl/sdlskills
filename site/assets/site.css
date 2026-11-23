@@ -121,6 +121,8 @@
   }
   .hero .lead{font-size:clamp(1.1rem,1.9vw,1.32rem);color:var(--ink-soft);max-width:52ch;margin-bottom:1.8em;}
   .cta{display:flex;flex-wrap:wrap;gap:12px;align-items:center;}
+  .hero .cta + .aside{margin:56px 0 0;}
+  .hero .aside + .pipeline{margin-top:14px;}
   .btn{
     display:inline-flex;align-items:center;gap:.6ch;
     font-family:'IBM Plex Mono',monospace;font-size:.79rem;font-weight:500;text-transform:uppercase;letter-spacing:.1em;
@@ -353,3 +355,19 @@
 .tbl th{font-family:'IBM Plex Mono',monospace;font-size:.72rem;font-weight:500;text-transform:uppercase;letter-spacing:.1em;color:var(--ink-faint);}
 .tbl td:first-child{white-space:nowrap;}
 @media (max-width:560px){.tbl td:first-child{white-space:normal;}}
+
+/* ---- factory flow diagram ---- */
+.flow-fig{margin:28px 0 8px;padding:18px 16px;background:var(--surface-2);border:1px solid var(--line);border-radius:var(--radius);overflow-x:auto;}
+.flow-fig svg{display:block;width:100%;min-width:640px;height:auto;}
+.fd-box{fill:var(--surface);stroke:var(--line-strong);stroke-width:1.2;}
+.fd-out{stroke:var(--ok);}
+.fd-people{fill:var(--stop-wash);stroke:var(--stop);}
+.fd-board{fill:var(--accent-wash);stroke:var(--accent);stroke-width:1.4;}
+.fd-board-rim{fill:none;stroke:var(--accent);stroke-width:1.4;}
+.fd-edge path{fill:none;stroke:var(--ink-faint);stroke-width:1.4;}
+.fd-edge-stop{fill:none;stroke:var(--stop);stroke-width:1.4;stroke-dasharray:5 4;}
+.fd-head{fill:var(--ink-faint);}
+.fd-head-stop{fill:var(--stop);}
+.fd-t{font-family:'Archivo','Helvetica Neue',Arial,sans-serif;fill:var(--ink);font-size:15px;font-weight:600;}
+.fd-s,.fd-lbl{font-family:'IBM Plex Mono',monospace;font-size:11.5px;fill:var(--ink-soft);}
+.fd-lbl-stop{fill:var(--stop);}
