@@ -599,6 +599,14 @@ test('report after a renew during the run keeps the agent\'s edit to the line ne
   assert.equal(git(w.meta, 'status', '--porcelain'), '');
 });
 
+test('P3-14: a new untracked architecture.md in a design run is published with the report', async () => {
+  const b = setup({ featReqs: { alpha: feat() } });
+  const w = worker(b, { script: { writes: { 'docs/design/alpha.md': design(['api']), 'docs/design/architecture.md': '# arch\n', 'docs/design/data-model.md': '# dm\n' }, result: completed('ACCEPTED') } });
+  assert.deepEqual(await w.step(), { action: 'reported', effort: 'alpha' });
+  assert.equal(onMain(b, 'docs/design/architecture.md'), '# arch\n');
+  assert.equal(onMain(b, 'docs/design/data-model.md'), '# dm\n');
+});
+
 test('F2: a trivial effort with no plan reports development_done without the unchecked-steps warning', async () => {
   const b = setup({ featReqs: { alpha: feat({ status: 'IN_PROGRESS' }) } });
   const w = worker(b, { script: { writes: { 'docs/history/2026-06-01_alpha.md': 'h\n' }, result: completed('IN_PROGRESS', { development_done: true }) } });

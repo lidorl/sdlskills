@@ -40,7 +40,7 @@ export function reportPaths(root, slug, extra = []) {
   const hist = historyRe(slug);
   for (const rel of [...changed].sort()) if (hist.test(rel)) add(rel);
   const shared = new Set([
-    ...gitOut(root, ['ls-files', '--others', '--exclude-standard', '--', 'docs/decisions']).split('\n'),
+    ...gitOut(root, ['ls-files', '--others', '--exclude-standard', '--', 'docs/decisions', 'docs/design/architecture.md', 'docs/design/data-model.md']).split('\n'),
     ...gitOut(root, ['diff', '--name-only', 'origin/main', '--', 'docs/decisions', 'docs/design/architecture.md', 'docs/design/data-model.md']).split('\n'),
   ].filter(Boolean));
   for (const rel of [...shared].sort()) if (ADR_RE.test(rel) || COMPANION_RE.test(rel)) add(rel);

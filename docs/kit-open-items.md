@@ -14,6 +14,8 @@ Unresolved design questions about the SDLC kit itself (not about any project tha
   - *Smaller.* Registry rewrites drop hand-added keys; `retire --force` doesn't list what it deletes; a second Ctrl-C is ignored; `sdlc` uses plain prompts rather than the installer's menus; `:(icase)` over-refuses on case-sensitive filesystems.
   - *Copilot smoke run.* The real-agent smoke run covered Claude only; a Copilot worker (`--agent copilot`) has never run end to end. Run it before telling Copilot adopters workers are supported.
   - *Meta-only deliverables.* A worker publishes only the effort's docs, ADRs and the design companion docs; any other meta-repo change fails the run (Ruling P3-13). Option: a feat-req `meta_paths` globs field naming extra publishable paths.
+  - *Stray check coverage.* The stray check runs only on the completed-report path; the gate and interrupted paths publish without it, and strays are salvaged at letGo.
+  - *Partial publish.* A run with strays publishes nothing; publishing the rest would need the feat-req status reset first.
   - *package-lock.json.* A worker's `npm install` can leave an untracked `package-lock.json` in its meta clone.
   - *Post-install yaml re-check.* No test covers the installer's re-check that `yaml` resolves after `npm install`.
   - *Larger directions* stay in `BRAINSTORMING.md` §12 (control app), §13 (Slack bridge), §14 (workflow as claim arbiter), §15 (stop-all switch).
