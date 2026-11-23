@@ -44,6 +44,40 @@ repos: [sdlskills]
 
 ---
 
+### Task 0: Plan 2 residuals
+
+Added after Plan 2's final review (Ruling P2-20 in the Plan 2 ledger). The Task 6 smoke run exercises exactly these paths, so they land before integration. Each item gets a test.
+
+**Files:**
+- Modify: `scripts/lib/board/git.mjs`, `scripts/lib/board/config.mjs`
+- Modify: `scripts/lib/worker/outcomes.mjs`, `scripts/lib/worker/loop.mjs`, `scripts/lib/worker/agent.mjs`, `scripts/lib/worker/salvage.mjs`
+- Test: the matching `*.test.mjs` files
+
+- [ ] **Step 1: Write the failing tests, one per item:**
+  - (a) Protocol writes with a local commit ahead of origin: the `origin/main..HEAD` refusal applies only to working-tree writes. A `commitFromHead` renew succeeds while an agent commit sits in meta. `validateConfig` rejects `phase_timeout >= lease_ttl`.
+  - (b) A report push that is rejected, rebased onto a newer origin feat-req, and then hits an autostash conflict: the agent's stale snapshot is salvaged, not put back. Put back only when origin's feat-req still equals the snapshot-time HEAD blob.
+  - (c) A non-blocking request that landed but whose push wasn't confirmed: the next step does not post it again.
+  - (d) An agent-written `Worker phase: close-out` line in a request's Context does not change answer routing. Agent lines carrying that marker are stripped, and the worker's own marker is appended and read last.
+  - (e) A tracked `.Sdlc-Run/x` (case variant) is refused on a case-insensitive filesystem. The check uses the pathspec `:(icase).sdlc-run`.
+  - (f) The agent checks out another branch in meta: the worker salvages the dirty files and restores `main` before any board write.
+  - (g) A dirty symlink in the meta clone is salvaged as a link (`lstat` / `readlink`), never by copying its target.
+- [ ] **Step 2: Run the tests and confirm they fail**
+
+Run: `node --test "scripts/lib/board/*.test.mjs" "scripts/lib/worker/*.test.mjs"`
+Expected: the new tests fail.
+
+- [ ] **Step 3: Implement (a)–(g)**
+- [ ] **Step 4: Run the suites and `npm test`**
+
+Expected: PASS.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add scripts/lib/
+git commit -m "fix(worker): Plan 2 residuals — renew while ahead, safe put-back, no duplicate requests, unforgeable phase marker"
+```
+
 ### Task 1: STATUS.md board view
 
 **Files:**

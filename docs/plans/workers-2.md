@@ -1,7 +1,7 @@
 ---
 feat_req: docs/feat-req/workers.md
 design: docs/design/workers.md
-status: IN_PROGRESS
+status: IMPLEMENTED
 date: 2026-11-20
 plan: 2 of 3
 repos: [sdlskills]
@@ -60,7 +60,7 @@ Added after Plan 1's final review (Ruling 17 in the Plan 1 ledger). Plan 1's `co
 **Interfaces:**
 - Produces: for protocol kinds (claim, renew, release, request, answer, withdraw, apply), `boardWrite` builds the commit from HEAD blobs in a temporary index (`GIT_INDEX_FILE` in a temp dir: `read-tree HEAD`, `hash-object -w` the patched content, `update-index --cacheinfo`, `write-tree`, `commit-tree`, then update `refs/heads/main`). `mutate` receives a content API (read a path at HEAD, write patched content for a path) and never reads or writes the working tree. After the push lands, each touched path is fast-forwarded in the working tree only if the working file still equals the old HEAD blob. Otherwise the person's copy is left untouched. Report (`onFailure: 'keep-work'`) keeps its current working-tree behaviour.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```js
 test('process killed mid-push loses no uncommitted docs edit', () => {
@@ -74,19 +74,19 @@ test('protocol commit contains only the patched frontmatter, never working-tree 
 test('clean working file is fast-forwarded to the new HEAD; dirty one is left as is', () => {});
 ```
 
-- [ ] **Step 2: Run the tests and confirm they fail**
+- [x] **Step 2: Run the tests and confirm they fail**
 
 Run: `node --test scripts/lib/board/git.test.mjs`
 Expected: the new tests fail; the existing ones pass.
 
-- [ ] **Step 3: Replace the working-tree swap with the temporary-index commit**
+- [x] **Step 3: Replace the working-tree swap with the temporary-index commit**
 
-- [ ] **Step 4: Run the board tests and the full suite**
+- [x] **Step 4: Run the board tests and the full suite**
 
 Run: `node --test "scripts/lib/board/*.test.mjs"` then `npm test`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add scripts/lib/board/
@@ -108,7 +108,7 @@ git commit -m "fix(board): protocol writes commit from a temporary index, never 
   - `agentSettings() -> object`: the Claude Code settings written to `agent-settings.json`, with `sandbox.enabled: true`, `sandbox.autoAllowBashIfSandboxed: true` and `permissions.defaultMode: 'acceptEdits'`.
   - `installTrailerHook(repoDir, workerId)`: writes an executable `.git/hooks/commit-msg` that runs `git interpret-trailers --in-place --if-exists doNothing --trailer "Worker: <id>" "$1"`. It keeps an existing readonly `pre-commit` hook.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```js
 test('SDLC_HOME overrides ~/.sdlc', () => {});
@@ -118,19 +118,19 @@ test('commit-msg hook adds Worker trailer once, even if commit already has one',
 test('agentSettings enables the sandbox', () => { assert.equal(agentSettings().sandbox.enabled, true); });
 ```
 
-- [ ] **Step 2: Run the tests and confirm they fail**
+- [x] **Step 2: Run the tests and confirm they fail**
 
 Run: `node --test scripts/lib/worker/home.test.mjs`
 Expected: FAIL.
 
-- [ ] **Step 3: Implement the exports**
+- [x] **Step 3: Implement the exports**
 
-- [ ] **Step 4: Run the tests and confirm they pass**
+- [x] **Step 4: Run the tests and confirm they pass**
 
 Run: `node --test scripts/lib/worker/home.test.mjs`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add scripts/lib/worker/home.*
@@ -159,7 +159,7 @@ git commit -m "feat(worker): worker home, config, state, pid, trailer hook"
   - `classifyFailure({ exitCode, timedOut, stderrTail, spawnError }) -> 'worker' | 'effort'`. `ENOENT` on spawn, or stderr matching `/model/i` together with `/not (found|available|supported)|invalid|unknown/i`, gives `worker`. Everything else gives `effort`.
 - Produces (`fixtures/fake-agent.mjs`): it reads `FAKE_AGENT_SCRIPT` (a path to JSON `{ writes: {relPath: content}, result: object | null, exitCode, sleepMs, stderr }`), performs the writes relative to cwd, sleeps, writes `result` to `$SDLC_RESULT_FILE` unless it's null, prints `stderr`, and exits with `exitCode`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```js
 test('route maps each status to its skills', () => {});
@@ -171,21 +171,21 @@ test('readResult rejects a missing file, bad JSON and an unknown outcome', () =>
 test('classifyFailure: ENOENT and model errors are worker errors', () => {});
 ```
 
-- [ ] **Step 2: Run the tests and confirm they fail**
+- [x] **Step 2: Run the tests and confirm they fail**
 
 Run: `node --test scripts/lib/worker/agent.test.mjs`
 Expected: FAIL.
 
-- [ ] **Step 3: Implement `agent.mjs` and the fake agent**
+- [x] **Step 3: Implement `agent.mjs` and the fake agent**
 
 Spawn with `detached: true`, so the timeout and `stop` can kill the whole group with `process.kill(-pid)`.
 
-- [ ] **Step 4: Run the tests and confirm they pass**
+- [x] **Step 4: Run the tests and confirm they pass**
 
 Run: `node --test scripts/lib/worker/agent.test.mjs`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add scripts/lib/worker/agent.* scripts/lib/worker/fixtures/
@@ -202,19 +202,19 @@ git commit -m "feat(worker): headless agent invocation, result file, fake agent"
 - Consumes: `readWorker` (Plan 1, Task 10), `readConfig` (Task 1).
 - Produces: `preflight({ home, cfg, root, gh: { authOk: () => boolean }, which: (cmd) => boolean }) -> { ok: true } | { ok: false, problem: string, kind: 'worker' | 'fatal' }`. A failed `gh` login or an agent CLI missing from `PATH` gives `worker` (post a worker error and idle). No registry entry, a retired entry, or `agent`/`model` differing from the registry gives `fatal` (exit with the message; no request is posted, because a retired or unregistered worker must not write to the board).
 
-- [ ] **Step 1: Write the failing tests**: one per outcome: ok; gh logged out; CLI missing; unregistered; retired; model mismatch.
-- [ ] **Step 2: Run the tests and confirm they fail**
+- [x] **Step 1: Write the failing tests**: one per outcome: ok; gh logged out; CLI missing; unregistered; retired; model mismatch.
+- [x] **Step 2: Run the tests and confirm they fail**
 
 Run: `node --test scripts/lib/worker/preflight.test.mjs`
 Expected: FAIL.
 
-- [ ] **Step 3: Implement `preflight`**
-- [ ] **Step 4: Run the tests and confirm they pass**
+- [x] **Step 3: Implement `preflight`**
+- [x] **Step 4: Run the tests and confirm they pass**
 
 Run: `node --test scripts/lib/worker/preflight.test.mjs`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add scripts/lib/worker/preflight.*
@@ -231,24 +231,24 @@ git commit -m "feat(worker): preflight checks before every claim"
 - Consumes: `installTrailerHook` (Task 1).
 - Produces: `assemble({ rootDir, slug, keys, catalog, hooks?: { workerId: string } })`. When `hooks` is given, `installTrailerHook(dest, workerId)` runs on every non-readonly checkout. Without it, behaviour is unchanged.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```js
 test('hooks.workerId installs the commit-msg trailer hook on writable checkouts only', () => {});
 ```
 
-- [ ] **Step 2: Run the test and confirm it fails**
+- [x] **Step 2: Run the test and confirm it fails**
 
 Run: `node --test scripts/assemble-env.test.mjs`
 Expected: the new test fails, and the existing tests pass.
 
-- [ ] **Step 3: Add the `hooks` option**
-- [ ] **Step 4: Run the tests and confirm they pass**
+- [x] **Step 3: Add the `hooks` option**
+- [x] **Step 4: Run the tests and confirm they pass**
 
 Run: `node --test scripts/assemble-env.test.mjs`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add scripts/assemble-env.*
@@ -281,7 +281,7 @@ git commit -m "feat(assemble-env): optional Worker trailer hook on effort checko
     - a worker-classified failure → a worker error request (one open per worker), with `action: 'needs-attention'`.
   - The `failures` count resets on `completed`. Status `IMPLEMENTED` after a report → release, `action: 'done'`.
 
-- [ ] **Step 1: Write the failing tests** (`makeBoard` plus the fake agent, `deps.sleep` as a no-op, a fixed `deps.now`):
+- [x] **Step 1: Write the failing tests** (`makeBoard` plus the fake agent, `deps.sleep` as a no-op, a fixed `deps.now`):
 
 ```js
 test('ACCEPTED effort: claim → run → report with Phase trailer and renewed lease', () => {});
@@ -304,24 +304,24 @@ test('takeover of a stale IN_PROGRESS effort: workspace built from origin/feat/<
 test('overlap with another live claim: warning logged and named in the claim commit body, claim proceeds', () => {});
 ```
 
-- [ ] **Step 2: Run the tests and confirm they fail**
+- [x] **Step 2: Run the tests and confirm they fail**
 
 Run: `node --test scripts/lib/worker/loop.test.mjs`
 Expected: FAIL.
 
-- [ ] **Step 3: Extract `reportPaths` into `scripts/lib/board/paths.mjs`, and make `cli.mjs` use it**
+- [x] **Step 3: Extract `reportPaths` into `scripts/lib/board/paths.mjs`, and make `cli.mjs` use it**
 
 Run: `node --test scripts/lib/board/cli.test.mjs`
 Expected: PASS (unchanged behaviour).
 
-- [ ] **Step 4: Implement `makeContext` and `step`**
+- [x] **Step 4: Implement `makeContext` and `step`**
 
-- [ ] **Step 5: Run the tests and confirm they pass**
+- [x] **Step 5: Run the tests and confirm they pass**
 
 Run: `node --test scripts/lib/worker/loop.test.mjs`
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add scripts/lib/worker/loop.* scripts/lib/board/paths.mjs scripts/lib/board/cli.mjs
@@ -349,7 +349,7 @@ git commit -m "feat(worker): loop step: claim, apply answers, run agent, report"
     7. register with `boardWrite` (`kind: 'register'`, `onReject: 'restart'`), creating `board/workers/.gitkeep`, `board/requests/.gitkeep` and `board/config.yml` when `board/` is missing.
     If the id file already exists, it uses a new id (up to 5 tries). On a lost race it re-syncs and retries. Any throw deletes the home before rethrowing.
 
-- [ ] **Step 1: Write the failing tests** (a stub `gh` and the fake agent as `agent_cmd`):
+- [x] **Step 1: Write the failing tests** (a stub `gh` and the fake agent as `agent_cmd`):
 
 ```js
 test('creates home, registers on main under the owner, id shape', () => {
@@ -362,18 +362,18 @@ test('push rejected → retries with a fresh pull', () => {});
 test('probe failure / wrong kit flavor / push failure → no home left behind', () => {});
 ```
 
-- [ ] **Step 2: Run the tests and confirm they fail**
+- [x] **Step 2: Run the tests and confirm they fail**
 
 Run: `node --test scripts/lib/worker/create.test.mjs`
 Expected: FAIL.
 
-- [ ] **Step 3: Implement `create.mjs`**
-- [ ] **Step 4: Run the tests and confirm they pass**
+- [x] **Step 3: Implement `create.mjs`**
+- [x] **Step 4: Run the tests and confirm they pass**
 
 Run: `node --test scripts/lib/worker/create.test.mjs`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add scripts/lib/worker/create.*
@@ -403,7 +403,7 @@ git commit -m "feat(worker): sdlc worker create with registration and rollback"
   - `retire <id> [--force]`: stop, release, `retired_at` (`retire` event), then delete the home. It refuses if `isProtected` holds for any `meta/workspace/*` checkout, unless `--force`.
   - `config <id> --model <m>`: updates `config.json` and the registry in one `config` event.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```js
 test('start refuses when already running', () => {});
@@ -417,29 +417,29 @@ test('retire keeps the registry entry with retired_at, deletes home, refuses on 
 test('a retired worker cannot claim or report (fatal preflight)', () => {});
 ```
 
-- [ ] **Step 2: Run the tests and confirm they fail**
+- [x] **Step 2: Run the tests and confirm they fail**
 
 Run: `node --test scripts/lib/worker/cli.test.mjs`
 Expected: FAIL.
 
-- [ ] **Step 3: Export `isProtected` from `scripts/clean-env.mjs`**
+- [x] **Step 3: Export `isProtected` from `scripts/clean-env.mjs`**
 
 Run: `node --test scripts/clean-env.test.mjs`
 Expected: PASS (behaviour unchanged).
 
-- [ ] **Step 4: Implement `runWorker` and wire the dispatch in `board/cli.mjs`**
+- [x] **Step 4: Implement `runWorker` and wire the dispatch in `board/cli.mjs`**
 
-- [ ] **Step 5: Run the tests and confirm they pass**
+- [x] **Step 5: Run the tests and confirm they pass**
 
 Run: `node --test scripts/lib/worker/cli.test.mjs scripts/lib/board/cli.test.mjs`
 Expected: PASS.
 
-- [ ] **Step 6: Run the full suite**
+- [x] **Step 6: Run the full suite**
 
 Run: `npm test`
 Expected: PASS.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add scripts/lib/worker/cli.* scripts/lib/board/cli.* scripts/clean-env.mjs
