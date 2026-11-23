@@ -87,6 +87,8 @@ Record the decision in the `## Triage` section for PARKED/REJECTED so it is not 
 
 - Run `scripts/render-status.mjs` (or note the `Stop` hook will).
 - If ACCEPTED, tell the user the next phase is Design (`/write-design-doc <name>`), or that `/select-next-task` will pick it up.
+- Board mode: the effort reaches workers only once it is on `main`. Tell the user to commit and push the new feat-req.
+- Headless (`SDLC_HEADLESS=1`): the triage in Step 3 becomes a triage gate request; see **Headless mode** in `CLAUDE.process.md`.
 
 ### Constraints
 

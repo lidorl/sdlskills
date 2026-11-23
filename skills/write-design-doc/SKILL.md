@@ -38,6 +38,8 @@ Single-repo project (N=1): the one repo is always in scope; this step is a forma
 
 ### Step 3: Technical brainstorm (conditional)
 
+Headless (`SDLC_HEADLESS=1`): this step's `discuss` and Step 6's approval become requests; see **Headless mode** in `CLAUDE.process.md`.
+
 If the solution space is non-obvious — the feat-req's Solution Direction is one of several viable approaches, or there's a real architectural fork (e.g. event sourcing vs. audit table vs. temporal columns) — diverge before locking the doc's structure. Check the Autonomy Policy in `CLAUDE.process.md`:
 
 - `technical_brainstorm: discuss` → run `superpowers:brainstorming`, then continue.
@@ -110,6 +112,7 @@ Design-doc approval is a hard stop regardless of the Autonomy Policy.
 - Present the doc path and walk the user through Proposed Design, Data Model & Schema Changes, and Alternatives Considered.
 - Ask directly: approved, or revise? Record follow-up answers inline in the doc.
 - On approval: set frontmatter `status: APPROVED`, set the feat-req `status: DESIGNED`, run `scripts/render-status.mjs`, and tell the user the next phase is `/write-execution-plan <name>`.
+- Board mode: report the phase with `node scripts/sdlc.mjs report <name> --phase DESIGNED`. Exit `3` means someone else now holds the effort: tell the user and stop.
 - The `repos:` list is **locked** at approval. Later phases (`/write-execution-plan`, `/classify-change`, `/select-next-task`) read only this list.
 
 ### Constraints
