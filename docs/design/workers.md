@@ -444,6 +444,8 @@ Agent CLI behaviour itself (the `claude -p` sandbox, Copilot path checks) gets a
 
 ## Security Considerations
 
+**Trust boundary.** Anyone who can push to the meta repo can run code on every worker: a worker runs `scripts/sdlc.mjs` from its clone of `main`, installs the meta repo's npm dependencies (lifecycle scripts included), and its agent loads the repo's `CLAUDE.md`, skills and `.claude/settings.json`. Give push rights to `main` only to people you'd trust to run code on the worker machines. The path, symlink and redaction guards defend against mistakes and malformed board files, not against those writers.
+
 The Security Review triggers that apply are **auth** (it uses the machine's git and `gh` credentials) and **unattended code execution** (a headless agent with tool permissions). `/security-review` is required at close-out.
 - **Containment.** Claude runs sandboxed through `agent-settings.json` (writes stay in `meta/`). Copilot keeps path verification but its shell commands aren't sandboxed. The README recommends a dedicated OS user or VM for Copilot workers. Listed in Open Items.
 - **Secrets on a shared repo.** Every error excerpt and log line in a request goes through `redact.mjs` before it's written. Failure drops the excerpt. Patterns include env values whose names match `TOKEN|SECRET|KEY|PASSWORD`, and the redaction runs on the in-memory text before any file write.
