@@ -184,3 +184,70 @@ test('a non-https/ssh url in repos.yml is refused (via loadCatalog)', () => {
   assert.throws(() => assemble({ rootDir: root, slug: 'thing', keys: ['api'] }), /https:\/\/ or git@/);
   rmSync(dir, { recursive: true });
 });
+
+test('hooks.workerId installs the commit-msg trailer hook on writable checkouts only', () => {
+  const { dir, root, catalog } = setup();
+  catalog.repos.web = entry(catalog.repos.web.url, { readonly: true });
+  const hooks = { workerId: 'lidor-abc123' };
+  assemble({ rootDir: root, slug: 'thing', keys: ['api', 'web'], catalog, hooks });
+  // second run exercises the fetched-existing path
+  assemble({ rootDir: root, slug: 'thing', keys: ['api', 'web'], catalog, hooks });
+  const api = join(root, 'workspace', 'api');
+  const web = join(root, 'workspace', 'web');
+  git(api, '-c', 'user.email=a@b.c', '-c', 'user.name=t', 'commit', '--allow-empty', '-m', 'work');
+  const msg = execFileSync('git', ['log', '-1', '--format=%B'], { cwd: api }).toString();
+  assert.equal(msg.match(/^Worker: lidor-abc123$/gm)?.length, 1);
+  assert.ok(!existsSync(join(web, '.git', 'hooks', 'commit-msg')));
+  rmSync(dir, { recursive: true });
+});
+
+test('without hooks, no commit-msg hook is installed', () => {
+  const { dir, root, catalog } = setup();
+  assemble({ rootDir: root, slug: 'thing', keys: ['api'], catalog });
+  assert.ok(!existsSync(join(root, 'workspace', 'api', '.git', 'hooks', 'commit-msg')));
+  rmSync(dir, { recursive: true });
+});
+
+test('hooks without a valid workerId throws before touching the workspace', () => {
+  const { dir, root, catalog } = setup();
+  for (const hooks of [{}, { workerId: undefined }, { workerId: '' }, { workerId: '../x' }]) {
+    assert.throws(() => assemble({ rootDir: root, slug: 'thing', keys: ['api'], catalog, hooks }), /workerId/);
+  }
+  assert.ok(!existsSync(join(root, 'workspace')));
+  rmSync(dir, { recursive: true });
+});
+
+test('trailer hook is removed when the repo turns readonly', () => {
+  const { dir, root, catalog } = setup();
+  const hooks = { workerId: 'lidor-abc123' };
+  assemble({ rootDir: root, slug: 'thing', keys: ['api'], catalog, hooks });
+  const hook = join(root, 'workspace', 'api', '.git', 'hooks', 'commit-msg');
+  assert.ok(existsSync(hook));
+  catalog.repos.api = entry(catalog.repos.api.url, { readonly: true });
+  assemble({ rootDir: root, slug: 'thing', keys: ['api'], catalog, hooks });
+  assert.ok(!existsSync(hook));
+  rmSync(dir, { recursive: true });
+});
+
+test('assembling without hooks removes the trailer hook and restores a chained foreign hook', () => {
+  const { dir, root, catalog } = setup();
+  assemble({ rootDir: root, slug: 'thing', keys: ['api'], catalog });
+  const hook = join(root, 'workspace', 'api', '.git', 'hooks', 'commit-msg');
+  writeFileSync(hook, '#!/bin/sh\n# foreign\nexit 0\n');
+  assemble({ rootDir: root, slug: 'thing', keys: ['api'], catalog, hooks: { workerId: 'lidor-abc123' } });
+  assert.match(readFileSync(hook, 'utf8'), /sdlc-worker-trailer/);
+  assemble({ rootDir: root, slug: 'thing', keys: ['api'], catalog });
+  assert.match(readFileSync(hook, 'utf8'), /# foreign/);
+  assert.ok(!existsSync(`${hook}.orig`));
+  rmSync(dir, { recursive: true });
+});
+
+test('a catalog url that starts with "-" is refused before git sees it as an option', () => {
+  const { dir, root, catalog } = setup();
+  const marker = join(dir, 'pwned');
+  catalog.repos.api = entry(`--upload-pack=touch ${marker}`);
+  assert.throws(() => assemble({ rootDir: root, slug: 'thing', keys: ['api'], catalog }), /must not start with "-"/);
+  assert.equal(existsSync(marker), false);
+  assert.equal(existsSync(join(root, 'workspace', 'api', '.git')), false);
+  rmSync(dir, { recursive: true });
+});

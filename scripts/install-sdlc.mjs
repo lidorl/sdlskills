@@ -9,7 +9,7 @@
  * the autonomy interview — is still `/setup-sdlc`, run afterward.
  *
  * Usage:  node /path/to/sdlskills/scripts/install-sdlc.mjs <target-dir> [flags]
- * Flags:  --skip-plugins  --skip-npm  --dry-run
+ * Flags:  --skip-plugins  --skip-npm  --dry-run  --board
  *
  * Re-running is the update path: kit-owned files (skills, scripts) are
  * overwritten; user files (CLAUDE.stack.md, package.json, .gitignore) are
@@ -27,7 +27,7 @@ import {
   cpSync,
   rmSync,
 } from 'node:fs';
-import { join, dirname, basename, relative, sep } from 'node:path';
+import { join, dirname, basename, resolve, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import { isEntryPoint } from './lib/is-entry-point.mjs';
@@ -36,6 +36,7 @@ import { looksLikeCodeRepo } from './lib/code-repo.mjs';
 import { runGuide } from './lib/guide.mjs';
 import { colorEnabled, makeStyle } from './lib/style.mjs';
 import { formatReport } from './lib/report.mjs';
+import { DEFAULT_CONFIG_YAML } from './lib/board/config.mjs';
 
 /** The phase skills, vendored into <target>/.claude/skills/. */
 export const SKILLS = [
@@ -57,6 +58,7 @@ export const SKILLS = [
 const INSTALLER_ONLY_LIB = ['choose-tool', 'code-repo', 'complete-path', 'guide', 'prereqs', 'prompter', 'report', 'style', 'ui'];
 const INSTALLER_ONLY_FILES = [
   'install-guided.test.mjs',
+  'test-setup.mjs', // the kit's own npm test harness
   ...INSTALLER_ONLY_LIB.flatMap((m) => [`lib/${m}.mjs`, `lib/${m}.test.mjs`]),
 ];
 
@@ -86,6 +88,7 @@ const PKG_DEFAULTS = {
     status: 'node scripts/render-status.mjs',
   },
   dependencies: { yaml: '^2.5.0' },
+  bin: { sdlc: 'scripts/sdlc.mjs' },
 };
 
 /**
@@ -131,6 +134,7 @@ export const CLAUDE_LAYOUT = {
  * @param {boolean} [opts.skipPlugins]
  * @param {boolean} [opts.skipNpm]
  * @param {boolean} [opts.dryRun]
+ * @param {boolean} [opts.board]     - scaffold board/ for workers or a shared board
  * @param {typeof CLAUDE_LAYOUT} [opts.layout]
  * @returns {{ actions: string[], warnings: string[], nextSteps: string[] }}
  */
@@ -140,6 +144,7 @@ export function install({
   skipPlugins = false,
   skipNpm = false,
   dryRun = false,
+  board = false,
   layout = CLAUDE_LAYOUT,
   log = () => {},
 }) {
@@ -240,12 +245,18 @@ export function install({
   const pkgExisted = existsSync(pkgPath);
   const pkg = pkgExisted ? JSON.parse(readFileSync(pkgPath, 'utf8')) : {};
   const before = JSON.stringify(pkg);
-  pkg.name ??= basename(targetDir);
+  pkg.name ??= basename(resolve(targetDir)).toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^[-._]+|[-._]+$/g, '') || 'sdlc-project';
   pkg.type ??= PKG_DEFAULTS.type;
   pkg.private ??= PKG_DEFAULTS.private;
   pkg.scripts = { ...PKG_DEFAULTS.scripts, ...pkg.scripts };
   pkg.dependencies = { ...pkg.dependencies };
   pkg.dependencies.yaml ??= PKG_DEFAULTS.dependencies.yaml;
+  if (typeof pkg.bin === 'string') {
+    warnings.push('package.json has a string `bin`; add `sdlc: scripts/sdlc.mjs` to it yourself so `sdlc` is on the PATH.');
+  } else {
+    pkg.bin = { ...pkg.bin };
+    pkg.bin.sdlc ??= PKG_DEFAULTS.bin.sdlc;
+  }
   if (JSON.stringify(pkg) !== before) {
     if (!dryRun) writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + '\n');
     did(pkgExisted ? 'merged package.json' : 'created package.json');
@@ -274,6 +285,20 @@ export function install({
     if (!dryRun && !existsSync(join(dir, '.gitkeep'))) writeFileSync(join(dir, '.gitkeep'), '');
   }
   did(`created docs/{${DOCS_DIRS.join(',')}}/`);
+
+  // 6b. board/ — only on request; never removes or overwrites what is there.
+  if (board) {
+    const boardExisted = existsSync(join(targetDir, 'board', 'workers')) && existsSync(join(targetDir, 'board', 'requests'));
+    for (const d of ['workers', 'requests']) {
+      const dir = join(targetDir, 'board', d);
+      mkdir(dir);
+      if (!dryRun && !existsSync(join(dir, '.gitkeep'))) writeFileSync(join(dir, '.gitkeep'), '');
+    }
+    const cfg = join(targetDir, 'board', 'config.yml');
+    const had = existsSync(cfg);
+    if (!dryRun && !had) writeFileSync(cfg, DEFAULT_CONFIG_YAML);
+    did(boardExisted && had ? 'kept existing board/' : 'created board/{workers,requests}/ and board/config.yml');
+  }
 
   // 7. superpowers plugin.
   const { cli, commands, notes } = layout.plugin;
@@ -328,8 +353,8 @@ export function install({
  * What an install would do, as plain action lines (no "[dry-run]" prefix), for
  * showing a person before they confirm. Never writes anything.
  */
-export function planActions({ kitRoot, targetDir, layout = CLAUDE_LAYOUT, skipPlugins = false, skipNpm = false }) {
-  const { actions } = install({ kitRoot, targetDir, layout, skipPlugins, skipNpm, dryRun: true });
+export function planActions({ kitRoot, targetDir, layout = CLAUDE_LAYOUT, skipPlugins = false, skipNpm = false, board = false }) {
+  const { actions } = install({ kitRoot, targetDir, layout, skipPlugins, skipNpm, board, dryRun: true });
   return actions.map((a) => a.replace(/^\[dry-run\] /, ''));
 }
 
@@ -340,6 +365,7 @@ export async function main(layout = CLAUDE_LAYOUT) {
     skipPlugins: args.includes('--skip-plugins'),
     skipNpm: args.includes('--skip-npm'),
     dryRun: args.includes('--dry-run'),
+    board: args.includes('--board'),
   };
   let targetDir = args.find((a) => !a.startsWith('--'));
   const extraWarnings = [];
@@ -357,21 +383,24 @@ export async function main(layout = CLAUDE_LAYOUT) {
       );
     }
   } else if (process.stdin.isTTY && process.stdout.isTTY) {
+    const answers = {};
     targetDir = await runGuide({
+      answers,
       layout,
       cwd: process.cwd(),
       kitRoot,
       input: process.stdin,
       output: process.stdout,
       dryRun: flags.dryRun,
-      preview: (t) => planActions({ kitRoot, targetDir: t, layout, ...flags }),
+      preview: (t, a) => planActions({ kitRoot, targetDir: t, layout, ...flags, board: flags.board || Boolean(a.board) }),
     });
     if (!targetDir) {
       process.exitCode = 1;
       return;
     }
+    flags.board ||= Boolean(answers.board);
   } else {
-    console.error(`usage: node ${layout.installer} <target-dir> [--skip-plugins] [--skip-npm] [--dry-run]`);
+    console.error(`usage: node ${layout.installer} <target-dir> [--skip-plugins] [--skip-npm] [--dry-run] [--board]`);
     process.exit(1);
   }
 

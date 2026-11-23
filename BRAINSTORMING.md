@@ -203,3 +203,94 @@ Feeds from: the standing concern about artifact overload; ties to §5 (per-repo 
 - STATUS.md: does the follow-up FR need a distinct `incident_debt: true` flag in frontmatter, or is a convention on the reason field enough for `render-status.mjs` to pick it out?
 - External tracker: kit-provided integration, or an adopter-wired hook point?
 - Does `close-out` for the hotfix block on the follow-up FR file actually existing (stronger than the current DoD wording)?
+
+---
+
+## 12. Worker control app
+
+**The problem.** The workers feature ([`docs/feat-req/workers.md`](docs/feat-req/workers.md)) ships a command-line client, `sdlc`. Running several detached workers from it means juggling commands, and you only learn something changed when you run `sdlc watch` or `sdlc inbox`.
+
+**The idea.** A control app, as a terminal UI or a GUI, that is a richer client of the same board. From one place it lets you create, start, stop and retire workers, see their status live, get notified of updates, and answer questions, clarifications and approvals. Workers only speak to the board, so the app needs no worker changes.
+
+**Open questions.**
+- Terminal UI first, GUI first, or both on one shared client library?
+- Where notifications come from: polling the board, a webhook on pushes to the meta repo, or GitHub notifications?
+- Does it run locally only, or also as a hosted view of the board for a team?
+- How does it authenticate, given the board is a git remote: reuse the user's git and `gh` credentials?
+
+---
+
+## 13. Slack integration for worker requests
+
+**The problem.** Workers post requests (gates, questions, clarifications, errors) to the board ([`docs/feat-req/workers.md`](docs/feat-req/workers.md)). A person only sees them by running `sdlc inbox` or `sdlc watch`, so requests sit unanswered and workers stay blocked.
+
+**The idea.** A Slack bridge, another client of the board, that works in both directions:
+- **Out.** When a request lands on main, the bridge sends it to the person it's for in Slack, by DM or in a team channel, with its context and a link to the effort.
+- **In.** The person replies in Slack, and the bridge writes the answer into the request on the board with the same pull, commit, push, validate steps. The next worker that claims the effort picks it up as usual.
+- **One-tap answers.** A question's `## Options` and a gate's approve or reject become Slack buttons, so most answers are one tap. Free text in the thread covers the rest.
+- **Updates.** The thread is updated when the request is answered elsewhere, withdrawn or applied, so Slack never shows a stale question.
+
+The board stays the source of truth. Slack only mirrors requests and relays answers, and workers never talk to Slack directly.
+
+**What the workers feature should leave room for now** (so this needs no worker changes later):
+- The request record can hold external references (for example a Slack channel and thread id) and records how it was answered (`answered_via: cli | file | slack`).
+- `answered_by` is always the person's GitHub login, even when a bot pushes the answer.
+- Answering an already-answered request is rejected cleanly, so a late Slack reply can't overwrite a CLI answer.
+
+**Open questions.**
+- Where the bridge runs. It is the first always-on component: a small service using Slack Socket Mode, a GitHub Action on pushes to main for the outbound side, or part of the future control app?
+- Identity: how a Slack user maps to a GitHub login (a mapping in the worker registry or a `people` file on the board?), and which push identity the bridge uses, with `Answered-by:` as a trailer.
+- Routing: DM the owner, post to a per-team channel, or let each person choose? Where do gates for "approvers" go?
+- Security: who may approve a gate from Slack, and does an approval need a confirmation step? Error excerpts are already redacted, but are they safe to post in a shared channel?
+- Follow-ups: if a person asks a question back in the thread, how does that reach a worker? Is it a new request in the other direction?
+- Relationship to the GitHub-issues option for requests: would Slack replace it, or sit on top of it?
+- Other chat tools (Teams, Google Chat): should the bridge be one adapter behind a generic interface?
+
+---
+
+## 14. A GitHub workflow as the claim arbiter
+
+**The problem.** In the workers design ([`docs/design/workers.md`](docs/design/workers.md)), claims race on main: every worker pushes straight to main, the loser's push is rejected, and it has to re-validate and start over. This makes the protocol depend on careful client-side steps (pull, commit, push, validate) in every client. It also forces adopters to allow direct pushes to main, so main can't be protected by required PRs.
+
+**The idea.** A worker never pushes a claim to main. Instead:
+- **Submit.** The worker opens a PR that changes only the claim fields of one feat-req.
+- **Arbitrate.** A GitHub workflow reviews the PR against the board on main (only claim fields changed, no live claim on the effort, not `awaiting` an open request, the worker registered and not retired), then approves and merges it, or closes it with a reason.
+- **Serialize.** The workflow runs with `concurrency: 1` (one group, no cancel-in-progress), so claims are decided one at a time and the race disappears by construction.
+- **Wait.** The worker waits for the PR to change state. Merged means the claim holds. Closed means it starts over and picks something else.
+
+In practice the workflow becomes the work manager: the single place that decides who holds what, while workers stay pull-based.
+
+**Trade-offs to weigh.**
+- **Gains.** No client-side race logic, so claim validation lives in one place. Main can be protected (only the workflow merges), which removes the workers feature's biggest adoption constraint. Every claim gets an auditable PR record.
+- **Costs.** Claim latency goes from one push to a workflow run (tens of seconds to minutes). It depends on GitHub Actions minutes and availability: if Actions is down, nobody can claim. It ties the protocol to GitHub (the workers feature is already GitHub-only). PRs per claim add noise to the meta repo.
+- **Scope creep risk.** Once a workflow arbitrates claims, it's tempting to route reports, takeovers, releases and requests through it too. That would make it a central dispatcher, which the workers feature put out of scope.
+
+**Open questions.**
+- Claims only, or also takeovers and releases? Reports probably stay direct pushes (they only touch the effort's own files), but then main still needs direct pushes for reports.
+- How does the worker wait: poll `gh pr view`, or `gh pr checks --watch`? What timeout, and what happens if the workflow never runs?
+- Does `concurrency: 1` queue fairly under load, or does GitHub drop pending runs? (A concurrency group keeps only one pending run and cancels older pending ones, so a queue of many claims may need a different mechanism, such as a merge queue.)
+- Is GitHub's merge queue a better fit than a custom workflow, since it already serializes merges and re-checks each PR against the latest main?
+- How does an interactive session claim: also through a PR, with the person waiting for it?
+- Could it run alongside direct-push claims during migration, or is it all or nothing per meta repo?
+
+---
+
+## 15. Project-wide "stop all work" switch
+
+**The problem.** In the workers design ([`docs/design/workers.md`](docs/design/workers.md)), each worker is stopped one at a time, by its owner, on the machine it runs on (`sdlc worker stop`). Nothing stops every worker at once. A team that hits a bad merge, a broken main, a runaway cost or an incident has no way to say "everyone stop now". It would have to reach every owner and every machine.
+
+**The idea.** A project-level switch on the board that every worker honors:
+- **Set.** `sdlc board pause [--reason "..."]` commits a flag to main, for example `board/control.yml` with `paused: true`, a reason, and who set it and when. `sdlc board resume` clears it.
+- **Honor.** Each worker checks the flag at every point where it already pulls: before claiming, before every report and on every idle poll. When it's set, the worker takes no new work.
+- **Visible.** `sdlc status`, `sdlc watch` and STATUS.md show the board as paused, with the reason and who paused it.
+
+Because the flag lives on the board, it reaches every worker on every machine with no new channel, the same way gates and answers do.
+
+**Decisions to make.**
+- **Soft or hard stop.** Soft: finish the current phase, report, release and idle. Hard: kill the agent run at once, report what exists and release. Maybe both, as `pause` and `pause --now`.
+- **What "stopped" means for the worker process.** It could stay running and idle, polling until resumed, or exit as if `sdlc worker stop` had been run. Idling resumes on its own, while exiting needs every owner to restart.
+- **Interactive sessions.** Does the flag block `sdlc claim` and `report` too, or only workers?
+- **Latency.** A worker inside a long agent run only notices the flag at its next pull. A hard stop would need the runtime to poll the board during runs (it already renews leases every TTL/2, which could be the check point).
+- **Scope.** Whole board only, or also per effort and per owner (`sdlc board pause --effort bulk-export`, `--owner lidorl`)?
+- **Who may pause or resume.** Anyone with push rights (consistent with gates having no access control), or a restricted list?
+- **Relation to §14.** If a workflow arbitrates claims, it could refuse every claim PR while paused, and workers wouldn't need to check the flag themselves.

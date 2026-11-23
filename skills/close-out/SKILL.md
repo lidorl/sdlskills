@@ -62,6 +62,10 @@ Include the Security Review item explicitly: either `/security-review` was run (
 
 Run `scripts/render-status.mjs` (or note the `Stop` hook will). Report the final DoD walk and any feat-reqs created in Step 4.
 
+Board mode, interactive: report and release the effort — `node scripts/sdlc.mjs report <name> --phase IMPLEMENTED`, then `node scripts/sdlc.mjs release <name>`. Exit `3` from the report means someone else now holds the effort: tell the user.
+
+Headless (`SDLC_HEADLESS=1`): code/security review findings become a `review-findings` gate with a `Findings` section, one `### F<n> <title>` per finding; see **Headless mode** in `CLAUDE.process.md`.
+
 Print as the final line: `run: node scripts/clean-env.mjs` — manual workspace cleanup. Do not run it automatically; follow-up work on the same repos is common right after shipping.
 
 ### Constraints

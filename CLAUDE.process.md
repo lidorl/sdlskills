@@ -64,6 +64,26 @@ Your project has a **meta-root** (recommended: its own git repo, so the docs tra
 
 ---
 
+## Workers and the board
+
+**Board mode** is on when `board/` exists in the meta-root (the installer creates it with `--board`, or the first `worker create` does). Without `board/`, skip everything in this section: the process runs as a single interactive session.
+
+With board mode on, the meta repo's `main` branch is the **board**: the one place every worker and every interactive session coordinates. `scripts/sdlc.mjs` is the client (`node scripts/sdlc.mjs <command>`); the skills call it, and so do people.
+
+In a headless run (`SDLC_HEADLESS=1`) the worker claims, reports and releases for the agent: skip the `sdlc` commands below and every skill's **Board mode, interactive** line.
+
+- **Claim before working.** A claim is the feat-req's `claimed_by` / `claimed_at` / `renewed_at`, committed to `main`. It counts only once it is on `origin/main`. Claim with `node scripts/sdlc.mjs claim <slug>`; an interactive session claims as the person's GitHub login.
+- **Leases.** Every report renews the claim. A claim with no renewal for `lease_ttl` (default 4h, set in `board/config.yml`) is stale, and anyone may take it over. One rule for everyone: workers and interactive sessions alike.
+- **Report each phase.** When a skill changes an effort's `status`, it ends with `node scripts/sdlc.mjs report <slug> --phase <status>`. Exit `3` means someone else now holds the effort: tell the person and stop working on it.
+- **Release at the end.** `/close-out` runs `node scripts/sdlc.mjs release <slug>` after `IMPLEMENTED`.
+- **Requests to people.** A worker never waits on a person. It posts a request file under `board/requests/` (gate, question, clarification or error). A blocking request sets `awaiting` on the feat-req and releases the claim in the same commit. People see their requests with `node scripts/sdlc.mjs inbox` and answer with `node scripts/sdlc.mjs answer <id>`.
+- **Answers change nothing by themselves.** Answering writes only the request file. The next claimant applies the answer, records it under the feat-req's `## Decisions` citing the request id, and deletes the request. No client changes lifecycle state when answering.
+- **Workers** are run with `node scripts/sdlc.mjs worker create | start | once | stop | status | list | retire | config`. Each has its own home (`~/.sdlc/workers/<id>/`) and its own clone of the meta repo.
+
+The full protocol is in `docs/design/workers.md` (the kit's design doc).
+
+---
+
 ## Autonomy Policy
 
 `/setup-sdlc` writes this block. Skills read it to decide whether a gate is a hard stop or an auto-proceed. Hand-edit it any time.
@@ -79,6 +99,37 @@ autonomy:
 **Always a hard stop, regardless of policy:** design-doc approval, feature-request triage (accept/park/reject), code/security review findings.
 
 When a gate auto-proceeds, the agent records the decision and any assumptions in the relevant doc and stays interruptible.
+
+### Headless mode
+
+When `SDLC_HEADLESS=1` is set, the agent is a **worker's** run: nobody is at the terminal. Every place a skill would ask a person becomes a **request** in the result file instead:
+
+- **Gate**: every always-hard-stop gate above, and every gate the policy sets to `confirm`, `discuss` or `pause`. `technical_brainstorm: discuss` becomes a gate carrying the 2–3 approaches as `Options`.
+- **Question**: information only a person has, with lettered `Options` and your recommendation.
+- **Clarification**: a judgment call with a safe default. Take the default, record the assumption in the effort's docs, and keep going (`blocking: false`).
+- `task_selection` does not apply: the worker already chose the task.
+
+Commit in code repos on `feat/<slug>` only. The meta repo is the worker's to commit: leave your doc edits uncommitted there and the worker reports them. The worker publishes the effort's docs, new or changed ADRs and the design companion docs; changes anywhere else in the meta repo fail the run.
+
+A trivial change (per `classify-change`) may report `phase: IMPLEMENTED` directly from `ACCEPTED`, with a history one-liner and no design or plan.
+
+Before you stop, write `$SDLC_RESULT_FILE` as JSON, with one of three outcomes:
+
+```json
+{ "outcome": "completed", "phase": "DESIGNED", "summary": "one line", "development_done": false }
+{ "outcome": "request", "request": { "kind": "gate|question|clarification|error", "gate": "design-approval", "for": "owner", "blocking": true, "sections": { "Request": "…", "Context": "…", "Options": "…" } } }
+{ "outcome": "failed", "error": { "message": "…", "tried": "…" } }
+```
+
+- `phase` is the feat-req `status` the effort is in now (`ACCEPTED`, `DESIGNED`, `PLANNED`, `IN_PROGRESS` or `IMPLEMENTED`), matching what you wrote in the feat-req.
+- `development_done: true` when the plan's last step is checked. The worker confirms it against the plan before routing to close-out.
+- `for: "owner"` addresses the worker's owner; `"approvers"` addresses whoever clears gates.
+- `blocking` is required: `true` for gates, questions and errors, `false` for clarifications.
+- Every request has non-empty `Request` and `Context` sections (plain text; the worker appends its own Context lines). Each kind adds one more:
+  - `gate`: set `gate` to `triage`, `design-approval`, `review-findings`, or the policy gate's name. A `review-findings` gate has a `Findings` section with one `### F<n> <title>` per finding.
+  - `question`: an `Options` section with one lettered line per option (`A) …`, `B) …`).
+  - `clarification`: an `Assumption` section saying what you assumed and where you applied it.
+  - `error`: an `Error` section with what failed and what you tried.
 
 ---
 
@@ -111,6 +162,17 @@ Every feature request carries a `status` in its frontmatter. This is the **singl
 | `PLANNED` | `/write-execution-plan` | Plan exists and is stamped |
 | `IN_PROGRESS` | Development phase entry | Being built |
 | `IMPLEMENTED` | `/close-out` | Definition of Done satisfied |
+
+In board mode (see **Workers and the board**) the feat-req also carries:
+
+| Field | Meaning |
+|---|---|
+| `claimed_by` | Who works on the effort now: a worker id, or a person's GitHub login |
+| `claimed_at` | When that claim started |
+| `renewed_at` | The claim's last renewal; stale after `lease_ttl` |
+| `awaiting` | The id of an open blocking request; the effort waits until it is answered |
+
+Only `sdlc` writes these fields. Applied answers are logged under the feat-req's `## Decisions`, each line citing its request id.
 
 Design docs carry their own `status: DRAFT | APPROVED`. Plans carry `status: PLANNED | IN_PROGRESS | IMPLEMENTED` plus `feat_req:` and `design:` links. Design docs and plans also carry `repos:` (the effort's repo set, locked at design approval); `select-next-task` runs `assemble-env.mjs` from it before routing a `DESIGNED`-or-later effort.
 

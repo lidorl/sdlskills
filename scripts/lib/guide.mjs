@@ -13,6 +13,10 @@ const CODE_REPO_CHOICES = [
   { label: 'Pick another path', value: 'a', key: 'a', aliases: ['another'] },
   { label: 'Quit', value: 'q', key: 'q', aliases: ['quit'] },
 ];
+const WORKERS_CHOICES = [
+  { label: 'Yes', value: 'y', key: 'y', aliases: ['yes'] },
+  { label: 'No', value: 'n', key: 'n', aliases: ['no'] },
+];
 const PROCEED_CHOICES = [
   { label: 'Yes, install', value: 'y', key: 'y', aliases: ['yes'] },
   { label: 'No, cancel', value: 'n', key: 'n', aliases: ['no'] },
@@ -21,6 +25,9 @@ const PROCEED_CHOICES = [
 /**
  * Walks a first-time user through the install: explains the meta-root, checks
  * prerequisites, picks and sanity-checks the location, shows the plan.
+ *
+ * `answers` is filled with choices beyond the path (`board`); `preview(target, answers)`
+ * receives them.
  *
  * @returns the absolute target directory to install into, or null if the user
  *          quit, a required prerequisite is missing, or input closed.
@@ -36,7 +43,9 @@ export async function runGuide({
   nodeVersion,
   dryRun = false,
   preview,
+  answers = {},
 }) {
+  let treeWidth = 0;
   const ui = createUi({ input, output, env });
   const { say, style } = ui;
   const stop = (why) => {
@@ -64,6 +73,7 @@ export async function runGuide({
       [`└── workspace/${name}/`, 'checkouts of your code repos, created later'],
     ];
     const width = Math.max(...tree.map(([left]) => left.length)) + 3;
+    treeWidth = width;
     for (const [left, note] of tree) say(`  ${style.cyan(left.padEnd(width))}${style.dim(note)}`);
     say('');
     say(`This installer is for ${layout.toolName}. Using a different tool? Run scripts/${layout.otherInstaller} instead.`);
@@ -116,10 +126,19 @@ export async function runGuide({
       const target = await choosePath();
       if (target === null) return null;
 
+      const workers = await ui.select({
+        message: 'Will this project run workers, or share one board across several people?',
+        choices: WORKERS_CHOICES,
+        initial: 1,
+      });
+      if (workers === null) return stop('Cancelled.');
+      answers.board = workers === 'y';
+
       say('');
+      if (answers.board) say(`  ${style.cyan('├── board/'.padEnd(treeWidth))}${style.dim('shared work board for workers')}`);
       say(style.bold("Here's what will happen:"));
       if (!existsSync(target)) say(`  ${style.dim('-')} create the folder ${target}`);
-      for (const a of preview(target)) say(`  ${style.dim('-')} ${a}`);
+      for (const a of preview(target, answers)) say(`  ${style.dim('-')} ${a}`);
       const go = await ui.select({ message: 'Proceed?', choices: PROCEED_CHOICES, initial: 0 });
       if (go === null) return stop('Cancelled.');
       if (go === 'n') return stop('Cancelled.');

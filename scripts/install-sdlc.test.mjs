@@ -7,6 +7,7 @@ import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { install, SKILLS, DOCS_DIRS, CLAUDE_LAYOUT } from './install-sdlc.mjs';
 import { COPILOT_LAYOUT } from './install-sdlc-copilot.mjs';
+import { DEFAULT_CONFIG_YAML } from './lib/board/config.mjs';
 
 const kitRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const opts = (targetDir, extra = {}) => ({
@@ -173,4 +174,93 @@ test('every `marketplace add` uses a source (owner/repo, URL or path), never a b
     assert.ok(adds.length > 0, layout.toolName);
     for (const c of adds) assert.match(c[3], SOURCE, `${layout.toolName}: ${c.join(' ')}`);
   }
+});
+
+test('--board scaffolds board/ and seeds config.yml', () => {
+  const dir = target();
+  const r = install(opts(dir, { board: true }));
+  assert.ok(existsSync(join(dir, 'board/workers/.gitkeep')));
+  assert.ok(existsSync(join(dir, 'board/requests/.gitkeep')));
+  assert.equal(readFileSync(join(dir, 'board/config.yml'), 'utf8'), DEFAULT_CONFIG_YAML);
+  assert.ok(r.actions.includes('created board/{workers,requests}/ and board/config.yml'));
+  rmSync(dir, { recursive: true });
+});
+
+test('no --board: no board/ directory', () => {
+  const dir = target();
+  install(opts(dir));
+  assert.equal(existsSync(join(dir, 'board')), false);
+  rmSync(dir, { recursive: true });
+});
+
+test('re-run keeps a hand-edited board/config.yml and existing request files', () => {
+  const dir = target();
+  install(opts(dir, { board: true }));
+  writeFileSync(join(dir, 'board/config.yml'), 'lease_ttl: 1h\n');
+  writeFileSync(join(dir, 'board/requests/r.md'), 'keep');
+  install(opts(dir, { board: true }));
+  install(opts(dir));
+  assert.equal(readFileSync(join(dir, 'board/config.yml'), 'utf8'), 'lease_ttl: 1h\n');
+  assert.equal(readFileSync(join(dir, 'board/requests/r.md'), 'utf8'), 'keep');
+  rmSync(dir, { recursive: true });
+});
+
+test('bin.sdlc added when absent, kept when present', () => {
+  const a = target();
+  install(opts(a));
+  assert.equal(JSON.parse(readFileSync(join(a, 'package.json'), 'utf8')).bin.sdlc, 'scripts/sdlc.mjs');
+  const b = target();
+  writeFileSync(join(b, 'package.json'), JSON.stringify({ bin: { sdlc: 'mine.mjs', other: 'o.mjs' } }));
+  install(opts(b));
+  assert.deepEqual(JSON.parse(readFileSync(join(b, 'package.json'), 'utf8')).bin, { sdlc: 'mine.mjs', other: 'o.mjs' });
+  rmSync(a, { recursive: true });
+  rmSync(b, { recursive: true });
+});
+
+test('vendored scripts include sdlc, the board and worker libs and their fixtures', () => {
+  const dir = target();
+  install(opts(dir));
+  for (const f of ['sdlc.mjs', 'lib/board/cli.mjs', 'lib/board/report.mjs', 'lib/board/fixtures.mjs', 'lib/worker/loop.mjs', 'lib/worker/fixtures', 'lib/is-entry-point.mjs']) {
+    assert.ok(existsSync(join(dir, 'scripts', f)), f);
+  }
+  assert.equal(existsSync(join(dir, 'scripts/lib/report.mjs')), false); // installer-only, same basename as board/report.mjs
+  assert.equal(existsSync(join(dir, 'scripts/test-setup.mjs')), false);
+  rmSync(dir, { recursive: true });
+});
+
+test('copilot layout: --board works the same', () => {
+  const dir = target();
+  install(opts(dir, { board: true, layout: COPILOT_LAYOUT }));
+  assert.ok(existsSync(join(dir, 'board/workers/.gitkeep')));
+  assert.equal(readFileSync(join(dir, 'board/config.yml'), 'utf8'), DEFAULT_CONFIG_YAML);
+  rmSync(dir, { recursive: true });
+});
+
+test('a string bin in package.json is left alone with a warning', () => {
+  const dir = target();
+  writeFileSync(join(dir, 'package.json'), JSON.stringify({ bin: 'cli.js' }));
+  const r = install(opts(dir));
+  assert.equal(JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8')).bin, 'cli.js');
+  assert.ok(r.warnings.some((w) => /string `bin`/.test(w)), r.warnings.join('|'));
+  rmSync(dir, { recursive: true });
+});
+
+test('re-running --board reports the board as kept, not created', () => {
+  const dir = target();
+  install(opts(dir, { board: true }));
+  const r = install(opts(dir, { board: true }));
+  assert.ok(r.actions.includes('kept existing board/'), r.actions.join('|'));
+  assert.ok(!r.actions.some((a) => /created board/.test(a)));
+  rmSync(dir, { recursive: true });
+});
+
+test('F3: installing into "." names the package after the directory, not "."', () => {
+  const dir = target();
+  const prev = process.cwd();
+  try {
+    process.chdir(dir);
+    install(opts('.'));
+  } finally { process.chdir(prev); }
+  const name = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8')).name;
+  assert.match(name, /^inst-/);
 });
