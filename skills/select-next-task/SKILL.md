@@ -3,11 +3,11 @@ name: select-next-task
 description: Use to pick what to work on next — ranks all in-flight work and open feature requests in one queue, then routes the selection to the correct lifecycle phase.
 ---
 
-**Board mode** (`board/` exists — see **Workers and the board** in `CLAUDE.process.md`): workers and other people share this queue, so take the queue from the board and claim before acting. Steps 1 and 6 say how.
+**Board mode** (`board/` exists — see **Workers and the board** in `CLAUDE.process.md`): workers and other people share this queue, so take the pick from the board and claim before acting (Steps 1 and 6). A headless run skips this skill: the worker already chose and claimed.
 
 ### Step 1: Gather the queue
 
-In board mode, run `node scripts/sdlc.mjs next --json` and use its ranked list. It already skips efforts someone else holds and efforts waiting on an answer, and it prints repo-overlap warnings. Read the top candidates' docs as below, then go to Step 3 for the user-override rule only.
+In board mode, run `node scripts/sdlc.mjs next --json`. It returns `{ next, overlaps }`: the single top pick (already skipping efforts someone else holds and efforts waiting on an answer) and any repo overlaps with efforts in flight. Read that effort's docs as below and apply Step 3's user-override rule. If the user overrides it, or its claim is refused in Step 6, rank the rest by hand with the steps below.
 
 Otherwise, collect every candidate from:
 
@@ -67,11 +67,12 @@ Then, per Autonomy Policy `task_selection`:
 - `confirm` → ask for approval. If rejected, return to Step 3 with the next-ranked item.
 - `auto` → state the selection and proceed. Stay interruptible.
 
-In board mode, claim the selection before acting on it: `node scripts/sdlc.mjs claim <name>`.
+Board mode, interactive: claim the selection before acting on it: `node scripts/sdlc.mjs claim <name>`.
 
 - Exit `0`: you hold it. Proceed. When the next action sets a status (e.g. `PLANNED` → `IN_PROGRESS`), end it with `node scripts/sdlc.mjs report <name> --phase <status>`.
 - The output says to run `gh auth login`: stop and tell the user; the claim needs their GitHub login.
-- Any other refusal (held by someone, awaiting an answer, closed): tell the user and return to Step 3 with the next-ranked item.
+- `not on main`: tell the user to switch the meta-root to `main` and run this skill again.
+- Any other refusal (held by someone, awaiting an answer, closed): tell the user and rank the remaining candidates by hand (Step 1, "Otherwise").
 
 ### Constraints
 

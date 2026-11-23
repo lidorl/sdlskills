@@ -50,7 +50,7 @@ Every task in the plan body starts as an unchecked `- [ ]`.
 
 - Set the feat-req `status: PLANNED`.
 - Run `scripts/render-status.mjs` (or note the `Stop` hook will).
-- Board mode: report the phase with `node scripts/sdlc.mjs report <name> --phase PLANNED`. Exit `3` means someone else now holds the effort: tell the user and stop.
+- Board mode, interactive: report the phase with `node scripts/sdlc.mjs report <name> --phase PLANNED`. Exit `3` means someone else now holds the effort: tell the user and stop.
 - Headless (`SDLC_HEADLESS=1`): a `pause` checkpoint becomes a request; see **Headless mode** in `CLAUDE.process.md`.
 - Tell the user the next phase is Development. Per the Autonomy Policy `implementation_checkpoints`: `pause` → `superpowers:executing-plans` (checkpoints between phases); `run-through` → `superpowers:subagent-driven-development` or `executing-plans` with checkpoints auto-acknowledged and logged.
 - Development begins by running `node scripts/assemble-env.mjs <slug>` — this reconstructs `workspace/` and creates `feat/<slug>` across every writable effort repo (reference repos are checked out read-only). Work proceeds per the plan; one PR per repo is opened when that repo's plan items pass and its tests are green, and recorded in the plan's `## Pull Requests` table.

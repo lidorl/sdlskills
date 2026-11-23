@@ -66,17 +66,19 @@ Your project has a **meta-root** (recommended: its own git repo, so the docs tra
 
 ## Workers and the board
 
-**Board mode** is on when `board/` exists in the meta-root (the installer creates it with `--board`, or the first `sdlc worker create` does). Without `board/`, skip everything in this section: the process runs as a single interactive session.
+**Board mode** is on when `board/` exists in the meta-root (the installer creates it with `--board`, or the first `worker create` does). Without `board/`, skip everything in this section: the process runs as a single interactive session.
 
-With board mode on, the meta repo's `main` branch is the **board**: the one place every worker and every interactive session coordinates. `scripts/sdlc.mjs` is the client; the skills call it, and so do people.
+With board mode on, the meta repo's `main` branch is the **board**: the one place every worker and every interactive session coordinates. `scripts/sdlc.mjs` is the client (`node scripts/sdlc.mjs <command>`); the skills call it, and so do people.
+
+In a headless run (`SDLC_HEADLESS=1`) the worker claims, reports and releases for the agent: skip the `sdlc` commands below and every skill's **Board mode, interactive** line.
 
 - **Claim before working.** A claim is the feat-req's `claimed_by` / `claimed_at` / `renewed_at`, committed to `main`. It counts only once it is on `origin/main`. Claim with `node scripts/sdlc.mjs claim <slug>`; an interactive session claims as the person's GitHub login.
 - **Leases.** Every report renews the claim. A claim with no renewal for `lease_ttl` (default 4h, set in `board/config.yml`) is stale, and anyone may take it over. One rule for everyone: workers and interactive sessions alike.
 - **Report each phase.** When a skill changes an effort's `status`, it ends with `node scripts/sdlc.mjs report <slug> --phase <status>`. Exit `3` means someone else now holds the effort: tell the person and stop working on it.
 - **Release at the end.** `/close-out` runs `node scripts/sdlc.mjs release <slug>` after `IMPLEMENTED`.
-- **Requests to people.** A worker never waits on a person. It posts a request file under `board/requests/` (gate, question, clarification or error). A blocking request sets `awaiting` on the feat-req and releases the claim in the same commit. People see their requests with `sdlc inbox` and answer with `sdlc answer <id>`.
+- **Requests to people.** A worker never waits on a person. It posts a request file under `board/requests/` (gate, question, clarification or error). A blocking request sets `awaiting` on the feat-req and releases the claim in the same commit. People see their requests with `node scripts/sdlc.mjs inbox` and answer with `node scripts/sdlc.mjs answer <id>`.
 - **Answers change nothing by themselves.** Answering writes only the request file. The next claimant applies the answer, records it under the feat-req's `## Decisions` citing the request id, and deletes the request. No client changes lifecycle state when answering.
-- **Workers** are run with `sdlc worker create | start | stop | status | list | retire`. Each has its own home (`~/.sdlc/workers/<id>/`) and its own clone of the meta repo.
+- **Workers** are run with `node scripts/sdlc.mjs worker create | start | once | stop | status | list | retire | config`. Each has its own home (`~/.sdlc/workers/<id>/`) and its own clone of the meta repo.
 
 The full protocol is in `docs/design/workers.md` (the kit's design doc).
 
@@ -120,7 +122,12 @@ Before you stop, write `$SDLC_RESULT_FILE` as JSON, with one of three outcomes:
 - `phase` is the feat-req `status` the effort is in now (`ACCEPTED`, `DESIGNED`, `PLANNED`, `IN_PROGRESS` or `IMPLEMENTED`), matching what you wrote in the feat-req.
 - `development_done: true` when the plan's last step is checked. The worker confirms it against the plan before routing to close-out.
 - `for: "owner"` addresses the worker's owner; `"approvers"` addresses whoever clears gates.
-- Section values are plain text. The worker adds its own Context lines and formats the request file.
+- `blocking` is required: `true` for gates, questions and errors, `false` for clarifications.
+- Every request has non-empty `Request` and `Context` sections (plain text; the worker appends its own Context lines). Each kind adds one more:
+  - `gate`: set `gate` to `triage`, `design-approval`, `review-findings`, or the policy gate's name. A `review-findings` gate has a `Findings` section with one `### F<n> <title>` per finding.
+  - `question`: an `Options` section with one lettered line per option (`A) …`, `B) …`).
+  - `clarification`: an `Assumption` section saying what you assumed and where you applied it.
+  - `error`: an `Error` section with what failed and what you tried.
 
 ---
 
