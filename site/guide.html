@@ -92,6 +92,7 @@ node sdlskills/install-sdlc.mjs</code></pre>
       <p>Answer <strong>Yes</strong> to create the board now (<code>board/</code> and <code>board/config.yml</code>). You can also add it later. It shows what it will do and asks before doing anything, then ends with <strong>Done</strong>, <strong>Needs attention</strong> and <strong>Next steps</strong>.</p>
       <p>What you get:</p>
       <pre class="code"><code>acme-workspace/            your SDLC repo
+├── CLAUDE.md              imports the two docs below (Claude Code)
 ├── CLAUDE.process.md      the process every station follows
 ├── CLAUDE.stack.md        your stack's conventions (adapt it)
 ├── .claude/skills/        the nine phase skills (.github/skills/ for Copilot)
@@ -99,7 +100,7 @@ node sdlskills/install-sdlc.mjs</code></pre>
 ├── docs/                  feature requests, designs, plans, history
 ├── board/                 the work board (if you said Yes)
 └── workspace/             code checkouts, created per effort</code></pre>
-      <p class="aside">For scripts and CI: <code>node sdlskills/scripts/install-sdlc.mjs &lt;dir&gt; [--board] [--dry-run]</code> (Claude Code) or <code>install-sdlc-copilot.mjs</code> (Copilot). Re-run it any time to update the skills and scripts; your edits to the stack doc, <code>package.json</code>, <code>.gitignore</code> and board settings are kept.</p>
+      <p class="aside">For scripts and CI: <code>node sdlskills/scripts/install-sdlc.mjs &lt;dir&gt; [--board] [--dry-run]</code> (Claude Code) or <code>install-sdlc-copilot.mjs</code> (Copilot). Re-run it any time to update the skills and scripts; your edits to <code>CLAUDE.md</code>, the stack doc, <code>package.json</code>, <code>.gitignore</code> and board settings are kept.</p>
     </div>
   </section>
 
@@ -108,9 +109,6 @@ node sdlskills/install-sdlc.mjs</code></pre>
       <div class="shead"><span class="eyebrow">Step 3</span><h2>Set it up</h2></div>
       <ol class="steps">
         <li><p>Install the <code>superpowers</code> plugin if the installer couldn't — it prints the exact command.</p></li>
-        <li><p>Claude Code: reference the process from the SDLC repo's <code>CLAUDE.md</code>. Copilot loads it automatically.</p>
-          <pre class="code"><code>@CLAUDE.process.md
-@CLAUDE.stack.md</code></pre></li>
         <li><p>Commit and push the SDLC repo to a remote your team (and your workers) can reach.</p></li>
         <li><p>Open the SDLC repo in Claude Code or Copilot and run <code>/setup-sdlc</code>. It maps your code repos into <code>repos.yml</code>, adapts <code>CLAUDE.stack.md</code>, and asks which steps should stop for you — the <strong>autonomy policy</strong>. Triage, design approval and review findings always stop.</p></li>
       </ol>

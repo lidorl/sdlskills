@@ -134,7 +134,7 @@ For scripts and CI, run an installer directly: `node scripts/install-sdlc.mjs <t
 - `--dry-run` shows the plan and changes nothing;
 - `--skip-plugins` and `--skip-npm` opt out of those steps.
 
-Re-run the installer to update the vendored skills and scripts in place. It leaves your `CLAUDE.stack.md`, `package.json`, `.gitignore` and board settings alone.
+Re-run the installer to update the vendored skills and scripts in place. For Claude Code it also creates `CLAUDE.md` importing `CLAUDE.process.md` and `CLAUDE.stack.md`, or adds whichever import an existing `CLAUDE.md` lacks; Copilot loads its instruction files on its own. Re-runs leave your `CLAUDE.md`, `CLAUDE.stack.md`, `package.json`, `.gitignore` and board settings alone.
 
 The Copilot cloud agent isn't supported, because the process needs a person at its hard stops.
 
@@ -143,8 +143,7 @@ The Copilot cloud agent isn't supported, because the process needs a person at i
 Follow the **Next steps** the installer prints. In short:
 
 1. Install the `superpowers` plugin if the installer couldn't (it prints the exact command).
-2. Claude Code only: reference `CLAUDE.process.md` and `CLAUDE.stack.md` from the SDLC repo's `CLAUDE.md`. Copilot loads them automatically.
-3. Open the SDLC repo in Claude Code or Copilot and run `/setup-sdlc`. It maps your repos into `repos.yml`, adapts the stack conventions and runs the autonomy interview.
+2. Open the SDLC repo in Claude Code or Copilot and run `/setup-sdlc`. It maps your repos into `repos.yml`, adapts the stack conventions and runs the autonomy interview.
 
 ### Stage 1: one session
 
@@ -194,7 +193,7 @@ What workers can't do yet: a Copilot worker hasn't been run end to end, and an e
 
 ### Troubleshooting
 
-- **I installed into my code repository by mistake.** `git status` shows exactly what was added. Delete the untracked files and folders: the skills folder, the copied `scripts/`, `CLAUDE.process.md` or `.github/instructions/`, `repos.example.yml`, and the new `docs/` folders. Then restore your own `package.json` and `.gitignore` with `git checkout -- package.json .gitignore`. Run the installer again against a new folder.
+- **I installed into my code repository by mistake.** `git status` shows exactly what was added. Delete the untracked files and folders: the skills folder, a new `CLAUDE.md`, the copied `scripts/`, `CLAUDE.process.md` or `.github/instructions/`, `repos.example.yml`, and the new `docs/` folders. Then restore your own files with `git checkout -- package.json .gitignore` (add `CLAUDE.md` if you had one). Run the installer again against a new folder.
 - **A prerequisite is missing.** The guided install lists each one with a link. Install it and run again.
 - **Windows.** Run the installer with `node` from PowerShell, cmd or Git Bash. Use an up-to-date copy of the kit: earlier versions printed nothing and did nothing on Windows.
 - **A worker says the agent CLI isn't on PATH.** See the shell-alias note under [Stage 2](#stage-2-add-workers).
