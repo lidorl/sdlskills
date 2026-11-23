@@ -135,7 +135,7 @@ node scripts/sdlc.mjs worker start <id> --detach   # runs in the background; log
 node scripts/sdlc.mjs worker stop <id>             # releases its claim and stops cleanly
 ```
 
-Run these from the SDLC repo's folder. On a machine without a clone, `npx -p github:<org>/<sdlc-repo> sdlc worker create …` runs the same command straight from GitHub (the installer adds the `sdlc` bin to the repo's `package.json`). A worker runs the `scripts/sdlc.mjs` on the SDLC repo's `main`, so it follows whatever kit version you have installed there.
+Run these from the SDLC repo's folder. On a machine without a clone, `npx -p github:<org>/<sdlc-repo> sdlc worker create …` runs the same command straight from GitHub (the installer adds the `sdlc` bin to the repo's `package.json`, unless that file already has a string `bin`). A worker runs the `scripts/sdlc.mjs` on the SDLC repo's `main`, so it follows whatever kit version you have installed there.
 
 **Answer what workers ask:**
 

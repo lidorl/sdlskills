@@ -7,7 +7,7 @@ description: Use to pick what to work on next — ranks all in-flight work and o
 
 ### Step 1: Gather the queue
 
-In board mode, run `node scripts/sdlc.mjs next --json`. It returns `{ next, overlaps }`: the single top pick (already skipping efforts someone else holds and efforts waiting on an answer) and any repo overlaps with efforts in flight. Read that effort's docs as below and apply Step 3's user-override rule. If the user overrides it, or its claim is refused in Step 6, rank the rest by hand with the steps below.
+In board mode, run `node scripts/sdlc.mjs next --json`. It returns `{ next, overlaps }`: the single top pick (already skipping efforts someone else holds and efforts waiting on an answer) and any repo overlaps with efforts in flight. `next` is `null` when nothing is claimable: go to Step 2. Otherwise read that effort's docs as below and apply Step 3's user-override rule. If the user overrides it, or its claim is refused in Step 6, rank the rest by hand with the steps below.
 
 Otherwise, collect every candidate from:
 

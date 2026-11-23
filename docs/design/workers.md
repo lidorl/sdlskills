@@ -85,7 +85,7 @@ scripts/
     preflight.mjs           gh auth, agent CLI present, registry active, config matches registry
 ```
 
-`render-status.mjs`, `assemble-env.mjs` and `clean-env.mjs` gain small changes (below). The adopter's `package.json` gets `"bin": { "sdlc": "scripts/sdlc.mjs" }`, so both `npx sdlc …` inside a meta repo clone and `npx -p github:<org>/<meta-repo> sdlc worker create` on a fresh machine work.
+`render-status.mjs`, `assemble-env.mjs` and `clean-env.mjs` gain small changes (below). The adopter's `package.json` gets `"bin": { "sdlc": "scripts/sdlc.mjs" }`, so `npx -p github:<org>/<meta-repo> sdlc worker create` works on a fresh machine; inside a clone, run `node scripts/sdlc.mjs …` (npm doesn't link a project's own bin).
 
 ### The board primitive (`board/git.mjs`)
 
