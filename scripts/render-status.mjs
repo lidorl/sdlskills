@@ -10,8 +10,8 @@
  */
 
 import { readFileSync, writeFileSync, readdirSync, existsSync } from 'node:fs';
-import { join, basename, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { join, basename } from 'node:path';
+import { isEntryPoint } from './lib/is-entry-point.mjs';
 import { boardEnabled, loadConfig } from './lib/board/config.mjs';
 import { boardView } from './lib/board/registry.mjs';
 import { parseLog } from './lib/board/events.mjs';
@@ -133,7 +133,7 @@ function loadBoard(root, now, events) {
 function workersSection(view, now) {
   if (!view.workers.length) return '_none_\n';
   const byOwner = new Map();
-  for (const w of view.workers) (byOwner.get(w.owner) ?? byOwner.set(w.owner, []).get(w.owner)).push(w);
+  for (const w of view.workers) (byOwner.get(w.owner || '(unknown)') ?? byOwner.set(w.owner || '(unknown)', []).get(w.owner || '(unknown)')).push(w);
   const head = '| Worker | Name | Host | Agent / model | State | Effort | Last seen |\n|---|---|---|---|---|---|---|\n';
   const groups = [...byOwner.keys()].sort().map((owner) => {
     const rows = byOwner.get(owner).sort((a, b) => a.id.localeCompare(b.id)).map((w) => {
@@ -155,7 +155,7 @@ function inboxSection(view, now) {
       const t = ms(r.fm.created_at);
       return `| ${cell(r.id)} | ${cell(r.fm.kind)} | ${cell(r.fm.effort ?? '-')} | ${t === null ? '-' : humanAge(now - t)} |`;
     });
-    return `### ${k}\n${head}${rows.join('\n')}\n`;
+    return `### ${k === 'undefined' || k === '' ? '(unknown)' : k}\n${head}${rows.join('\n')}\n`;
   }).join('\n');
 }
 
@@ -285,7 +285,7 @@ _${featReqs.length} feature requests · ${designs.length} design docs · ${plans
   return { md, json, counts: { active: active.length, parked: parked.length, implemented: implemented.length } };
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
+if (isEntryPoint(import.meta.url)) {
   const rootArg = process.argv.indexOf('--root');
   const root = rootArg !== -1 ? process.argv[rootArg + 1] : process.cwd();
   const { md, json, counts } = renderStatus({ root, now: new Date() });

@@ -1,5 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
+import { symlinkSync, existsSync } from 'node:fs';
 import { mkdtempSync, cpSync, mkdirSync, writeFileSync, readFileSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
@@ -139,7 +141,7 @@ test('board/: Workers grouped by owner, Inbox grouped by for, claim columns with
   assert.match(inbox, /\| 202611200700-cccccc \| question \| alpha \| 5h \|/);
 
   assert.match(md, /### In Progress\n\| Feature \| Status \| Pri \| Sev \| Plan \| PRs \| Age \| Claimant \| Claim age \| Stale \|/);
-  assert.match(md, /\| zed-aaaaaa \| 2h 5m \| *\|\n/);
+  assert.match(md, /\| zed-aaaaaa \| 2h 5m \|  \|\n/);
   assert.match(md, /\| amy-bbbbbb \| 3d \| yes \|\n/);
 
   assert.equal(json.workers.length, 3);
@@ -153,4 +155,25 @@ test('board/ without git history: renders, last seen "-"', () => {
   const { md } = renderStatus({ root, now: NOW });
   assert.match(md, /\| zed-aaaaaa \| .* \| stopped \| - \| - \|/);
   assert.match(md, /## Inbox/);
+});
+
+test('board/: a request without `for` and a worker without owner get an (unknown) group', () => {
+  const root = boardRoot();
+  put(root, 'board/workers/ghost-cccccc.yml', worker('ghost-cccccc', '').replace('owner: \n', ''));
+  put(root, 'board/requests/202611200600-dddddd.md', request('202611200600-dddddd', 'x', '2026-11-20T06:00:00Z').replace('for: x\n', ''));
+  const { md } = renderStatus({ root, now: NOW, events });
+  assert.match(md, /### \(unknown\)/);
+  assert.doesNotMatch(md, /### undefined/);
+});
+
+test('CLI writes docs/STATUS.md, also when run through a symlinked script path', () => {
+  const script = join(dirname(fileURLToPath(import.meta.url)), 'render-status.mjs');
+  const link = join(mkdtempSync(join(tmpdir(), 'rs-link-')), 'render-status.mjs');
+  symlinkSync(script, link);
+  for (const path of [script, link]) {
+    const root = copyFixture();
+    execFileSync('node', [path, '--root', root], { stdio: 'pipe' });
+    assert.ok(existsSync(join(root, 'docs/STATUS.md')), `no STATUS.md via ${path}`);
+    assert.ok(existsSync(join(root, 'docs/.status.json')));
+  }
 });
