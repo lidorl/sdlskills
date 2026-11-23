@@ -41,7 +41,7 @@ const gitRepoWith = (base, name, entry) => {
 };
 
 test('explains the meta-root and names the tool and the other installer', async () => {
-  const { text, base } = await drive(['', 'y'], { layout: COPILOT_LAYOUT });
+  const { text, base } = await drive(['', '', 'y'], { layout: COPILOT_LAYOUT });
   assert.match(text, /meta-root/);
   assert.match(text, /GitHub Copilot/);
   assert.match(text, /install-sdlc\.mjs/);
@@ -57,26 +57,26 @@ test('stops when a required prerequisite is missing', async () => {
 });
 
 test('continues when only optional prerequisites are missing', async () => {
-  const { result, base } = await drive(['', 'y'], { available: (c) => c !== 'gh' });
+  const { result, base } = await drive(['', '', 'y'], { available: (c) => c !== 'gh' });
   assert.equal(typeof result, 'string');
   rmSync(base, { recursive: true });
 });
 
 test('empty answer accepts the <name>-workspace default and creates it', async () => {
-  const { result, base } = await drive(['', 'y']);
+  const { result, base } = await drive(['', '', 'y']);
   assert.equal(result, join(base, 'acme-api-workspace'));
   assert.ok(existsSync(result));
   rmSync(base, { recursive: true });
 });
 
 test('relative paths with spaces resolve against cwd', async () => {
-  const { result, cwd, base } = await drive(['my space/meta', 'y']);
+  const { result, cwd, base } = await drive(['my space/meta', '', 'y']);
   assert.equal(result, join(cwd, 'my space/meta'));
   rmSync(base, { recursive: true });
 });
 
 test('a leading ~ means the home directory', async () => {
-  const { result, base } = await drive(['~/x-sdlc-test', 'y'], { dryRun: true });
+  const { result, base } = await drive(['~/x-sdlc-test', '', 'y'], { dryRun: true });
   assert.equal(result, join(homedir(), 'x-sdlc-test'));
   rmSync(base, { recursive: true });
 });
@@ -85,7 +85,7 @@ test('asks again when the path is an existing file', async () => {
   const base0 = mkdtempSync(join(tmpdir(), 'guide-file-'));
   const file = join(base0, 'notes.txt');
   writeFileSync(file, 'x');
-  const { result, text, base } = await drive([file, '', 'y']);
+  const { result, text, base } = await drive([file, '', '', 'y']);
   assert.match(text, /is a file/);
   assert.equal(result, join(base, 'acme-api-workspace'));
   rmSync(base, { recursive: true });
@@ -96,7 +96,7 @@ test('warns on a code repo and lets the user pick another path', async () => {
   const base0 = mkdtempSync(join(tmpdir(), 'guide-code-'));
   const code = gitRepoWith(base0, 'code', 'src');
   const clean = join(base0, 'clean');
-  const { result, text, base } = await drive([code, 'a', clean, 'y']);
+  const { result, text, base } = await drive([code, 'a', clean, '', 'y']);
   assert.equal(result, clean);
   assert.match(text, /src\//);
   assert.match(text, /code repository/);
@@ -115,14 +115,14 @@ test('quitting at the code-repo warning returns null and shows no plan', async (
 });
 
 test('declining the plan returns null and creates nothing', async () => {
-  const { result, base } = await drive(['', 'n']);
+  const { result, base } = await drive(['', '', 'n']);
   assert.equal(result, null);
   assert.equal(existsSync(join(base, 'acme-api-workspace')), false);
   rmSync(base, { recursive: true });
 });
 
 test('dryRun creates no directory', async () => {
-  const { result, base } = await drive(['', 'y'], { dryRun: true });
+  const { result, base } = await drive(['', '', 'y'], { dryRun: true });
   assert.equal(result, join(base, 'acme-api-workspace'));
   assert.equal(existsSync(result), false);
   rmSync(base, { recursive: true });
@@ -138,7 +138,7 @@ test('a folder that cannot be created is reported and the path is asked again', 
   const base0 = mkdtempSync(join(tmpdir(), 'guide-blocked-'));
   const file = join(base0, 'f');
   writeFileSync(file, 'x');
-  const { result, text, base } = await drive([join(file, 'sub'), 'y', '', 'y']);
+  const { result, text, base } = await drive([join(file, 'sub'), '', 'y', '', '', 'y']);
   assert.match(text, /Can't create/);
   assert.equal(result, join(base, 'acme-api-workspace'));
   rmSync(base, { recursive: true });
@@ -154,7 +154,7 @@ test('run from the kit repo itself: no default, asks until given a path, generic
   const output = new PassThrough();
   let text = '';
   output.on('data', (c) => (text += c));
-  for (const a of ['', target, 'y']) input.write(a + '\n');
+  for (const a of ['', target, '', 'y']) input.write(a + '\n');
   const result = await runGuide({
     layout: CLAUDE_LAYOUT,
     cwd: kit,
@@ -177,8 +177,30 @@ test('Enter at the code-repo warning does not continue into the code repo', asyn
   const code = gitRepoWith(base0, 'code', 'src');
   const clean = join(base0, 'clean');
   // '' is a bare Enter: it must mean "pick another path", never "continue here anyway".
-  const { result, base } = await drive([code, '', clean, 'y'], { end: true });
+  const { result, base } = await drive([code, '', clean, '', 'y'], { end: true });
   assert.equal(result, clean);
   rmSync(base, { recursive: true });
   rmSync(base0, { recursive: true });
+});
+
+test('workers question: Yes shows board/ in the tree and passes board to preview', async () => {
+  const seen = [];
+  const answers = {};
+  const { result, text, base } = await drive(['', 'y', 'y'], { answers, preview: (t, a) => (seen.push({ ...a }), ['x']) });
+  assert.equal(typeof result, 'string');
+  assert.match(text, /Will this project run workers, or share one board across several people\?/);
+  assert.match(text, /├── board\/\s+shared work board for workers/);
+  assert.deepEqual(seen, [{ board: true }]);
+  assert.equal(answers.board, true);
+  rmSync(base, { recursive: true });
+});
+
+test('workers question: Enter defaults to No', async () => {
+  const seen = [];
+  const answers = {};
+  const { text, base } = await drive(['', '', 'y'], { answers, preview: (t, a) => (seen.push({ ...a }), ['x']) });
+  assert.doesNotMatch(text, /shared work board for workers/);
+  assert.deepEqual(seen, [{ board: false }]);
+  assert.equal(answers.board, false);
+  rmSync(base, { recursive: true });
 });
