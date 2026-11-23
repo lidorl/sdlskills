@@ -1,7 +1,7 @@
 ---
 feat_req: docs/feat-req/workers.md
 design: docs/design/workers.md
-status: PLANNED
+status: IN_PROGRESS
 date: 2026-11-20
 plan: 3 of 3
 repos: [sdlskills]
