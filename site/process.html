@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Process — sdlskills</title>
+<meta name="description" content="The process inside the sdlskills software factory: six phases, three tiers, an autonomy policy, one status field and a Definition of Done, across every repository a change touches.">
+<meta property="og:title" content="sdlskills">
+<meta property="og:description" content="A software factory for AI coding agents: feature requests in, reviewed and merged pull requests out, people at the gates.">
+<meta property="og:type" content="website">
+<meta name="theme-color" content="#1E44D8">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600&family=Spectral:ital,wght@0,400;0,500;0,600;1,400&display=swap">
+<link rel="stylesheet" href="assets/site.css">
+</head>
+<body>
+
+<header class="bar">
+  <div class="wrap">
+    <a class="brand" href="index.html">
+      <svg class="mark" viewBox="0 0 44 11" aria-hidden="true">
+        <rect x="0" y="0" width="6" height="11"/><rect x="8" y="0" width="6" height="11"/>
+        <rect x="16" y="0" width="6" height="11"/><rect x="24" y="0" width="6" height="11"/>
+        <rect x="32" y="0" width="6" height="11"/><rect x="40" y="0" width="4" height="11" class="seg-accent"/>
+      </svg>
+      sdlskills
+    </a>
+    <nav>
+      <a href="index.html#factory">Factory</a>
+      <a href="process.html" aria-current="page">Process</a>
+      <a href="guide.html">Guide</a>
+      <a href="https://github.com/lidorl/sdlskills">GitHub</a>
+      <button class="icon-btn" id="theme" type="button" aria-label="Toggle color theme">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1v14M8 1a7 7 0 0 1 0 14z" fill="currentColor" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/><circle cx="8" cy="8" r="7" fill="none" stroke="currentColor" stroke-width="1.2"/></svg>
+      </button>
+    </nav>
+  </div>
+</header>
+
+<main id="top">
+
+  <section class="hero sub">
+    <div class="wrap">
+      <span class="eyebrow">The process</span>
+      <h1>The operating manual every station follows</h1>
+      <p class="lead">Workers and people read the same written process, <a href="https://github.com/lidorl/sdlskills/blob/main/CLAUDE.process.md"><code>CLAUDE.process.md</code></a>. It's what makes unattended agent work reviewable: fixed phases, fixed artifacts, gates that stop for a person, and a checklist that decides when a change is done.</p>
+    </div>
+  </section>
+
+  <section class="section" id="multirepo">
+    <div class="wrap">
+      <div class="shead">
+        <span class="eyebrow">Multi-repo by default</span>
+        <h2>Your project is a <span class="nb">meta-root</span>, not a repo</h2>
+      </div>
+      <p>Real work spans repositories — a feature touches the API, the web app, a shared library. So the kit doesn't sit <em>in</em> a repo. Your project is a <strong>meta-root</strong>: the process contract, the skills, the <code>docs/</code> trail, and a <code>repos.yml</code> catalog that says which repo does what. Design resolves which repos an effort needs; <code>assemble-env</code> checks out just those under <code>workspace/</code>.</p>
+
+      <div class="mr-frame">
+        <span class="mr-frame-label">meta-root — one git repo · process · <code>repos.yml</code> · <code>docs/</code> trail</span>
+        <div class="mr-flow">
+          <div class="mr-panel">
+            <div class="mr-panel-h">repos.yml <span>the catalog</span></div>
+            <div class="mr-chip sel">api</div>
+            <div class="mr-chip sel">web</div>
+            <div class="mr-chip">auth-svc</div>
+            <div class="mr-chip">billing</div>
+            <div class="mr-chip">jobs</div>
+          </div>
+          <div class="mr-arrow" aria-hidden="true">
+            <span class="mr-arrow-cap">design<br>resolves<br>the set</span>
+            <span class="mr-arrow-mark">→</span>
+            <code>assemble-env</code>
+          </div>
+          <div class="mr-panel">
+            <div class="mr-panel-h">workspace/ <span>git-ignored · this effort</span></div>
+            <div class="mr-repo"><b>api/</b><span>feat/offer-caps</span></div>
+            <div class="mr-repo"><b>web/</b><span>feat/offer-caps</span></div>
+            <p class="mr-note">auth-svc · billing · jobs stay in the catalog, untouched</p>
+          </div>
+        </div>
+      </div>
+
+      <p class="aside">The repo set is locked at design approval. <code>classify-change</code> runs per repo; <code>close-out</code> won't mark a feature done until every repo has a merged PR. A solo project is just N=1 — one catalog entry, one checkout, same machinery.</p>
+    </div>
+  </section>
+  <section class="section" id="lifecycle">
+    <div class="wrap">
+      <div class="shead">
+        <span class="eyebrow">The lifecycle</span>
+        <h2>Six phases, each with a skill and an artifact</h2>
+      </div>
+      <dl class="phases">
+        <div class="prow gate">
+          <dt><span class="num">§1 · hard stop</span>Feature Request</dt>
+          <dd>
+            <p class="pdesc">A product interview turns a raw ask into a spec — personas, scenarios, scope boundaries, acceptance criteria, success metrics — then a triage decision: accept, park, or reject.</p>
+            <ul class="pmeta">
+              <li><span>skill</span>/write-feature-request</li>
+              <li><span>artifact</span>docs/feat-req/&lt;name&gt;.md</li>
+              <li><span>sets</span>status: ACCEPTED</li>
+            </ul>
+          </dd>
+        </div>
+        <div class="prow gate">
+          <dt><span class="num">§2 · hard stop</span>Design</dt>
+          <dd>
+            <p class="pdesc">A fixed-structure design doc: proposed design, data-model and API changes, alternatives considered, testing strategy, rollout. A technical brainstorm runs first when the solution space is non-obvious. Approval is non-negotiable.</p>
+            <ul class="pmeta">
+              <li><span>skill</span>/write-design-doc</li>
+              <li><span>artifact</span>docs/design/&lt;name&gt;.md</li>
+              <li><span>sets</span>status: DESIGNED</li>
+            </ul>
+          </dd>
+        </div>
+        <div class="prow">
+          <dt><span class="num">§3</span>Plan</dt>
+          <dd>
+            <p class="pdesc">Wraps <code>superpowers:writing-plans</code> to turn the approved design into an ordered, executable sequence — then pins its location, stamps its frontmatter, and links it back to the spec.</p>
+            <ul class="pmeta">
+              <li><span>skill</span>/write-execution-plan</li>
+              <li><span>artifact</span>docs/plans/&lt;name&gt;.md</li>
+              <li><span>sets</span>status: PLANNED</li>
+            </ul>
+          </dd>
+        </div>
+        <div class="prow">
+          <dt><span class="num">§4</span>Development</dt>
+          <dd>
+            <p class="pdesc">The plan is executed test-first. Between-phase checkpoints pause for your review or run straight through, per your autonomy policy. Testing isn't a separate phase — it's how the code gets written.</p>
+            <ul class="pmeta">
+              <li><span>skill</span>superpowers:executing-plans</li>
+              <li><span>skill</span>test-driven-development</li>
+              <li><span>sets</span>status: IN_PROGRESS</li>
+            </ul>
+          </dd>
+        </div>
+        <div class="prow gate">
+          <dt><span class="num">§5 · hard stop</span>Code / Security Review</dt>
+          <dd>
+            <p class="pdesc">Runs <code>/code-review</code>, and <code>/security-review</code> when auth, an external endpoint, data access, or API keys are touched. Findings are processed with rigor — verified before implemented, or rejected with a recorded reason.</p>
+            <ul class="pmeta">
+              <li><span>skill</span>/code-review</li>
+              <li><span>skill</span>/security-review</li>
+              <li><span>skill</span>receiving-code-review</li>
+            </ul>
+          </dd>
+        </div>
+        <div class="prow">
+          <dt><span class="num">§6</span>Close-out</dt>
+          <dd>
+            <p class="pdesc">Walks the Definition of Done item by item, updates consumer-facing docs, writes the history entry, reconciles the design doc's open items, and flips the feature to implemented.</p>
+            <ul class="pmeta">
+              <li><span>skill</span>/close-out</li>
+              <li><span>artifact</span>docs/history/&lt;ts&gt;_*.md</li>
+              <li><span>sets</span>status: IMPLEMENTED</li>
+            </ul>
+          </dd>
+        </div>
+      </dl>
+    </div>
+  </section>
+  <section class="section" id="tiers">
+    <div class="wrap">
+      <div class="shead">
+        <span class="eyebrow">Proportional process</span>
+        <h2>Three tiers. The paperwork scales with the risk.</h2>
+      </div>
+      <p><code>/classify-change</code> sorts every change before a line is written. Auth, data access, API surface, schema, and dependency changes are never trivial, whatever their size.</p>
+      <div class="tiers">
+        <article class="tier tier-trivial">
+          <h3>Trivial</h3>
+          <p class="tier-when">A typo, a comment, a tightened type, a test-only change. No behavior, schema, API, auth, or dependency change; two files or fewer.</p>
+          <span class="tier-does">history one-liner + passing tests</span>
+        </article>
+        <article class="tier tier-standard">
+          <h3>Standard</h3>
+          <p class="tier-when">Any feature or behavior change. The full lifecycle applies, end to end.</p>
+          <span class="tier-does">design → plan → build (TDD) → review → close-out</span>
+        </article>
+        <article class="tier tier-hotfix">
+          <h3>Hotfix</h3>
+          <p class="tier-when">A shipped change is breaking production right now. A fast lane — with a debt marker attached.</p>
+          <span class="tier-does">minimal fix + tests + incident note + mandatory follow-up feature request</span>
+        </article>
+      </div>
+    </div>
+  </section>
+  <section class="section" id="state">
+    <div class="wrap">
+      <div class="shead">
+        <span class="eyebrow">One source of truth</span>
+        <h2>State lives in one field</h2>
+      </div>
+      <div class="track" aria-label="Status progression">
+        <span class="tok">ACCEPTED</span><span class="arr">→</span>
+        <span class="tok">DESIGNED</span><span class="arr">→</span>
+        <span class="tok">PLANNED</span><span class="arr">→</span>
+        <span class="tok">IN_PROGRESS</span><span class="arr">→</span>
+        <span class="tok done">IMPLEMENTED</span>
+      </div>
+      <p class="aside">Plus <code>PARKED</code> and <code>REJECTED</code> off to the side. It's one key in the feature request's frontmatter — no duplicate state, no filename prefixes to keep in sync. A small script, <code>render-status.mjs</code>, derives <code>docs/STATUS.md</code> from it on every stop, so the dashboard can never disagree with reality.</p>
+    </div>
+  </section>
+  <section class="section" id="autonomy">
+    <div class="wrap">
+      <div class="shead">
+        <span class="eyebrow">You set the gates</span>
+        <h2>An autonomy policy, decided once</h2>
+      </div>
+      <p>A setup interview asks how much you want to be in the loop, with concrete examples. The answers become a block in your <code>CLAUDE.md</code> that every skill reads — hand-editable any time.</p>
+      <pre class="code"><code><span class="k">autonomy</span>:
+  task_selection:             confirm    <span class="c"># confirm | auto</span>
+  product_brainstorm:         discuss    <span class="c"># discuss | solo</span>
+  technical_brainstorm:       solo       <span class="c"># discuss | solo</span>
+  implementation_checkpoints: pause      <span class="c"># pause | run-through</span></code></pre>
+      <p class="aside">Design-doc approval, feature-request triage, and review findings stop for you no matter what these say.</p>
+    </div>
+  </section>
+  <section class="section" id="skills">
+    <div class="wrap">
+      <div class="shead">
+        <span class="eyebrow">The tooling</span>
+        <h2>Nine skills implement the phases</h2>
+      </div>
+      <ul class="skills">
+        <li><code>/setup-sdlc</code><p>One-time adoption — maps the repo, writes the stack-conventions doc, runs the autonomy interview, optionally scaffolds <code>docs/design/</code>.</p></li>
+        <li><code>/write-feature-request</code><p>Product interview into a spec, ending with a triage decision.</p></li>
+        <li><code>/classify-change</code><p>Sorts the change — trivial, standard, or hotfix — before any code.</p></li>
+        <li><code>/write-design-doc</code><p>Fixed-structure design doc, optional technical brainstorm, hard-stop approval.</p></li>
+        <li><code>/write-execution-plan</code><p>Wraps <code>writing-plans</code>; enforces location, frontmatter, and state.</p></li>
+        <li><code>/write-history-entry</code><p>The intent-vs-reality trace: deviations, discoveries, decisions, verification.</p></li>
+        <li><code>/select-next-task</code><p>One ranked queue across every in-flight item; routes the pick to its phase.</p></li>
+        <li><code>/gather-open-items</code><p>Reconciles deferred open items — resolves them or promotes them to feature requests.</p></li>
+        <li><code>/close-out</code><p>Walks the Definition of Done, updates consumer docs, flips status to implemented.</p></li>
+      </ul>
+    </div>
+  </section>
+  <section class="section" id="dod">
+    <div class="wrap">
+      <div class="shead">
+        <span class="eyebrow">Definition of done</span>
+        <h2>A standard change isn't done until</h2>
+      </div>
+      <ul class="dod">
+        <li>a design doc describes the change</li>
+        <li>the execution plan has every step checked</li>
+        <li><code>architecture.md</code> / <code>data-model.md</code> updated if structure or schema moved</li>
+        <li>README and consumer-facing docs updated — or "no impact" recorded</li>
+        <li>tests written test-first for new behavior</li>
+        <li>the full suite is green, with recorded evidence</li>
+        <li><code>/code-review</code> run, findings addressed or ruled on</li>
+        <li><code>/security-review</code> run when it's security-relevant</li>
+        <li>a history entry records deviations, discoveries, decisions</li>
+        <li>the design doc's open items are triaged</li>
+        <li><code>status: IMPLEMENTED</code></li>
+      </ul>
+    </div>
+  </section>
+
+</main>
+
+<footer>
+  <div class="wrap">
+    <p>sdlskills — a software factory for AI coding agents, free to adopt.</p>
+    <nav>
+      <a href="https://github.com/lidorl/sdlskills">GitHub</a>
+      <a href="https://github.com/lidorl/sdlskills/blob/main/CLAUDE.process.md">Process contract</a>
+      <a href="#top">Top</a>
+    </nav>
+  </div>
+</footer>
+
+<script src="assets/site.js"></script>
+
+</body>
+</html>

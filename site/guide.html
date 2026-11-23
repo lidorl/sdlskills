@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Guide — sdlskills</title>
+<meta name="description" content="Step-by-step guide to the sdlskills software factory: install, setup, your first effort, the board, creating and running workers, answering requests, and day-two operations.">
+<meta property="og:title" content="sdlskills">
+<meta property="og:description" content="A software factory for AI coding agents: feature requests in, reviewed and merged pull requests out, people at the gates.">
+<meta property="og:type" content="website">
+<meta name="theme-color" content="#1E44D8">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600&family=Spectral:ital,wght@0,400;0,500;0,600;1,400&display=swap">
+<link rel="stylesheet" href="assets/site.css">
+</head>
+<body>
+
+<header class="bar">
+  <div class="wrap">
+    <a class="brand" href="index.html">
+      <svg class="mark" viewBox="0 0 44 11" aria-hidden="true">
+        <rect x="0" y="0" width="6" height="11"/><rect x="8" y="0" width="6" height="11"/>
+        <rect x="16" y="0" width="6" height="11"/><rect x="24" y="0" width="6" height="11"/>
+        <rect x="32" y="0" width="6" height="11"/><rect x="40" y="0" width="4" height="11" class="seg-accent"/>
+      </svg>
+      sdlskills
+    </a>
+    <nav>
+      <a href="index.html#factory">Factory</a>
+      <a href="process.html">Process</a>
+      <a href="guide.html" aria-current="page">Guide</a>
+      <a href="https://github.com/lidorl/sdlskills">GitHub</a>
+      <button class="icon-btn" id="theme" type="button" aria-label="Toggle color theme">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1v14M8 1a7 7 0 0 1 0 14z" fill="currentColor" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/><circle cx="8" cy="8" r="7" fill="none" stroke="currentColor" stroke-width="1.2"/></svg>
+      </button>
+    </nav>
+  </div>
+</header>
+
+<main id="top">
+
+  <section class="hero sub">
+    <div class="wrap">
+      <span class="eyebrow">Guide</span>
+      <h1>From install to a running factory</h1>
+      <p class="lead">Set up your SDLC repo, run your first effort in one session, then turn on the board and let workers carry efforts while you answer what they ask.</p>
+      <ol class="toc">
+        <li><a href="#before">Before you start</a></li>
+        <li><a href="#install">Create your SDLC repo</a></li>
+        <li><a href="#setup">Set it up</a></li>
+        <li><a href="#first-effort">Your first effort, in one session</a></li>
+        <li><a href="#board">Turn on the board</a></li>
+        <li><a href="#create-worker">Create a worker</a></li>
+        <li><a href="#run-workers">Run workers</a></li>
+        <li><a href="#answer">Answer what workers ask</a></li>
+        <li><a href="#watch">Watch the factory</a></li>
+        <li><a href="#day-two">Day two: change, recover, retire</a></li>
+        <li><a href="#troubleshooting">Troubleshooting</a></li>
+      </ol>
+    </div>
+  </section>
+
+  <section class="section" id="before">
+    <div class="wrap prose">
+      <div class="shead"><span class="eyebrow">Step 1</span><h2>Before you start</h2></div>
+      <table class="tbl">
+        <thead><tr><th>You need</th><th>For</th></tr></thead>
+        <tbody>
+          <tr><td>Node 20 or newer</td><td>the installer and every script</td></tr>
+          <tr><td>git</td><td>your SDLC repo, branches and PRs</td></tr>
+          <tr><td>Claude Code <strong>or</strong> GitHub Copilot (VS Code or CLI)</td><td>running the skills in a session</td></tr>
+          <tr><td>Claude Code CLI / Copilot CLI</td><td>installing the <code>superpowers</code> plugin from the installer, and running workers</td></tr>
+          <tr><td>GitHub CLI <code>gh</code>, logged in</td><td>verifying merged PRs at close-out; required for workers</td></tr>
+        </tbody>
+      </table>
+      <p class="aside">The installer checks all of this and tells you what's missing and how to get it.</p>
+    </div>
+  </section>
+
+  <section class="section" id="install">
+    <div class="wrap prose">
+      <div class="shead"><span class="eyebrow">Step 2</span><h2>Create your SDLC repo</h2></div>
+      <p>The factory lives in its own repo — your <strong>SDLC repo</strong>, or meta-root — next to your code, never inside it. Clone this repo, then run the installer:</p>
+      <pre class="code"><code>git clone https://github.com/lidorl/sdlskills.git
+node sdlskills/install-sdlc.mjs</code></pre>
+      <div class="copy-row"><button class="copy-btn" data-copy="node sdlskills/install-sdlc.mjs" type="button">Copy</button></div>
+      <p>It asks which tool you use, then guides you: where to create the SDLC repo, whether it looks like a code repo by mistake, and one question that decides whether you get a factory:</p>
+      <pre class="code"><code>? Will this project run workers, or share one board across several people?
+  Yes
+❯ No</code></pre>
+      <p>Answer <strong>Yes</strong> to create the board now (<code>board/</code> and <code>board/config.yml</code>). You can also add it later. It shows what it will do and asks before doing anything, then ends with <strong>Done</strong>, <strong>Needs attention</strong> and <strong>Next steps</strong>.</p>
+      <p>What you get:</p>
+      <pre class="code"><code>acme-workspace/            your SDLC repo
+├── CLAUDE.process.md      the process every station follows
+├── CLAUDE.stack.md        your stack's conventions (adapt it)
+├── .claude/skills/        the nine phase skills (.github/skills/ for Copilot)
+├── scripts/               sdlc CLI, status, workspace checkout
+├── docs/                  feature requests, designs, plans, history
+├── board/                 the work board (if you said Yes)
+└── workspace/             code checkouts, created per effort</code></pre>
+      <p class="aside">For scripts and CI: <code>node sdlskills/scripts/install-sdlc.mjs &lt;dir&gt; [--board] [--dry-run]</code> (Claude Code) or <code>install-sdlc-copilot.mjs</code> (Copilot). Re-run it any time to update the skills and scripts; your edits to the stack doc, <code>package.json</code>, <code>.gitignore</code> and board settings are kept.</p>
+    </div>
+  </section>
+
+  <section class="section" id="setup">
+    <div class="wrap prose">
+      <div class="shead"><span class="eyebrow">Step 3</span><h2>Set it up</h2></div>
+      <ol class="steps">
+        <li><p>Install the <code>superpowers</code> plugin if the installer couldn't — it prints the exact command.</p></li>
+        <li><p>Claude Code: reference the process from the SDLC repo's <code>CLAUDE.md</code>. Copilot loads it automatically.</p>
+          <pre class="code"><code>@CLAUDE.process.md
+@CLAUDE.stack.md</code></pre></li>
+        <li><p>Commit and push the SDLC repo to a remote your team (and your workers) can reach.</p></li>
+        <li><p>Open the SDLC repo in Claude Code or Copilot and run <code>/setup-sdlc</code>. It maps your code repos into <code>repos.yml</code>, adapts <code>CLAUDE.stack.md</code>, and asks which steps should stop for you — the <strong>autonomy policy</strong>. Triage, design approval and review findings always stop.</p></li>
+      </ol>
+    </div>
+  </section>
+
+  <section class="section" id="first-effort">
+    <div class="wrap prose">
+      <div class="shead"><span class="eyebrow">Step 4</span><h2>Your first effort, in one session</h2></div>
+      <p>Run one effort by hand first. You're the operator: you start each station, and the agent follows the process.</p>
+      <ol class="steps">
+        <li><p><code>/write-feature-request</code> — the agent interviews you, writes <code>docs/feat-req/&lt;name&gt;.md</code>, and asks you to accept, park or reject it.</p></li>
+        <li><p><code>/select-next-task</code> — ranks everything in flight and every accepted request, picks one and routes it. With the board on, it also <strong>claims</strong> it for you.</p></li>
+        <li><p><code>/classify-change</code> — trivial, standard or hotfix. A standard change continues below.</p></li>
+        <li><p><code>/write-design-doc</code> — the design, which <strong>you approve</strong>. Then <code>/write-execution-plan</code>.</p></li>
+        <li><p>Development runs the plan test-first with the <code>superpowers</code> execution skills, then <code>/code-review</code> (and <code>/security-review</code> when it applies).</p></li>
+        <li><p><code>/close-out</code> walks the Definition of Done and marks the effort <code>IMPLEMENTED</code>.</p></li>
+      </ol>
+      <p class="aside">Where things stand: <code>docs/STATUS.md</code>, regenerated after each session, or <code>npm run status</code>.</p>
+    </div>
+  </section>
+
+  <section class="section" id="board">
+    <div class="wrap prose">
+      <div class="shead"><span class="eyebrow">Step 5</span><h2>Turn on the board</h2></div>
+      <p>The <strong>board</strong> is your SDLC repo's <code>main</code> branch. Claims, progress and requests are small commits there; nothing else coordinates the work.</p>
+      <ul class="dod">
+        <li>If you answered No at install, re-run the installer with <code>--board</code> — or just create your first worker, which adds <code>board/</code> for you.</li>
+        <li>Every worker owner needs to push to <code>main</code> directly. Protect it against force-pushes, not against pushes.</li>
+        <li>Give push rights only to people you'd trust to run code on the worker machines: workers run the repo's own scripts, and their agent loads its <code>CLAUDE.md</code> and skills.</li>
+        <li>Log in to GitHub for git: <code>gh auth login</code>, then <code>gh auth setup-git</code>.</li>
+      </ul>
+      <p>Settings live in <code>board/config.yml</code>, shared by everyone on the board:</p>
+      <pre class="code"><code>lease_ttl: 4h            <span class="c"># a claim with no report for this long is stale; anyone may take it over</span>
+idle_poll: 60s           <span class="c"># how often an idle worker looks for work</span>
+phase_timeout: 3h        <span class="c"># the longest one agent run may take (must be shorter than lease_ttl)</span>
+backoff: [5m, 15m, 60m]  <span class="c"># waits after consecutive failures</span>
+watch_interval: 30s      <span class="c"># default refresh for sdlc watch</span></code></pre>
+    </div>
+  </section>
+
+  <section class="section" id="create-worker">
+    <div class="wrap prose">
+      <div class="shead"><span class="eyebrow">Step 6</span><h2>Create a worker</h2></div>
+      <p>A worker is a persistent process you own, with its own home (<code>~/.sdlc/workers/&lt;id&gt;/</code>) and its own clone of the SDLC repo. Create one per machine slot, from the SDLC repo's folder:</p>
+      <pre class="code"><code>node scripts/sdlc.mjs worker create --agent claude --model claude-sonnet-5-5</code></pre>
+      <div class="copy-row"><button class="copy-btn" data-copy="node scripts/sdlc.mjs worker create --agent claude --model claude-sonnet-5-5" type="button">Copy</button></div>
+      <p>It checks the agent CLI and model with one tiny prompt, clones the repo, installs its npm dependencies, and registers the worker on the board as <code>&lt;your-github-login&gt;-&lt;6 chars&gt;</code>. If anything fails, nothing is left behind.</p>
+      <ul class="dod">
+        <li>The agent CLI must be a real binary on <code>PATH</code>. A shell alias isn't visible to the worker — put the binary in e.g. <code>~/.local/bin</code>.</li>
+        <li><code>--agent copilot</code> works the same way, but a Copilot worker runs shell commands without a sandbox: give it its own OS user or VM.</li>
+        <li>On a machine without a clone: <code>npx -p github:&lt;org&gt;/&lt;sdlc-repo&gt; sdlc worker create …</code>.</li>
+      </ul>
+    </div>
+  </section>
+
+  <section class="section" id="run-workers">
+    <div class="wrap prose">
+      <div class="shead"><span class="eyebrow">Step 7</span><h2>Run workers</h2></div>
+      <pre class="code"><code>node scripts/sdlc.mjs worker start &lt;id&gt; --detach   <span class="c"># runs in the background; logs in ~/.sdlc/workers/&lt;id&gt;/logs/</span>
+node scripts/sdlc.mjs worker start &lt;id&gt;            <span class="c"># or in this terminal</span>
+node scripts/sdlc.mjs worker once &lt;id&gt;             <span class="c"># one phase of one effort, then stop</span>
+node scripts/sdlc.mjs worker stop &lt;id&gt;             <span class="c"># finishes cleanly: pushes code, reports, releases its claim</span>
+node scripts/sdlc.mjs worker list                  <span class="c"># your workers on this machine and their state</span></code></pre>
+      <p>A running worker loops: claim the top effort it can take, apply any answers waiting for it, run one phase headless, report, and move on. It renews its claim while a long run is going. When it needs you, it posts a request and takes other work. Run as many as you like, on as many machines as you like — they never pick the same effort.</p>
+      <p class="aside">Your own sessions keep working too: <code>/select-next-task</code> claims through the same board, so a person and a worker never collide.</p>
+    </div>
+  </section>
+
+  <section class="section" id="answer">
+    <div class="wrap prose">
+      <div class="shead"><span class="eyebrow">Step 8</span><h2>Answer what workers ask</h2></div>
+      <pre class="code"><code>node scripts/sdlc.mjs inbox            <span class="c"># your open requests, oldest first (--all for everyone's)</span>
+node scripts/sdlc.mjs answer &lt;id&gt;      <span class="c"># shows the request and asks for your answer</span></code></pre>
+      <p>Or answer in one line with <code>--choice</code> and <code>--note</code>:</p>
+      <table class="tbl">
+        <thead><tr><th>Request</th><th>Your answers</th></tr></thead>
+        <tbody>
+          <tr><td>Design approval</td><td><code>approve</code> · <code>reject</code> (with a <code>--note</code> saying what to change)</td></tr>
+          <tr><td>Triage</td><td><code>accept</code> · <code>park</code> · <code>reject</code></td></tr>
+          <tr><td>Review findings</td><td>one per finding: <code>--choice F1=fix,F2=accept</code> (give the rationale for any <code>accept</code> in <code>--note</code>)</td></tr>
+          <tr><td>Policy gate</td><td><code>approve</code> · <code>reject</code></td></tr>
+          <tr><td>Question</td><td>an option letter, e.g. <code>--choice B</code> · or <code>text</code> with your reply in <code>--note</code></td></tr>
+          <tr><td>Clarification</td><td><code>confirm</code> · <code>correct</code> (with the correction in <code>--note</code>)</td></tr>
+          <tr><td>Error on an effort</td><td><code>retry</code> · <code>park</code> · <code>text</code> (instructions in <code>--note</code>)</td></tr>
+          <tr><td>Error on a worker</td><td><code>resolved</code>, once you've fixed it (e.g. logged <code>gh</code> back in)</td></tr>
+        </tbody>
+      </table>
+      <pre class="code"><code>node scripts/sdlc.mjs answer 202611230614-tzq2l3 --choice approve --note "Ship it."</code></pre>
+      <p>Answering only writes the request file. The next worker to pick the effort up applies your answer — the design flips to approved, a fix becomes a plan step, a park parks it — and records the decision under the feature request's <code>## Decisions</code>, citing the request.</p>
+    </div>
+  </section>
+
+  <section class="section" id="watch">
+    <div class="wrap prose">
+      <div class="shead"><span class="eyebrow">Step 9</span><h2>Watch the factory</h2></div>
+      <pre class="code"><code>node scripts/sdlc.mjs status     <span class="c"># workers by owner, efforts in flight with their claims, the inbox</span>
+node scripts/sdlc.mjs watch      <span class="c"># claims, reports, requests and answers as they land (--json for tools)</span>
+npm run status                   <span class="c"># regenerates docs/STATUS.md, with the same board view</span></code></pre>
+      <p class="aside">These read the board on <code>origin/main</code> and never touch your checkout.</p>
+    </div>
+  </section>
+
+  <section class="section" id="day-two">
+    <div class="wrap prose">
+      <div class="shead"><span class="eyebrow">Step 10</span><h2>Day two: change, recover, retire</h2></div>
+      <ul class="dod">
+        <li><strong>Change a worker's model:</strong> <code>sdlc worker config &lt;id&gt; --model &lt;m&gt;</code> (while it's stopped).</li>
+        <li><strong>A worker crashed:</strong> start it again. It notices, posts a worker error with the end of its log, and waits for you to answer <code>resolved</code>.</li>
+        <li><strong>A machine died mid-effort:</strong> nothing to do. After <code>lease_ttl</code> another worker takes the effort over and resumes from the plan's first unchecked step.</li>
+        <li><strong>Work you can't find:</strong> anything a worker had to set aside — leftovers from a lost or failed effort — is in <code>~/.sdlc/workers/&lt;id&gt;/salvage/</code>, and the log says where.</li>
+        <li><strong>Retire a worker:</strong> <code>sdlc worker retire &lt;id&gt;</code> releases its claim and deletes its home; its history stays on the board. It refuses while salvaged work exists unless you add <code>--force</code>.</li>
+      </ul>
+    </div>
+  </section>
+
+  <section class="section" id="troubleshooting">
+    <div class="wrap prose">
+      <div class="shead"><span class="eyebrow">Help</span><h2>Troubleshooting</h2></div>
+      <ul class="dod">
+        <li><strong>"agent CLI not found on PATH"</strong> — the CLI is a shell alias or not installed on that machine. Put the real binary on <code>PATH</code>.</li>
+        <li><strong>"run <code>gh auth login</code>"</strong> — the claim or answer needs your GitHub login.</li>
+        <li><strong>An effort error says "the agent changed … outside the effort's publishable docs"</strong> — the agent wrote somewhere a worker doesn't publish. The files are in salvage; finish that effort in an interactive session.</li>
+        <li><strong>Installed into a code repository by mistake</strong> — <code>git status</code> shows what was added; delete it, restore <code>package.json</code> and <code>.gitignore</code>, and install into a new folder.</li>
+        <li><strong>Windows</strong> — run the installer with <code>node</code> from PowerShell, cmd or Git Bash.</li>
+      </ul>
+      <p class="aside">Known limits and deferred decisions: <a href="https://github.com/lidorl/sdlskills/blob/main/docs/kit-open-items.md">docs/kit-open-items.md</a>.</p>
+    </div>
+  </section>
+
+</main>
+
+<footer>
+  <div class="wrap">
+    <p>sdlskills — a software factory for AI coding agents, free to adopt.</p>
+    <nav>
+      <a href="https://github.com/lidorl/sdlskills">GitHub</a>
+      <a href="https://github.com/lidorl/sdlskills/blob/main/CLAUDE.process.md">Process contract</a>
+      <a href="#top">Top</a>
+    </nav>
+  </div>
+</footer>
+
+<script src="assets/site.js"></script>
+
+</body>
+</html>
