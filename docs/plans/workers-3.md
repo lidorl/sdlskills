@@ -1,7 +1,7 @@
 ---
 feat_req: docs/feat-req/workers.md
 design: docs/design/workers.md
-status: IN_PROGRESS
+status: IMPLEMENTED
 date: 2026-11-20
 plan: 3 of 3
 repos: [sdlskills]
@@ -53,7 +53,7 @@ Added after Plan 2's final review (Ruling P2-20 in the Plan 2 ledger). The Task 
 - Modify: `scripts/lib/worker/outcomes.mjs`, `scripts/lib/worker/loop.mjs`, `scripts/lib/worker/agent.mjs`, `scripts/lib/worker/salvage.mjs`
 - Test: the matching `*.test.mjs` files
 
-- [ ] **Step 1: Write the failing tests, one per item:**
+- [x] **Step 1: Write the failing tests, one per item:**
   - (a) Protocol writes with a local commit ahead of origin: the `origin/main..HEAD` refusal applies only to working-tree writes. A `commitFromHead` renew succeeds while an agent commit sits in meta. `validateConfig` rejects `phase_timeout >= lease_ttl`.
   - (b) A report push that is rejected, rebased onto a newer origin feat-req, and then hits an autostash conflict: the agent's stale snapshot is salvaged, not put back. Put back only when origin's feat-req still equals the snapshot-time HEAD blob.
   - (c) A non-blocking request that landed but whose push wasn't confirmed: the next step does not post it again.
@@ -61,17 +61,17 @@ Added after Plan 2's final review (Ruling P2-20 in the Plan 2 ledger). The Task 
   - (e) A tracked `.Sdlc-Run/x` (case variant) is refused on a case-insensitive filesystem. The check uses the pathspec `:(icase).sdlc-run`.
   - (f) The agent checks out another branch in meta: the worker salvages the dirty files and restores `main` before any board write.
   - (g) A dirty symlink in the meta clone is salvaged as a link (`lstat` / `readlink`), never by copying its target.
-- [ ] **Step 2: Run the tests and confirm they fail**
+- [x] **Step 2: Run the tests and confirm they fail**
 
 Run: `node --test "scripts/lib/board/*.test.mjs" "scripts/lib/worker/*.test.mjs"`
 Expected: the new tests fail.
 
-- [ ] **Step 3: Implement (a)–(g)**
-- [ ] **Step 4: Run the suites and `npm test`**
+- [x] **Step 3: Implement (a)–(g)**
+- [x] **Step 4: Run the suites and `npm test`**
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add scripts/lib/
@@ -93,7 +93,7 @@ git commit -m "fix(worker): Plan 2 residuals — renew while ahead, safe put-bac
   - `workers` and `requests` arrays in `docs/.status.json`.
   When `git log` fails, `boardView` is called with `events: []`, and last seen shows `-`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```js
 test('no board/: STATUS.md identical to the pre-change renderer output', () => {
@@ -103,19 +103,19 @@ test('board/: Workers grouped by owner, Inbox grouped by for, claim columns with
 test('board/ without git history: renders, last seen "-"', () => {});
 ```
 
-- [ ] **Step 2: Capture the golden file from the current renderer, then run the tests**
+- [x] **Step 2: Capture the golden file from the current renderer, then run the tests**
 
 Run: `node --test scripts/render-status.test.mjs`
 Expected: the golden test passes, and the two board tests fail.
 
-- [ ] **Step 3: Add the board sections behind `boardEnabled`**
+- [x] **Step 3: Add the board sections behind `boardEnabled`**
 
-- [ ] **Step 4: Run the tests and confirm they pass**
+- [x] **Step 4: Run the tests and confirm they pass**
 
 Run: `node --test scripts/render-status.test.mjs`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add scripts/render-status.* scripts/fixtures/
@@ -138,7 +138,7 @@ git commit -m "feat(render-status): workers, inbox and claim columns in board mo
   - `install({ ..., board: boolean })`. On `true` it creates `board/workers/.gitkeep` and `board/requests/.gitkeep`, and writes `board/config.yml` from `DEFAULT_CONFIG_YAML` when it's absent. The action line is `created board/{workers,requests}/ and board/config.yml`.
   - The `--board` flag. In the guided flow, `ui.select` asks the Global Constraints question with choices Yes / No, `initial` = No. A yes adds `├── board/  shared work board for workers` to the preview tree and `board: true` to the preview actions.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```js
 test('--board scaffolds board/ and seeds config.yml', () => {});
@@ -151,19 +151,19 @@ test('guided: default (Enter) is No', () => {});
 test('copilot layout: --board works the same; no Claude reference in vendored skills', () => {});
 ```
 
-- [ ] **Step 2: Run the tests and confirm they fail**
+- [x] **Step 2: Run the tests and confirm they fail**
 
 Run: `node --test scripts/install-sdlc.test.mjs scripts/install-guided.test.mjs scripts/install-sdlc-copilot.test.mjs`
 Expected: the new tests fail.
 
-- [ ] **Step 3: Implement the installer changes**
+- [x] **Step 3: Implement the installer changes**
 
-- [ ] **Step 4: Run the tests and confirm they pass**
+- [x] **Step 4: Run the tests and confirm they pass**
 
 Run: `npm test`
 Expected: PASS. If the Copilot rewrite test reports surviving Claude references from Plan 1 or 2 strings, add `REWRITES` rules and re-run.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add scripts/install-sdlc*.mjs scripts/install-guided.test.mjs scripts/lib/guide.mjs
@@ -187,9 +187,9 @@ git commit -m "feat(install): vendor sdlc, --board scaffold and the workers ques
     - write `$SDLC_RESULT_FILE` before stopping (with the JSON shape from the design).
   - **New section "Workers and the board"**: what board mode is and how it turns on; claims and leases (the one TTL rule, interactive sessions included); `sdlc claim`/`report`/`release` from skills; requests and answers; a pointer to `board/config.yml`; and the rule that no client changes lifecycle state when answering.
 
-- [ ] **Step 1: Write the three section changes** (use `writing-for-agents`).
+- [x] **Step 1: Write the three section changes** (use `writing-for-agents`).
 
-- [ ] **Step 2: Verify the cross-references**
+- [x] **Step 2: Verify the cross-references**
 
 Run: `grep -n "Headless mode\|Workers and the board" CLAUDE.process.md`
 Expected: both headings are present.
@@ -197,7 +197,7 @@ Expected: both headings are present.
 Run: `npm test`
 Expected: PASS (Copilot rewrite of the process doc).
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add CLAUDE.process.md
@@ -223,9 +223,9 @@ git commit -m "docs(process): claim fields, headless mode, workers and the board
   - `close-out`: `sdlc release <slug>` after `IMPLEMENTED`.
   - Every skill with a hard stop or a policy gate: one line, "Headless (`SDLC_HEADLESS=1`): see the process contract's Headless mode."
 
-- [ ] **Step 1: Edit the skills** (use `writing-for-agents`).
+- [x] **Step 1: Edit the skills** (use `writing-for-agents`).
 
-- [ ] **Step 2: Verify**
+- [x] **Step 2: Verify**
 
 Run: `grep -rn "sdlc.mjs report\|Headless mode" skills/ | wc -l`
 Expected: a non-zero count, covering every skill named in Files.
@@ -236,7 +236,7 @@ Expected: no output.
 Run: `npm test`
 Expected: PASS (Copilot rewrite of the skills).
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add skills/
@@ -259,13 +259,13 @@ git commit -m "feat(skills): claim and report through the board; headless gates"
   - `start --detach`, `inbox`, `answer` and `watch`;
   - `board/config.yml`.
 
-- [ ] **Step 1: Write the sections**
-- [ ] **Step 2: Verify the links**
+- [x] **Step 1: Write the sections**
+- [x] **Step 2: Verify the links**
 
 Run: `grep -n "sdlc worker create\|board/config.yml" README.md`
 Expected: both are present.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add README.md CLAUDE.md docs/kit-open-items.md
@@ -277,11 +277,11 @@ git commit -m "docs: workers and the work board in README and CLAUDE.md"
 **Files:**
 - Create: `docs/history/<timestamp>_workers.md` (through `/write-history-entry`, with a Verification section)
 
-- [ ] **Step 1: Set up a scratch meta repo**
+- [x] **Step 1: Set up a scratch meta repo**
 
 In a temp dir: create a bare remote, install the kit into a clone with `node install-sdlc.mjs <dir> --board --skip-plugins` (the Claude installer), and add one feat-req `smoke-hello.md` (`status: ACCEPTED`, scope: "add a hello.txt to a scratch code repo"). Push.
 
-- [ ] **Step 2: Create and run one worker**
+- [x] **Step 2: Create and run one worker**
 
 Run: `node scripts/sdlc.mjs worker create --agent claude --model claude-haiku-5-5 --meta <bare-remote>` then `node scripts/sdlc.mjs worker once <id>`.
 Expected:
@@ -290,9 +290,9 @@ Expected:
 - `sdlc inbox` lists the gate;
 - `sdlc answer <id> --choice approve`, then `worker once` again → the effect is applied, the feat-req is `DESIGNED`, and the plan phase runs.
 
-- [ ] **Step 3: Repeat Step 2 with `--agent copilot`, if the Copilot CLI is available.** Otherwise record "Copilot smoke skipped: CLI not available".
+- [x] **Step 3: Repeat Step 2 with `--agent copilot`, if the Copilot CLI is available.** Otherwise record "Copilot smoke skipped: CLI not available".
 
-- [ ] **Step 4: Record the commands and outcomes in the history entry's Verification section, then commit**
+- [x] **Step 4: Record the commands and outcomes in the history entry's Verification section, then commit**
 
 ```bash
 git add docs/history/
