@@ -251,8 +251,12 @@ export function install({
   pkg.scripts = { ...PKG_DEFAULTS.scripts, ...pkg.scripts };
   pkg.dependencies = { ...pkg.dependencies };
   pkg.dependencies.yaml ??= PKG_DEFAULTS.dependencies.yaml;
-  pkg.bin = { ...pkg.bin };
-  pkg.bin.sdlc ??= PKG_DEFAULTS.bin.sdlc;
+  if (typeof pkg.bin === 'string') {
+    warnings.push('package.json has a string `bin`; add `sdlc: scripts/sdlc.mjs` to it yourself so `sdlc` is on the PATH.');
+  } else {
+    pkg.bin = { ...pkg.bin };
+    pkg.bin.sdlc ??= PKG_DEFAULTS.bin.sdlc;
+  }
   if (JSON.stringify(pkg) !== before) {
     if (!dryRun) writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + '\n');
     did(pkgExisted ? 'merged package.json' : 'created package.json');
@@ -284,14 +288,16 @@ export function install({
 
   // 6b. board/ — only on request; never removes or overwrites what is there.
   if (board) {
+    const boardExisted = existsSync(join(targetDir, 'board', 'workers')) && existsSync(join(targetDir, 'board', 'requests'));
     for (const d of ['workers', 'requests']) {
       const dir = join(targetDir, 'board', d);
       mkdir(dir);
       if (!dryRun && !existsSync(join(dir, '.gitkeep'))) writeFileSync(join(dir, '.gitkeep'), '');
     }
     const cfg = join(targetDir, 'board', 'config.yml');
-    if (!dryRun && !existsSync(cfg)) writeFileSync(cfg, DEFAULT_CONFIG_YAML);
-    did('created board/{workers,requests}/ and board/config.yml');
+    const had = existsSync(cfg);
+    if (!dryRun && !had) writeFileSync(cfg, DEFAULT_CONFIG_YAML);
+    did(boardExisted && had ? 'kept existing board/' : 'created board/{workers,requests}/ and board/config.yml');
   }
 
   // 7. superpowers plugin.

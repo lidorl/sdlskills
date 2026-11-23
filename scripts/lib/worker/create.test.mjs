@@ -122,3 +122,19 @@ test('a meta url that starts with "-" is refused before any clone, and leaves no
   assert.equal(existsSync(marker), false);
   assert.deepEqual(t.homes(), []);
 });
+
+test('runs npm ci in the meta clone when there is a lockfile, npm install otherwise', async () => {
+  for (const [files, want] of [[{ ...KIT, 'package.json': '{}', 'package-lock.json': '{}' }, ['ci']], [{ ...KIT, 'package.json': '{}' }, ['install']]]) {
+    const t = setup({ files });
+    const calls = [];
+    const { home } = await createWorker({ ...t.opts, probe: false, npm: (args, cwd) => calls.push({ args, cwd }) });
+    assert.deepEqual(calls, [{ args: want, cwd: join(home, 'meta') }]);
+  }
+});
+
+test('a failing npm install fails create with the command and stderr, leaving no home', async () => {
+  const t = setup({ files: { ...KIT, 'package.json': '{}' } });
+  const npm = () => { throw Object.assign(new Error('x'), { stderr: 'ENOTFOUND registry\n' }); };
+  await assert.rejects(createWorker({ ...t.opts, probe: false, npm }), (e) => e instanceof CreateError && /npm install.*ENOTFOUND/s.test(e.message));
+  assert.deepEqual(t.homes(), []);
+});

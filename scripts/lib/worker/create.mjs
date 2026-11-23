@@ -36,6 +36,20 @@ export function resolveOwner(gh) {
 
 const git = (cwd, args) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
 const firstLine = (e) => String(e?.stderr || e?.message || e).split('\n').find((l) => l.trim()) ?? String(e);
+const realNpm = (args, cwd) => execFileSync('npm', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+
+// Installs the meta clone's dependencies (node_modules is gitignored, so a clone has none): `npm ci`, or
+// `npm install` without a lockfile. A meta repo with no package.json has nothing to install. -> the failure
+// message, or null.
+export function installMetaDeps(meta, npm = realNpm) {
+  if (!existsSync(join(meta, 'package.json'))) return null;
+  const args = existsSync(join(meta, 'package-lock.json')) ? ['ci'] : ['install'];
+  try { npm(args, meta); return null; } catch (e) {
+    const tail = String(e?.stderr || e?.message || e).split('\n').filter((l) => l.trim()).slice(-10).join('\n');
+    return `\`npm ${args.join(' ')}\` failed in ${meta}:\n${tail}`;
+  }
+}
+
 const iso = (d) => d.toISOString().replace(/\.\d{3}Z$/, 'Z');
 
 async function probeAgent(cfg) {
@@ -84,7 +98,7 @@ async function register(meta, { id, owner, name, host, agent, model, stamp }) {
 
 export async function createWorker({
   metaUrl, agent, model, name, agentCmd, cliArgs = [], probe = true, gh, env = process.env, now = () => new Date(),
-  host = hostname(), rand = Math.random,
+  host = hostname(), rand = Math.random, npm = realNpm,
 }) {
   if (!metaUrl) throw new CreateError('meta repo url is required');
   if (String(metaUrl).startsWith('-')) throw new CreateError(`meta repo url must not start with "-": ${metaUrl}`);
@@ -103,6 +117,8 @@ export async function createWorker({
       mkdirSync(home, { recursive: true });
       const meta = join(home, 'meta');
       try { git(home, ['clone', '-q', '--', metaUrl, 'meta']); } catch (e) { throw new CreateError(`cannot clone ${metaUrl}: ${firstLine(e)}`); }
+      const npmFailure = installMetaDeps(meta, npm);
+      if (npmFailure) throw new CreateError(npmFailure);
       const skill = KIT_SKILL[agent];
       if (!existsSync(join(meta, skill))) throw new CreateError(`meta repo has no kit for ${agent}: missing ${skill}`);
       git(meta, ['config', 'user.name', owner.name]);

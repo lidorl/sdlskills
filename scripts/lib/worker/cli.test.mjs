@@ -622,3 +622,18 @@ test('a detached child takes over only the exact lock its parent took for it', (
   assert.throws(contender(t, 5002, { alive: [5001], env }), /already running, pid 5001/);
   assert.equal(readFileSync(lock, 'utf8'), '5001 other0000001\n');
 });
+
+test('start installs missing dependencies first; a failed install posts a worker error naming the command', async () => {
+  const t = setup({ files: { 'package.json': '{}' } });
+  const calls = [];
+  assert.equal((await cli(t, ['start', ID], { npm: (args, cwd) => calls.push({ args, cwd }) })).code, 0);
+  assert.deepEqual(calls, [{ args: ['install'], cwd: t.meta }]);
+
+  const t2 = setup({ files: { 'package.json': '{}' } });
+  const r = await cli(t2, ['start', ID], { npm: () => { throw Object.assign(new Error('x'), { stderr: 'boom\n' }); } });
+  assert.notEqual(r.code, 0);
+  const reqs = requestsOnMain(t2.b);
+  assert.equal(reqs.length, 1);
+  assert.equal(reqs[0].data.kind, 'error');
+  assert.match(reqs[0].body, /npm install/);
+});

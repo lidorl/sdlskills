@@ -27,7 +27,7 @@ import { makeContext, step, WorkerFatal, unwindLocalCommits, restoreMain } from 
 import { WORKER_PROCESS_VARS, RUN_DIR } from './agent.mjs';
 import { letGo } from './outcomes.mjs';
 import { pushCodeBranches } from './code-repos.mjs';
-import { createWorker, CreateError } from './create.mjs';
+import { createWorker, CreateError, installMetaDeps } from './create.mjs';
 import {
   ABANDONED_MS, newToken, lockContent, lockPid, readLock, createLock, replaceLock, takeOver, clearOldMarkers,
 } from './run-lock.mjs';
@@ -132,6 +132,7 @@ function resolveDeps(d) {
     pid: d.pid ?? process.pid,
     scriptPath: d.scriptPath, // the sdlc entry a detached worker runs; <home>/meta/scripts/sdlc.mjs by default
     gh: d.gh ?? realGh,
+    npm: d.npm, // runs `npm <args>` in a dir (default: the real npm); injectable for tests
     stopTimeoutMs: d.stopTimeoutMs ?? STOP_TIMEOUT_MS,
   };
 }
@@ -485,6 +486,30 @@ function detach(id, home, d, { stalePid, lock }) {
   return 0;
 }
 
+// A worker's meta clone needs `yaml` (node_modules is gitignored): install when it is missing, else post a
+// worker error naming the command.
+async function ensureDeps(ctx, d) {
+  const { cfg, home, clone, identity, deps } = ctx;
+  if (existsSync(join(clone, 'node_modules', 'yaml'))) return;
+  const failure = installMetaDeps(clone, d.npm);
+  if (!failure) return;
+  deps.log(failure);
+  const now = deps.now();
+  try {
+    await postRequest(clone, {
+      id: newRequestId(now, deps.rand), kind: 'error', scope: 'worker', worker: cfg.id, for: cfg.owner, blocking: true, now,
+      sections: {
+        Request: `worker ${cfg.id} cannot install its dependencies. Fix the cause on the machine it runs on, then answer resolved.`,
+        Context: `Host ${hostname()}, home ${home}.\n\n${fenced(safeExcerpt(failure, { maxLines: 50 }).text)}`,
+        Error: failure.split('\n')[0],
+      },
+    }, { identity, workerId: cfg.id, sleep: deps.sleep, hooks: deps.hooks });
+  } catch (e) {
+    deps.log(`could not post the dependency worker error (${firstLine(e)})`);
+  }
+  throw new Refusal(failure.split('\n')[0]);
+}
+
 // start and once: preflight, crash detection, the start event, the loop (or one cycle), the shutdown.
 async function cmdRun({ flags, positional: [id] }, d, { once }) {
   const home = requireHome(id, d);
@@ -506,6 +531,7 @@ async function cmdRun({ flags, positional: [id] }, d, { once }) {
     // only fatal problems are checked here; the loop's own preflight handles the rest
     if (!pf.ok) throw new Refusal(pf.problem);
     assertHolds(home, id, lock); // the first write that assumes this start is the worker comes next
+    await ensureDeps(ctx, d);
   } catch (e) {
     if (holds(home, lock)) clearPid(home); // a refused start leaves nothing behind
     throw e;

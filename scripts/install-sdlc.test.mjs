@@ -235,3 +235,21 @@ test('copilot layout: --board works the same', () => {
   assert.equal(readFileSync(join(dir, 'board/config.yml'), 'utf8'), DEFAULT_CONFIG_YAML);
   rmSync(dir, { recursive: true });
 });
+
+test('a string bin in package.json is left alone with a warning', () => {
+  const dir = target();
+  writeFileSync(join(dir, 'package.json'), JSON.stringify({ bin: 'cli.js' }));
+  const r = install(opts(dir));
+  assert.equal(JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8')).bin, 'cli.js');
+  assert.ok(r.warnings.some((w) => /string `bin`/.test(w)), r.warnings.join('|'));
+  rmSync(dir, { recursive: true });
+});
+
+test('re-running --board reports the board as kept, not created', () => {
+  const dir = target();
+  install(opts(dir, { board: true }));
+  const r = install(opts(dir, { board: true }));
+  assert.ok(r.actions.includes('kept existing board/'), r.actions.join('|'));
+  assert.ok(!r.actions.some((a) => /created board/.test(a)));
+  rmSync(dir, { recursive: true });
+});
