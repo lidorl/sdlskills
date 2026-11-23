@@ -3,10 +3,10 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>sdlskills</title>
-<meta name="description" content="An agentic SDLC kit for Claude Code and GitHub Copilot: a process your agent follows, the skills for each phase, and an optional software factory of workers that move feature requests to merged PRs.">
+<title>sdlskills — a software factory for AI coding agents</title>
+<meta name="description" content="sdlskills is a software factory for AI coding agents: write feature requests, get reviewed, merged pull requests back. Workers run Claude Code or Copilot through one written process; people decide at the gates.">
 <meta property="og:title" content="sdlskills">
-<meta property="og:description" content="A process your agent follows, the skills for each phase, and workers that turn feature requests into merged PRs while people decide at the gates.">
+<meta property="og:description" content="A software factory for AI coding agents: feature requests in, reviewed and merged pull requests out, people at the gates.">
 <meta property="og:type" content="website">
 <meta name="theme-color" content="#1E44D8">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -369,9 +369,9 @@
     </a>
     <nav>
       <a href="#factory">Factory</a>
+      <a href="#workers">Workers</a>
       <a href="#multirepo">Multi-repo</a>
       <a href="#lifecycle">Lifecycle</a>
-      <a href="#workers">Workers</a>
       <a href="#skills">Skills</a>
       <a href="#start">Get started</a>
       <a href="https://github.com/lidorl/sdlskills">GitHub</a>
@@ -386,15 +386,16 @@
 
   <section class="hero">
     <div class="wrap">
-      <span class="eyebrow">Agentic SDLC kit for Claude Code and GitHub Copilot</span>
-      <h1>A development lifecycle your agent actually follows.</h1>
-      <p class="lead">Six phases. Three tiers. One checklist that decides when a change is done — <strong>across every repository a change touches</strong>. Run it in one session, or turn it into a <strong>software factory</strong>: workers take feature requests off a shared board and move them to merged PRs, and people only step in at the gates.</p>
+      <span class="eyebrow">A software factory for AI coding agents · Claude Code &amp; GitHub Copilot</span>
+      <h1>Write feature requests. Get merged pull requests.</h1>
+      <p class="lead">Workers take efforts off a shared board and run them through one written process — spec, design, plan, build, review, close-out — with Claude Code or Copilot doing the work. <strong>You decide at the gates</strong>, from your inbox, on any machine. Every change leaves a trail you can read six months later, <strong>across every repository it touches</strong>.</p>
       <div class="cta">
-        <a class="btn primary" href="#start">Get started</a>
-        <a class="btn" href="#factory">How the factory works</a>
+        <a class="btn primary" href="#factory">How the factory works</a>
+        <a class="btn" href="#start">Get started</a>
         <a class="btn" href="https://github.com/lidorl/sdlskills">View source</a>
       </div>
 
+      <p class="aside">The stations every effort passes through:</p>
       <ol class="pipeline" aria-label="The six lifecycle phases">
         <li class="phase gate" style="--i:0">
           <span class="phase-num">§1</span>
@@ -432,18 +433,6 @@
       </ol>
     </div>
   </section>
-
-  <section class="section" id="why">
-    <div class="wrap">
-      <div class="shead">
-        <span class="eyebrow">Why it exists</span>
-        <h2>The process is the point. The skills are just tooling.</h2>
-      </div>
-      <p>Most skill collections are a grab-bag of capabilities. This one inverts that: every skill exists to serve one opinionated <strong>process</strong>. A change — whether it's a typo or a payments rewrite — moves through the same phases, produces the same artifacts in the same folders, and isn't <em>done</em> until a written Definition of Done says so.</p>
-      <p>Uniform ceremony on a trivial fix is how teams learn to route around process. So every change is first sorted into a <strong>tier</strong>, and the paperwork scales with the risk. And because an agent left to its own judgment drifts, the gates that matter — a design you approve, a spec you accept, review findings you rule on — <strong>always stop for a human</strong>. The rest is yours to configure.</p>
-    </div>
-  </section>
-
 
   <section class="section" id="factory">
     <div class="wrap">
@@ -490,6 +479,41 @@
       <p class="aside">You don't need the factory to use the kit — one interactive session follows the same process, and you're the operator. Not built yet: an independent verification stage, a coordinator that serializes board writes, and breaking large features into efforts.</p>
     </div>
   </section>
+
+  <section class="section" id="workers">
+    <div class="wrap">
+      <div class="shead">
+        <span class="eyebrow">Scaling out</span>
+        <h2>Workers take the next effort. You answer what they ask.</h2>
+      </div>
+      <p>A <strong>worker</strong> is a persistent process with its own home and its own clone of your SDLC repo, so several can run side by side on one machine or many. It <strong>claims</strong> an effort with a commit on <code>main</code> — the claim counts only once it lands — renews it with every report, and gives it up if it goes stale. When it needs a person it posts a <strong>gate</strong>, <strong>question</strong>, <strong>clarification</strong> or <strong>error</strong> to <code>board/requests/</code> and moves on. Your interactive sessions claim through the same board, so you and the workers never pick the same effort.</p>
+      <pre class="code"><code><span class="c"># once per machine: register a worker on the board</span>
+node scripts/sdlc.mjs worker create --agent claude --model &lt;model&gt;
+node scripts/sdlc.mjs worker start &lt;id&gt; --detach
+
+<span class="c"># what's waiting on you, and your answer</span>
+node scripts/sdlc.mjs inbox
+node scripts/sdlc.mjs answer &lt;id&gt;
+
+<span class="c"># the board at a glance</span>
+node scripts/sdlc.mjs status
+node scripts/sdlc.mjs watch</code></pre>
+      <p class="aside">Turn the board on with <code>--board</code> at install (or answer Yes to the workers question). Workers push to <code>main</code> directly and run your repo's own scripts, so give push rights only to people you'd trust on the worker machines. Claude Code workers are tested end to end; Copilot workers aren't yet.</p>
+    </div>
+  </section>
+
+  <section class="section" id="why">
+    <div class="wrap">
+      <div class="shead">
+        <span class="eyebrow">Why the process</span>
+        <h2>A factory is only as good as its operating manual.</h2>
+      </div>
+      <p>Agents left to their own judgment drift, and unattended agents drift further. So the factory runs on one opinionated <strong>process</strong>, and every skill and every worker exists to serve it. A change — whether it's a typo or a payments rewrite — moves through the same phases, produces the same artifacts in the same folders, and isn't <em>done</em> until a written Definition of Done says so.</p>
+      <p>Uniform ceremony on a trivial fix is how teams learn to route around process. So every change is first sorted into a <strong>tier</strong>, and the paperwork scales with the risk. And the gates that matter — a design you approve, a spec you accept, review findings you rule on — <strong>always stop for a human</strong>. The rest is yours to configure.</p>
+    </div>
+  </section>
+
+
 
   <section class="section" id="multirepo">
     <div class="wrap">
@@ -666,27 +690,6 @@
   </section>
 
 
-  <section class="section" id="workers">
-    <div class="wrap">
-      <div class="shead">
-        <span class="eyebrow">Scaling out</span>
-        <h2>Workers take the next effort. You answer what they ask.</h2>
-      </div>
-      <p>A <strong>worker</strong> is a persistent process with its own home and its own clone of your SDLC repo, so several can run side by side on one machine or many. It <strong>claims</strong> an effort with a commit on <code>main</code> — the claim counts only once it lands — renews it with every report, and gives it up if it goes stale. When it needs a person it posts a <strong>gate</strong>, <strong>question</strong>, <strong>clarification</strong> or <strong>error</strong> to <code>board/requests/</code> and moves on. Your interactive sessions claim through the same board, so you and the workers never pick the same effort.</p>
-      <pre class="code"><code><span class="c"># once per machine: register a worker on the board</span>
-node scripts/sdlc.mjs worker create --agent claude --model &lt;model&gt;
-node scripts/sdlc.mjs worker start &lt;id&gt; --detach
-
-<span class="c"># what's waiting on you, and your answer</span>
-node scripts/sdlc.mjs inbox
-node scripts/sdlc.mjs answer &lt;id&gt;
-
-<span class="c"># the board at a glance</span>
-node scripts/sdlc.mjs status
-node scripts/sdlc.mjs watch</code></pre>
-      <p class="aside">Turn the board on with <code>--board</code> at install (or answer Yes to the workers question). Workers push to <code>main</code> directly and run your repo's own scripts, so give push rights only to people you'd trust on the worker machines. Claude Code workers are tested end to end; Copilot workers aren't yet.</p>
-    </div>
-  </section>
 
   <section class="section" id="skills">
     <div class="wrap">
@@ -736,7 +739,7 @@ node scripts/sdlc.mjs watch</code></pre>
         <span class="eyebrow">Get started</span>
         <h2>Set it up next to your code</h2>
       </div>
-      <p>The kit ships no application code — it's a process contract plus skills, meant to sit on top of whatever you're building.</p>
+      <p>Start with one session, where you drive each station yourself. Turn on the board and add workers when you want the factory to run without you at every step.</p>
       <ol class="steps">
         <li>
           <p>Run the installer: it asks which tool you use (Claude Code or Copilot), then guides you — including whether this project will run workers. It installs into a separate folder, your SDLC repo (the <strong>meta-root</strong>), <em>not</em> into your code repository. It checks the prerequisites, then vendors the skills, copies the scripts, drops in <code>CLAUDE.process.md</code>, seeds <code>CLAUDE.stack.md</code>, builds the <code>docs/</code> skeleton, and installs the <code>superpowers</code> plugin (<code>writing-plans</code>, <code>brainstorming</code>, and the execution and review skills). <code>--dry-run</code> previews first.</p>
@@ -762,7 +765,7 @@ node scripts/sdlc.mjs watch</code></pre>
 
 <footer>
   <div class="wrap">
-    <p>sdlskills — process + tooling, free to adopt.</p>
+    <p>sdlskills — a software factory for AI coding agents, free to adopt.</p>
     <nav>
       <a href="https://github.com/lidorl/sdlskills">GitHub</a>
       <a href="https://github.com/lidorl/sdlskills/blob/main/CLAUDE.process.md">Process contract</a>

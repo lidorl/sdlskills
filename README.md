@@ -1,34 +1,33 @@
 # sdlskills
 
-An **agentic SDLC kit** for Claude Code and GitHub Copilot. It gives your agent a development process to follow, the skills that carry out each step of it, and optionally a **software factory**: persistent workers that take feature requests off a shared queue and move them through the process, stopping only where a person has to decide.
+**A software factory for AI coding agents.** Write feature requests; get reviewed, merged pull requests back, with a readable record of every decision. Claude Code or GitHub Copilot does the work. You decide at the gates.
+
+It runs on three layers, all in this repo:
+
+- **The factory floor.** A work board in git and persistent **workers** that take efforts off it, run them headless, and post a request whenever a person has to decide. Add workers on any machine to move more work at once.
+- **The process.** One development lifecycle every change follows, from spec to close-out, with tiers that scale the paperwork to the risk and a Definition of Done that decides when a change is finished. The process is what makes agent output reviewable.
+- **The tooling.** Nine skills that carry out each phase, the `sdlc` CLI that runs the board and the workers, and an installer for Claude Code or Copilot.
+
+Start with one interactive session, where you drive each phase yourself. Turn on the board and add workers when you want the factory to run without you at every step.
 
 **Just want to install it?** Check the [prerequisites](#prerequisites), then go to [Install](#install).
 
 ## Contents
 
-- [What's in this repo](#whats-in-this-repo)
-- [The software factory](#the-software-factory)
+- [How the factory works](#how-the-factory-works)
+- [The process inside](#the-process-inside)
 - [Concepts](#concepts)
-- [Using the kit](#using-the-kit)
+- [Run it](#run-it)
   - [Prerequisites](#prerequisites) · [Install](#install) · [After install](#after-install)
-  - [Day to day: one interactive session](#day-to-day-one-interactive-session)
-  - [Scaling out: workers](#scaling-out-workers)
+  - [Stage 1: one session](#stage-1-one-session)
+  - [Stage 2: add workers](#stage-2-add-workers)
   - [Troubleshooting](#troubleshooting)
 - [Reference](#reference): [the lifecycle](#the-lifecycle) · [skills](#skills) · [layout](#layout) · [non-goals](#non-goals)
 - [License](#license)
 
-## What's in this repo
+## How the factory works
 
-This repo is the kit itself. It holds no application code. You install it into a separate repo next to your code, and it brings:
-
-- **A process contract**, [`CLAUDE.process.md`](CLAUDE.process.md): the lifecycle, the states, the tiers, the Definition of Done and the autonomy policy. Your agent loads it and follows it on every change.
-- **Nine phase skills** in [`skills/`](skills/): one per step of the process, from writing a feature request to closing it out.
-- **Scripts** in [`scripts/`](scripts/): a status dashboard, checkouts of the code repos an effort needs, and the `sdlc` CLI that runs the work board and the workers.
-- **An installer**, [`install-sdlc.mjs`](install-sdlc.mjs), that sets all of this up for Claude Code or Copilot.
-
-## The software factory
-
-A **software factory** turns a stream of feature requests into reviewed, merged changes with as little human babysitting as possible. Specs come in, merged pull requests come out. Agents do the work at each station, and people step in only at decision gates.
+Specs come in, merged pull requests come out. Agents do the work at each station, and people step in only at the decision gates.
 
 ```mermaid
 flowchart LR
@@ -42,24 +41,31 @@ flowchart LR
     ST --> OUT["Merged PRs<br/>+ a docs trail"]
 ```
 
-How the kit implements each part:
-
-| Factory part | In this kit |
+| Factory part | What it is here |
 |---|---|
-| **Stations** | The lifecycle phases. Each has a skill and leaves an artifact in a fixed place: spec, design doc, plan, history entry, close-out. |
+| **Intake** | Feature requests. `/write-feature-request` interviews you, writes the spec and asks you to accept, park or reject it. Accepted requests join the queue. |
 | **Conveyor** | The **work board**: your SDLC repo's `main` branch. Efforts are queued, claimed and tracked there as small commits. Nothing else coordinates the work, and there's no server. |
 | **Operators** | **Workers**: persistent agent processes you own, on any number of machines. Each one takes the next effort, runs one station headless with Claude Code or Copilot, reports, and moves on. |
+| **Stations** | The lifecycle phases. Each has a skill and leaves an artifact in a fixed place: spec, design doc, plan, history entry, close-out. |
 | **Gates** | The decisions only a person makes: triage, design approval, review findings, and any step your autonomy policy holds back. A worker never waits at a gate. It posts a **request** to the board and takes other work. |
 | **Inspection** | Reviews at each step, plus the Definition of Done. Nothing is closed until every item holds. |
 | **Shift log** | The `docs/` trail and `docs/STATUS.md`: what was decided, why, and where every effort stands. |
 
-You don't need the factory to use the kit. Without workers, one interactive session follows the same process step by step, and you are the operator. Workers are how you scale out once that works.
+**Still being built.** A complete factory also needs three things that are open feature requests today: an independent verification stage ([`independent-verification.md`](docs/feat-req/independent-verification.md)), a coordinator that serializes board writes ([`board-write-coordinator.md`](docs/feat-req/board-write-coordinator.md)), and breaking large features down into efforts ([`feature-breakdown.md`](docs/feat-req/feature-breakdown.md)).
 
-**Not built yet.** Three parts of a full factory are still open feature requests: an independent verification stage ([`docs/feat-req/independent-verification.md`](docs/feat-req/independent-verification.md)), a coordinator that serializes board writes ([`docs/feat-req/board-write-coordinator.md`](docs/feat-req/board-write-coordinator.md)), and breaking large features down into efforts ([`docs/feat-req/feature-breakdown.md`](docs/feat-req/feature-breakdown.md)).
+## The process inside
+
+Every station follows one written process, [`CLAUDE.process.md`](CLAUDE.process.md). It's the factory's operating manual: workers and people read the same one.
+
+- **Six phases**: feature request → design → plan → development → review → close-out. Each phase is a skill and leaves a document, so you can always tell *why* a change happened, not just *what* changed. The full diagram is in [the lifecycle](#the-lifecycle).
+- **Three tiers**: before any code, every change is classified as *trivial* (tests plus a one-line history entry), *standard* (the full pipeline) or *hotfix* (a fast lane with a mandatory follow-up).
+- **Gates you set once**: at setup you choose which steps stop for you. Triage, design approval and review findings always do.
+- **Multi-repo by default**: one SDLC repo holds the process and the trail. Your code repos stay untouched and are checked out only while an effort needs them.
+- **A Definition of Done**: design, plan, tests, reviews, docs, history and merged PRs, walked item by item before anything is marked finished.
 
 ## Concepts
 
-- **Meta-root (your SDLC repo).** The kit lives in its own repo, next to your code, never inside it. That repo holds the process, the skills, the `docs/` trail and a catalog of your code repos (`repos.yml`). Code repos are checked out under `workspace/` only while an effort needs them.
+- **Meta-root (your SDLC repo).** The factory lives in its own repo, next to your code, never inside it. That repo holds the process, the skills, the `docs/` trail and a catalog of your code repos (`repos.yml`). Code repos are checked out under `workspace/` only while an effort needs them.
 - **Effort.** One feature moving through the lifecycle. It starts as a feature request in `docs/feat-req/<name>.md`.
 - **Phases and artifacts.** Feature request → design → plan → development → review → close-out. Each phase is a skill, and each leaves a document in a fixed location, so you can always tell *why* a change happened, not just *what* changed.
 - **State.** An effort's position is one field, `status`, in its feature request: `ACCEPTED`, `DESIGNED`, `PLANNED`, `IN_PROGRESS`, `IMPLEMENTED` (or `PARKED` / `REJECTED`).
@@ -72,9 +78,9 @@ You don't need the factory to use the kit. Without workers, one interactive sess
 - **Request.** What a worker posts when it needs a person: a **gate** (an approval), a **question**, a **clarification** (an assumption to confirm) or an **error**. Requests are files under `board/requests/`. People answer them with `sdlc answer`, and the next worker applies the answer and records the decision in the feature request.
 - **Inbox.** Your open requests, oldest first: `sdlc inbox`.
 
-## Using the kit
+## Run it
 
-Install the kit into a separate SDLC repo, then work through the lifecycle in an interactive session. Add workers when you want more than one effort moving at a time.
+Install into a separate SDLC repo, run the process in one session until it fits your team, then add workers.
 
 ### Prerequisites
 
@@ -140,7 +146,7 @@ Follow the **Next steps** the installer prints. In short:
 2. Claude Code only: reference `CLAUDE.process.md` and `CLAUDE.stack.md` from the SDLC repo's `CLAUDE.md`. Copilot loads them automatically.
 3. Open the SDLC repo in Claude Code or Copilot and run `/setup-sdlc`. It maps your repos into `repos.yml`, adapts the stack conventions and runs the autonomy interview.
 
-### Day to day: one interactive session
+### Stage 1: one session
 
 You are the operator: you run each station in your session, and the agent follows the process.
 
@@ -149,9 +155,9 @@ You are the operator: you run each station in your session, and the agent follow
 3. **Follow the route.** Depending on the effort's state, that's `/classify-change`, `/write-design-doc` (you approve the design), `/write-execution-plan`, development with the `superpowers` plan-execution skills, then reviews and `/close-out`.
 4. **See where things stand:** `docs/STATUS.md`, regenerated after each session, or `npm run status`.
 
-### Scaling out: workers
+### Stage 2: add workers
 
-Workers let more than one effort move at once, on any number of machines, while you only answer what needs a person.
+Workers turn the process into a factory: more than one effort moves at once, on any number of machines, and you only answer what needs a person.
 
 **Before you start:**
 
@@ -191,7 +197,7 @@ What workers can't do yet: a Copilot worker hasn't been run end to end, and an e
 - **I installed into my code repository by mistake.** `git status` shows exactly what was added. Delete the untracked files and folders: the skills folder, the copied `scripts/`, `CLAUDE.process.md` or `.github/instructions/`, `repos.example.yml`, and the new `docs/` folders. Then restore your own `package.json` and `.gitignore` with `git checkout -- package.json .gitignore`. Run the installer again against a new folder.
 - **A prerequisite is missing.** The guided install lists each one with a link. Install it and run again.
 - **Windows.** Run the installer with `node` from PowerShell, cmd or Git Bash. Use an up-to-date copy of the kit: earlier versions printed nothing and did nothing on Windows.
-- **A worker says the agent CLI isn't on PATH.** See the shell-alias note under [workers](#scaling-out-workers).
+- **A worker says the agent CLI isn't on PATH.** See the shell-alias note under [Stage 2](#stage-2-add-workers).
 
 ## Reference
 
@@ -262,7 +268,7 @@ External: the `superpowers` plugin (`writing-plans`, `brainstorming`, `executing
 
 ### Non-goals
 
-No application code: process and tooling only, layered onto whatever codebase adopts it. No central scheduler: workers pull from the board. No Copilot cloud agent, because the process needs people at its gates.
+No application code of its own: the factory works on your code repos, which stay untouched outside an effort's checkout. No central scheduler: workers pull from the board. No Copilot cloud agent, because the process needs people at its gates.
 
 ## License
 
