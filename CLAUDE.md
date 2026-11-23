@@ -47,7 +47,7 @@ External dependencies: `superpowers` plugin (`writing-plans`, `brainstorming`, `
 
 ## Adopting the kit in a project
 
-Run `node install-sdlc.mjs` in the kit root: it asks which tool you use, then starts a guided install (see the README's [Getting started](README.md#getting-started)). It installs into a separate SDLC repo (the meta-root), not into a code repository. It vendors the phase skills into `.claude/skills/`, copies the scripts, drops in `CLAUDE.process.md`, seeds `CLAUDE.stack.md` and `repos.example.yml`, wires `package.json` and `.gitignore`, builds the `docs/` skeleton, and installs the `superpowers` plugin:
+Run `node install-sdlc.mjs` in the kit root: it asks which tool you use, then starts a guided install (see the README's [Getting started](README.md#getting-started)). It installs into a separate SDLC repo (the meta-root), not into a code repository. It vendors the phase skills into `.claude/skills/`, copies the scripts, drops in `CLAUDE.process.md`, creates or extends `CLAUDE.md` to import it and the stack doc, seeds `CLAUDE.stack.md` and `repos.example.yml`, wires `package.json` and `.gitignore`, builds the `docs/` skeleton, and installs the `superpowers` plugin:
 
 ```bash
 node /path/to/sdlskills/scripts/install-sdlc.mjs <target-dir>
@@ -55,10 +55,10 @@ node /path/to/sdlskills/scripts/install-sdlc.mjs <target-dir>
 
 `--dry-run` previews the changes; `--skip-plugins` / `--skip-npm` opt out of those steps. Re-running updates the vendored skills and scripts in place and leaves your `CLAUDE.stack.md`, `package.json`, and `.gitignore` edits alone.
 
-For GitHub Copilot (VS Code or CLI), use `scripts/install-sdlc-copilot.mjs` with the same arguments and skip step 1 below: the contract and stack doc land in `.github/instructions/`, already loaded. The cloud agent is out of scope, since the process needs a user at its hard stops.
+For GitHub Copilot (VS Code or CLI), use `scripts/install-sdlc-copilot.mjs` with the same arguments: the contract and stack doc land in `.github/instructions/`, already loaded. The cloud agent is out of scope, since the process needs a user at its hard stops.
 
 Then, in the target:
 
-1. Reference `CLAUDE.process.md` and `CLAUDE.stack.md` from its `CLAUDE.md`, and adapt `CLAUDE.stack.md` to the real stack.
+1. Adapt `CLAUDE.stack.md` to the real stack (or let `/setup-sdlc` do it).
 2. Run `/setup-sdlc` — maps the repo, builds `repos.yml`, runs the autonomy interview.
 3. Start the loop: `/write-feature-request`, then `/select-next-task`.

@@ -4,7 +4,8 @@
  *
  * Automates the mechanical half of "Adopting the kit in a project" (see the
  * kit's CLAUDE.md): vendors the phase skills, copies the scripts, drops in
- * CLAUDE.process.md, wires package.json / .gitignore, builds the docs skeleton,
+ * CLAUDE.process.md, imports it and the stack doc from CLAUDE.md (created or
+ * extended), wires package.json / .gitignore, builds the docs skeleton,
  * and installs the superpowers plugin. The interactive part — repo mapping,
  * the autonomy interview — is still `/setup-sdlc`, run afterward.
  *
@@ -12,7 +13,7 @@
  * Flags:  --skip-plugins  --skip-npm  --dry-run  --board
  *
  * Re-running is the update path: kit-owned files (skills, scripts) are
- * overwritten; user files (CLAUDE.stack.md, package.json, .gitignore) are
+ * overwritten; user files (CLAUDE.md, CLAUDE.stack.md, package.json, .gitignore) are
  * preserved and merged.
  *
  * The kit is authored for Claude Code. A layout maps it onto another harness at
@@ -115,6 +116,13 @@ export const CLAUDE_LAYOUT = {
   adapt: (text) => text,
   /** Target-relative path -> content. Kit-owned, rewritten every run. */
   extraFiles: {},
+  /**
+   * The harness's always-loaded instructions file and the import lines that pull
+   * the process and stack docs into it. Created if missing; missing lines are
+   * appended, everything else in the file is left alone. null when the harness
+   * loads the docs on its own.
+   */
+  entryFile: { path: 'CLAUDE.md', imports: ['@CLAUDE.process.md', '@CLAUDE.stack.md'] },
   plugin: {
     cli: 'claude',
     commands: [
@@ -124,7 +132,7 @@ export const CLAUDE_LAYOUT = {
     /** Extra manual guidance shown whether or not the plugin installed. */
     notes: [],
   },
-  nextSteps: ["Reference `CLAUDE.process.md` and `CLAUDE.stack.md` from the target's `CLAUDE.md`."],
+  nextSteps: [],
 };
 
 /**
@@ -230,6 +238,23 @@ export function install({
     } else {
       place(join(kitRoot, src), join(targetDir, dst));
       did(`seeded ${dst} from ${src}`);
+    }
+  }
+  if (layout.entryFile) {
+    const { path, imports } = layout.entryFile;
+    const entryPath = join(targetDir, path);
+    const existing = existsSync(entryPath) ? readFileSync(entryPath, 'utf8') : null;
+    const have = new Set((existing ?? '').split(/\r?\n/).map((l) => l.trim()));
+    const missing = imports.filter((l) => !have.has(l));
+    if (existing === null) {
+      if (!dryRun) writeFileSync(entryPath, `# ${basename(resolve(targetDir))}\n\n${imports.join('\n')}\n`);
+      did(`created ${path} importing ${imports.join(' and ')}`);
+    } else if (missing.length) {
+      const gap = existing === '' || existing.endsWith('\n\n') ? '' : existing.endsWith('\n') ? '\n' : '\n\n';
+      if (!dryRun) writeFileSync(entryPath, existing + gap + missing.join('\n') + '\n');
+      did(`added ${missing.join(' and ')} to ${path}`);
+    } else {
+      did(`kept ${path} (already imports the process and stack docs)`);
     }
   }
   for (const [path, content] of Object.entries(layout.extraFiles)) {

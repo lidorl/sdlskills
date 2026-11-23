@@ -84,6 +84,8 @@ export const COPILOT_LAYOUT = {
   docHeader: "---\napplyTo: '**'\n---\n\n",
   adapt,
   extraFiles: { [HOOK_FILE]: JSON.stringify(STATUS_HOOK, null, 2) + '\n' },
+  // .github/instructions/*.instructions.md load on their own (applyTo: '**').
+  entryFile: null,
   plugin: {
     cli: 'copilot',
     commands: [

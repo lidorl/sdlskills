@@ -264,3 +264,40 @@ test('F3: installing into "." names the package after the directory, not "."', (
   const name = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8')).name;
   assert.match(name, /^inst-/);
 });
+
+test('creates CLAUDE.md importing the process and stack docs', () => {
+  const dir = target();
+  install(opts(dir));
+  const text = readFileSync(join(dir, 'CLAUDE.md'), 'utf8');
+  assert.match(text, /^@CLAUDE\.process\.md$/m);
+  assert.match(text, /^@CLAUDE\.stack\.md$/m);
+  rmSync(dir, { recursive: true });
+});
+
+test('existing CLAUDE.md: keeps its content, appends only the missing import, idempotent', () => {
+  const dir = target();
+  writeFileSync(join(dir, 'CLAUDE.md'), '# Mine\n\nHouse rules.\n@CLAUDE.stack.md\n');
+  install(opts(dir));
+  const once = readFileSync(join(dir, 'CLAUDE.md'), 'utf8');
+  assert.ok(once.startsWith('# Mine\n\nHouse rules.\n@CLAUDE.stack.md\n'), once);
+  assert.equal(once.match(/@CLAUDE\.stack\.md/g).length, 1);
+  assert.match(once, /^@CLAUDE\.process\.md$/m);
+  const r = install(opts(dir));
+  assert.equal(readFileSync(join(dir, 'CLAUDE.md'), 'utf8'), once);
+  assert.ok(r.actions.some((a) => a.startsWith('kept CLAUDE.md')), r.actions.join('|'));
+  rmSync(dir, { recursive: true });
+});
+
+test('dry-run does not create CLAUDE.md', () => {
+  const dir = target();
+  install(opts(dir, { dryRun: true }));
+  assert.ok(!existsSync(join(dir, 'CLAUDE.md')));
+  rmSync(dir, { recursive: true });
+});
+
+test('copilot layout writes no CLAUDE.md', () => {
+  const dir = target();
+  install(opts(dir, { layout: COPILOT_LAYOUT }));
+  assert.ok(!existsSync(join(dir, 'CLAUDE.md')));
+  rmSync(dir, { recursive: true });
+});
