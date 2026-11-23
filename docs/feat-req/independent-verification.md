@@ -99,7 +99,7 @@ In the software-factory coverage review (`00-context-and-decisions.md`), indepen
 
 - **Dependencies:**
   - Workers and the work board (`docs/feat-req/workers.md`, branch `feat/workers-design`, Plan 3 still to build).
-  - The board-write coordinator (`02-board-write-coordinator.md`, not yet filed), which decides how review requests and results land on main. Its server-side validation also enforces the independence rule.
+  - The board-write coordinator (`docs/feat-req/board-write-coordinator.md`), which decides how review requests and results land on main. Its server-side validation also enforces the independence rule.
 - **Constraints:**
   - The workers spec criterion "every phase a worker runs uses the model from its config" must be amended, since roles can override the model.
   - Merges done with `GITHUB_TOKEN` don't trigger other workflows, so the `ci` backend needs an App token or PAT on the merging step.
