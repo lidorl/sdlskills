@@ -109,7 +109,9 @@ When `SDLC_HEADLESS=1` is set, the agent is a **worker's** run: nobody is at the
 - **Clarification**: a judgment call with a safe default. Take the default, record the assumption in the effort's docs, and keep going (`blocking: false`).
 - `task_selection` does not apply: the worker already chose the task.
 
-Commit in code repos on `feat/<slug>` only. The meta repo is the worker's to commit: leave your doc edits uncommitted there and the worker reports them.
+Commit in code repos on `feat/<slug>` only. The meta repo is the worker's to commit: leave your doc edits uncommitted there and the worker reports them. The worker publishes the effort's docs, new or changed ADRs and the design companion docs; changes anywhere else in the meta repo fail the run.
+
+A trivial change (per `classify-change`) may report `phase: IMPLEMENTED` directly from `ACCEPTED`, with a history one-liner and no design or plan.
 
 Before you stop, write `$SDLC_RESULT_FILE` as JSON, with one of three outcomes:
 

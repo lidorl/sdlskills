@@ -122,7 +122,7 @@ The SDLC repo's `main` branch is the shared **board**: claims, progress and requ
 
 - Every worker owner can push to the SDLC repo's `main` directly. A `main` that requires pull requests blocks the protocol. Forbid force-pushes on it.
 - `gh` is installed and logged in (`gh auth login`, then `gh auth setup-git`).
-- The agent CLI (`claude` or `copilot`) is installed and logged in on each worker machine.
+- The agent CLI (`claude` or `copilot`) is installed and logged in on each worker machine. The worker starts it as a child process, so a shell alias (e.g. `claude`) is not on its PATH: put the real binary on PATH (e.g. `~/.local/bin`).
 - Copilot runs shell commands without a sandbox, so give a Copilot worker its own OS user or VM.
 
 **Turn the board on:** answer Yes to "Will this project run workers, or share one board across several people?" during the guided install, or pass `--board`. That creates `board/` and `board/config.yml` (lease length, poll intervals, timeouts). Commit and push them.

@@ -13,6 +13,9 @@ Unresolved design questions about the SDLC kit itself (not about any project tha
   - *Installer.* The "created board/" message over-claims when the board exists only partly. `npm ci` in a worker's clone has no timeout and runs the meta repo's lifecycle scripts (you trust your own meta repo). `start --detach` reports success before preflight runs in the child.
   - *Smaller.* Registry rewrites drop hand-added keys; `retire --force` doesn't list what it deletes; a second Ctrl-C is ignored; `sdlc` uses plain prompts rather than the installer's menus; `:(icase)` over-refuses on case-sensitive filesystems.
   - *Copilot smoke run.* The real-agent smoke run covered Claude only; a Copilot worker (`--agent copilot`) has never run end to end. Run it before telling Copilot adopters workers are supported.
+  - *Meta-only deliverables.* A worker publishes only the effort's docs, ADRs and the design companion docs; any other meta-repo change fails the run (Ruling P3-13). Option: a feat-req `meta_paths` globs field naming extra publishable paths.
+  - *package-lock.json.* A worker's `npm install` can leave an untracked `package-lock.json` in its meta clone.
+  - *Post-install yaml re-check.* No test covers the installer's re-check that `yaml` resolves after `npm install`.
   - *Larger directions* stay in `BRAINSTORMING.md` §12 (control app), §13 (Slack bridge), §14 (workflow as claim arbiter), §15 (stop-all switch).
 
 - [ ] **`writing-plans` frontmatter contract.** `write-execution-plan` stamps `status`/`feat_req`/`design` onto the plan file *after* `superpowers:writing-plans` runs. If the upstream skill's output format changes, the stamp step may need updating. Watch for drift on `superpowers` upgrades.

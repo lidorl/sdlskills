@@ -213,12 +213,14 @@ loop:
   run the agent on E's routed phase, with a timeout; renew the lease every lease_ttl/2 while it runs
   read meta/.sdlc-run/result.json:
     completed  → report (artifacts + new status + renewed lease); continue with E unless IMPLEMENTED
+                 (a dirty meta-repo path outside the publish set → effort error, never success)
     request    → validate + redact; post; blocking → same commit sets awaiting + releases
     failed / missing / timeout → effort error (blocking) + release + backoff
   push code-repo effort branches before every report and release
   on any "no longer hold E" from validation → drop E, push nothing more for it, log it
 ```
 
+- **What a report publishes** (Ruling P3-13; worker and `sdlc report` share `reportPaths`): the effort's feat-req, design, plan and history files, new or changed ADRs (`docs/decisions/*.md`) and the design companion docs (`docs/design/architecture.md`, `docs/design/data-model.md`) when changed. `--paths` may name those, never `board/` or another effort's docs. If any other meta-repo path is dirty when the worker reports, the run fails with an effort error naming the paths and the salvage dir: work is never dropped under a success report. Meta-only deliverables are unsupported for workers in v1 (kit-open-items).
 - **Routing** reuses `select-next-task`'s table. `ACCEPTED` runs `classify-change` then `write-design-doc`. `DESIGNED` runs `write-execution-plan`. `PLANNED` runs Development from the start. `IN_PROGRESS` resumes from the first unchecked plan step. After Development, `close-out` runs. A phase is one agent run.
 - **Lease renewal during long runs** (**Amends spec**): the spec renews leases only "on every phase transition and report". A Development run can outlast any sensible TTL, and a takeover in the middle of a live run is exactly the duplicate work the feature exists to prevent. While an agent run is live, the runtime pushes a `renew` event (it touches only `renewed_at`) every `lease_ttl / 2`. An idle worker still pushes nothing. This is not a heartbeat: it happens only while the worker holds a claim, at most twice per TTL. The "no heartbeat" acceptance criterion is read as "an idle or working worker pushes nothing beyond claims, renewals and reports".
 - **Code-repo branches** are pushed (`git push -u origin feat/<slug>`, never forced) before every report and release, so a takeover's `assemble-env` finds `origin/feat/<slug>` (its existing case 2) and resumes from it. A rejected code push is an effort error.
