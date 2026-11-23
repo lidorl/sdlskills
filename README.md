@@ -1,27 +1,80 @@
 # sdlskills
 
-A reusable **agentic SDLC kit** for Claude Code and GitHub Copilot: an opinionated, artifact-driven development process plus the skills that implement each phase.
+An **agentic SDLC kit** for Claude Code and GitHub Copilot. It gives your agent a development process to follow, the skills that carry out each step of it, and optionally a **software factory**: persistent workers that take feature requests off a shared queue and move them through the process, stopping only where a person has to decide.
 
 **Just want to install it?** Check the [prerequisites](#prerequisites), then go to [Install](#install).
 
 ## Contents
 
-- [Getting started](#getting-started)
-  - [Prerequisites](#prerequisites)
-  - [What is a meta-root?](#what-is-a-meta-root)
-  - [Install](#install)
-  - [What you'll see](#what-youll-see)
-  - [After install](#after-install)
+- [What's in this repo](#whats-in-this-repo)
+- [The software factory](#the-software-factory)
+- [Concepts](#concepts)
+- [Using the kit](#using-the-kit)
+  - [Prerequisites](#prerequisites) · [Install](#install) · [After install](#after-install)
+  - [Day to day: one interactive session](#day-to-day-one-interactive-session)
+  - [Scaling out: workers](#scaling-out-workers)
   - [Troubleshooting](#troubleshooting)
-- [The idea](#the-idea)
-- [Layout](#layout)
-- [Skills](#skills)
-- [Non-goals](#non-goals)
+- [Reference](#reference): [the lifecycle](#the-lifecycle) · [skills](#skills) · [layout](#layout) · [non-goals](#non-goals)
 - [License](#license)
 
-## Getting started
+## What's in this repo
 
-Install the kit into a separate SDLC repo (the *meta-root*), not into your code repository. Check the prerequisites, then run one command.
+This repo is the kit itself. It holds no application code. You install it into a separate repo next to your code, and it brings:
+
+- **A process contract**, [`CLAUDE.process.md`](CLAUDE.process.md): the lifecycle, the states, the tiers, the Definition of Done and the autonomy policy. Your agent loads it and follows it on every change.
+- **Nine phase skills** in [`skills/`](skills/): one per step of the process, from writing a feature request to closing it out.
+- **Scripts** in [`scripts/`](scripts/): a status dashboard, checkouts of the code repos an effort needs, and the `sdlc` CLI that runs the work board and the workers.
+- **An installer**, [`install-sdlc.mjs`](install-sdlc.mjs), that sets all of this up for Claude Code or Copilot.
+
+## The software factory
+
+A **software factory** turns a stream of feature requests into reviewed, merged changes with as little human babysitting as possible. Specs come in, merged pull requests come out. Agents do the work at each station, and people step in only at decision gates.
+
+```mermaid
+flowchart LR
+    IN["Feature requests<br/>(people write them)"] --> BOARD[("The board<br/>queue · claims · requests")]
+    BOARD <--> W1["Worker A"]
+    BOARD <--> W2["Worker B"]
+    BOARD <--> W3["Worker C"]
+    W1 & W2 & W3 --> ST["Stations<br/>spec → design → plan → build → review → close-out"]
+    BOARD -- "gates and questions" --> P(["People<br/>inbox · answer"])
+    P -- answers --> BOARD
+    ST --> OUT["Merged PRs<br/>+ a docs trail"]
+```
+
+How the kit implements each part:
+
+| Factory part | In this kit |
+|---|---|
+| **Stations** | The lifecycle phases. Each has a skill and leaves an artifact in a fixed place: spec, design doc, plan, history entry, close-out. |
+| **Conveyor** | The **work board**: your SDLC repo's `main` branch. Efforts are queued, claimed and tracked there as small commits. Nothing else coordinates the work, and there's no server. |
+| **Operators** | **Workers**: persistent agent processes you own, on any number of machines. Each one takes the next effort, runs one station headless with Claude Code or Copilot, reports, and moves on. |
+| **Gates** | The decisions only a person makes: triage, design approval, review findings, and any step your autonomy policy holds back. A worker never waits at a gate. It posts a **request** to the board and takes other work. |
+| **Inspection** | Reviews at each step, plus the Definition of Done. Nothing is closed until every item holds. |
+| **Shift log** | The `docs/` trail and `docs/STATUS.md`: what was decided, why, and where every effort stands. |
+
+You don't need the factory to use the kit. Without workers, one interactive session follows the same process step by step, and you are the operator. Workers are how you scale out once that works.
+
+**Not built yet.** Three parts of a full factory are still open feature requests: an independent verification stage ([`docs/feat-req/independent-verification.md`](docs/feat-req/independent-verification.md)), a coordinator that serializes board writes ([`docs/feat-req/board-write-coordinator.md`](docs/feat-req/board-write-coordinator.md)), and breaking large features down into efforts ([`docs/feat-req/feature-breakdown.md`](docs/feat-req/feature-breakdown.md)).
+
+## Concepts
+
+- **Meta-root (your SDLC repo).** The kit lives in its own repo, next to your code, never inside it. That repo holds the process, the skills, the `docs/` trail and a catalog of your code repos (`repos.yml`). Code repos are checked out under `workspace/` only while an effort needs them.
+- **Effort.** One feature moving through the lifecycle. It starts as a feature request in `docs/feat-req/<name>.md`.
+- **Phases and artifacts.** Feature request → design → plan → development → review → close-out. Each phase is a skill, and each leaves a document in a fixed location, so you can always tell *why* a change happened, not just *what* changed.
+- **State.** An effort's position is one field, `status`, in its feature request: `ACCEPTED`, `DESIGNED`, `PLANNED`, `IN_PROGRESS`, `IMPLEMENTED` (or `PARKED` / `REJECTED`).
+- **Tiers.** Before any code, every change is classified: *trivial* (tests plus a one-line history entry), *standard* (the full pipeline) or *hotfix* (a fast lane with a mandatory follow-up). The paperwork scales with the risk.
+- **Autonomy policy and gates.** At setup the kit asks which steps should stop for you and which can proceed on their own. Triage, design approval and review findings always stop.
+- **Definition of Done.** The checklist `close-out` walks before an effort is marked `IMPLEMENTED`: design, plan, tests, reviews, docs, history, merged PRs.
+- **Board.** With board mode on, your SDLC repo's `main` branch is the shared queue. Workers and people coordinate there.
+- **Claim and lease.** Before working on an effort, a worker or a person **claims** it, which is a small commit on `main`. Every report renews the claim. A claim left unrenewed for the lease time (4h by default) is stale, and anyone may take the effort over.
+- **Worker.** A persistent process owned by one person. It has its own home and its own clone of the SDLC repo, so many can run side by side. It loops: claim, run one phase headless, report, repeat.
+- **Request.** What a worker posts when it needs a person: a **gate** (an approval), a **question**, a **clarification** (an assumption to confirm) or an **error**. Requests are files under `board/requests/`. People answer them with `sdlc answer`, and the next worker applies the answer and records the decision in the feature request.
+- **Inbox.** Your open requests, oldest first: `sdlc inbox`.
+
+## Using the kit
+
+Install the kit into a separate SDLC repo, then work through the lifecycle in an interactive session. Add workers when you want more than one effort moving at a time.
 
 ### Prerequisites
 
@@ -30,14 +83,12 @@ Install the kit into a separate SDLC repo (the *meta-root*), not into your code 
 | Node 20 or newer | yes | the installer and the kit's scripts run on Node |
 | git | yes | your SDLC repo is a git repo; the process works in branches and PRs |
 | Claude Code **or** GitHub Copilot (VS Code or CLI) | one of them | where you run the skills |
-| Claude Code CLI / Copilot CLI | optional | only so the installer can install the `superpowers` plugin for you. VS Code users can install the plugin from the IDE instead |
-| GitHub CLI (`gh`) | optional for now | used at close-out to verify merged PRs |
+| Claude Code CLI / Copilot CLI | optional | so the installer can install the `superpowers` plugin for you (VS Code users can install it from the IDE), and to run workers |
+| GitHub CLI (`gh`) | optional for a solo session | verifies merged PRs at close-out; required for workers |
 
 The installer checks all of this and tells you what is missing and how to get it.
 
-### What is a meta-root?
-
-The kit does **not** go into your code repository. It goes into a separate folder, your **SDLC repo** (the *meta-root*), that holds the process, the skills and the `docs/` trail. Your code repositories stay untouched; the kit checks out just the ones an effort needs, under `workspace/`.
+The kit goes into a separate folder, your **SDLC repo** (the meta-root), never into a code repository:
 
 ```
 acme-api/                    your code repository: untouched
@@ -47,12 +98,13 @@ acme-workspace/              your SDLC repo (the meta-root): install the kit HER
 ├── docs/                    feature requests, designs, plans, history
 ├── .claude/skills/          the kit's skills (.github/skills/ for Copilot)
 ├── repos.yml                which repos you have and what each does
+├── board/                   the work board (only if you turn it on)
 └── workspace/               temporary checkouts of the repos an effort needs
     ├── acme-api/
     └── acme-web/
 ```
 
-A solo project has the same shape with one repo. Note that `workspace/` inside the SDLC repo is a different thing from the SDLC repo's own folder name.
+A solo project has the same shape with one repo.
 
 ### Install
 
@@ -63,45 +115,22 @@ cd /path/to/sdlskills
 node install-sdlc.mjs
 ```
 
-It asks which tool you use (Claude Code or GitHub Copilot, VS Code or CLI), then starts a **guided install**: it explains the meta-root, checks the prerequisites, asks where to install (type a folder path; it is created if needed), warns if the folder looks like a code repository, shows what it will do, and asks before it does anything.
+It asks which tool you use (Claude Code or GitHub Copilot, VS Code or CLI), then starts a **guided install**:
+- it explains the meta-root and checks the prerequisites;
+- it asks where to install (it creates the folder if needed) and warns if the folder looks like a code repository;
+- it asks whether the project will run workers, which creates the board;
+- it shows what it will do and asks before doing anything.
 
-You can also run it from any other folder using the full path to the script. In that case it suggests a new `<current-folder>-workspace` folder next to where you are.
+In a terminal you pick from menus with the arrow keys and Enter, and Tab completes folder names. With piped input it falls back to plain numbered questions. Set `NO_COLOR=1` to turn colors off. It ends with three blocks: **Done**, **Needs attention** and **Next steps**.
 
-For scripts and CI, skip the question and run an installer directly with the folder: `node scripts/install-sdlc.mjs <target-dir>` (Claude Code) or `node scripts/install-sdlc-copilot.mjs <target-dir>` (Copilot). These never prompt. Other flags: `--dry-run` shows the plan and changes nothing, `--skip-plugins` and `--skip-npm` opt out of those steps. Re-run it to update the vendored skills and scripts in place; your `CLAUDE.stack.md`, `package.json` and `.gitignore` edits are left alone.
+For scripts and CI, run an installer directly: `node scripts/install-sdlc.mjs <target-dir>` (Claude Code) or `node scripts/install-sdlc-copilot.mjs <target-dir>` (Copilot). These never prompt. The flags are:
+- `--board` creates the work board;
+- `--dry-run` shows the plan and changes nothing;
+- `--skip-plugins` and `--skip-npm` opt out of those steps.
+
+Re-run the installer to update the vendored skills and scripts in place. It leaves your `CLAUDE.stack.md`, `package.json`, `.gitignore` and board settings alone.
 
 The Copilot cloud agent isn't supported, because the process needs a person at its hard stops.
-
-### What you'll see
-
-In a terminal the installer is interactive: **arrow keys and Enter** pick from menus, **Tab** completes folder names in the path prompt, and output is colored (set `NO_COLOR=1` to turn colors off). When input is piped or there is no terminal, it falls back to plain numbered questions.
-
-An abbreviated guided run:
-
-```
-? Which tool will you use the kit with?
-❯ Claude Code
-  GitHub Copilot (VS Code or CLI)
-
-This installs the SDLC kit for Claude Code into your SDLC repo (the *meta-root*).
-...
-Prerequisites:
-  ✓ Node 20 or newer (found 24.12.0)
-  ✓ git
-  - Claude Code CLI (`claude`) (optional): Not needed for the VS Code extension. ...
-  ✓ GitHub CLI (`gh`)
-
-? Where should the SDLC repo go? (/home/you/projects/acme-workspace)
-
-Here's what will happen:
-  - create the folder /home/you/projects/acme-workspace
-  - vendored 9 skills into .claude/skills/
-  ...
-? Proceed?
-❯ Yes, install
-  No, cancel
-```
-
-It ends with three blocks: **Done** (what was written), **Needs attention** (anything missing or failed) and **Next steps**.
 
 ### After install
 
@@ -109,20 +138,27 @@ Follow the **Next steps** the installer prints. In short:
 
 1. Install the `superpowers` plugin if the installer couldn't (it prints the exact command).
 2. Claude Code only: reference `CLAUDE.process.md` and `CLAUDE.stack.md` from the SDLC repo's `CLAUDE.md`. Copilot loads them automatically.
-3. Open the SDLC repo in Claude Code or Copilot and run `/setup-sdlc`. It builds `repos.yml` and runs the autonomy interview.
-4. Start the loop: `/write-feature-request`, then `/select-next-task`.
+3. Open the SDLC repo in Claude Code or Copilot and run `/setup-sdlc`. It maps your repos into `repos.yml`, adapts the stack conventions and runs the autonomy interview.
 
-### Workers (optional)
+### Day to day: one interactive session
 
-Workers let more than one agent work on your queue at once, on any number of machines. Each worker is a persistent process you own: it takes the next effort from the queue, runs Claude Code or Copilot headless on it one phase at a time, and reports back. Whenever it needs a person (an approval, a question, an error) it posts a request and moves on to other work instead of waiting.
+You are the operator: you run each station in your session, and the agent follows the process.
 
-The SDLC repo's `main` branch is the shared **board**: claims, progress and requests are small commits there. Interactive sessions use the same board, so a person and the workers never pick the same effort.
+1. **Capture an idea:** `/write-feature-request`. The agent interviews you, writes the spec to `docs/feat-req/`, and asks you to accept, park or reject it.
+2. **Pick up work:** `/select-next-task`. It ranks everything in flight and every accepted request in one queue, and routes the top item to the right phase.
+3. **Follow the route.** Depending on the effort's state, that's `/classify-change`, `/write-design-doc` (you approve the design), `/write-execution-plan`, development with the `superpowers` plan-execution skills, then reviews and `/close-out`.
+4. **See where things stand:** `docs/STATUS.md`, regenerated after each session, or `npm run status`.
+
+### Scaling out: workers
+
+Workers let more than one effort move at once, on any number of machines, while you only answer what needs a person.
 
 **Before you start:**
 
-- Every worker owner can push to the SDLC repo's `main` directly. A `main` that requires pull requests blocks the protocol. Forbid force-pushes on it.
+- Everyone who owns a worker can push to the SDLC repo's `main` directly. A `main` that requires pull requests blocks the protocol. Forbid force-pushes on it.
+- Give push rights to `main` only to people you'd trust to run code on the worker machines. A worker runs the SDLC repo's own scripts and its agent loads the repo's `CLAUDE.md` and skills.
 - `gh` is installed and logged in (`gh auth login`, then `gh auth setup-git`).
-- The agent CLI (`claude` or `copilot`) is installed and logged in on each worker machine. The worker starts it as a child process, so a shell alias (e.g. `claude`) is not on its PATH: put the real binary on PATH (e.g. `~/.local/bin`).
+- The agent CLI (`claude` or `copilot`) is installed and logged in on each worker machine. The worker starts it as a child process, so a shell alias (e.g. `claude`) isn't on its PATH: put the real binary on PATH (e.g. `~/.local/bin`).
 - Copilot runs shell commands without a sandbox, so give a Copilot worker its own OS user or VM.
 
 **Turn the board on:** answer Yes to "Will this project run workers, or share one board across several people?" during the guided install, or pass `--board`. That creates `board/` and `board/config.yml` (lease length, poll intervals, timeouts). Commit and push them.
@@ -135,7 +171,7 @@ node scripts/sdlc.mjs worker start <id> --detach   # runs in the background; log
 node scripts/sdlc.mjs worker stop <id>             # releases its claim and stops cleanly
 ```
 
-Run these from the SDLC repo's folder. On a machine without a clone, `npx -p github:<org>/<sdlc-repo> sdlc worker create …` runs the same command straight from GitHub (the installer adds the `sdlc` bin to the repo's `package.json`, unless that file already has a string `bin`). A worker runs the `scripts/sdlc.mjs` on the SDLC repo's `main`, so it follows whatever kit version you have installed there.
+Run these from the SDLC repo's folder. On a machine without a clone, `npx -p github:<org>/<sdlc-repo> sdlc worker create …` runs the same command straight from GitHub. (The installer adds the `sdlc` bin to the repo's `package.json`, unless that file already has a string `bin`.) A worker runs the `scripts/sdlc.mjs` on the SDLC repo's `main`, so it follows whatever kit version you have installed there.
 
 **Answer what workers ask:**
 
@@ -146,17 +182,20 @@ node scripts/sdlc.mjs watch          # follow claims, reports and requests as th
 node scripts/sdlc.mjs status         # workers, efforts in flight and the inbox
 ```
 
-`docs/STATUS.md` shows the same board after `npm run status`. Without `board/`, none of this applies and the kit works as a single interactive session.
+`docs/STATUS.md` shows the same board after `npm run status`. Your interactive sessions keep working alongside the workers: `/select-next-task` claims through the board, so you and the workers never pick the same effort.
+
+What workers can't do yet: a Copilot worker hasn't been run end to end, and an effort whose deliverable lives in the SDLC repo itself (not in a code repo) needs an interactive session. See [`docs/kit-open-items.md`](docs/kit-open-items.md).
 
 ### Troubleshooting
 
-- **I installed into my code repository by mistake.** `git status` shows exactly what was added. Delete the untracked files and folders (the skills folder, the copied `scripts/`, `CLAUDE.process.md` or `.github/instructions/`, `repos.example.yml`, and the new `docs/` folders), then restore your own `package.json` and `.gitignore` with `git checkout -- package.json .gitignore`. Run the installer again against a new folder.
+- **I installed into my code repository by mistake.** `git status` shows exactly what was added. Delete the untracked files and folders: the skills folder, the copied `scripts/`, `CLAUDE.process.md` or `.github/instructions/`, `repos.example.yml`, and the new `docs/` folders. Then restore your own `package.json` and `.gitignore` with `git checkout -- package.json .gitignore`. Run the installer again against a new folder.
 - **A prerequisite is missing.** The guided install lists each one with a link. Install it and run again.
 - **Windows.** Run the installer with `node` from PowerShell, cmd or Git Bash. Use an up-to-date copy of the kit: earlier versions printed nothing and did nothing on Windows.
+- **A worker says the agent CLI isn't on PATH.** See the shell-alias note under [workers](#scaling-out-workers).
 
-## The idea
+## Reference
 
-The skills exist to serve a **process**, not the other way around. Drop the process contract into a project and Claude Code works through every change the same way:
+### The lifecycle
 
 ```mermaid
 flowchart TD
@@ -185,50 +224,45 @@ flowchart TD
     DONE --> Q
 ```
 
-Each phase produces a required artifact in a fixed location, so a project's history stays legible — you can tell *why* a change happened, not just *what* changed. Nothing is "done" until the Definition of Done is satisfied.
+Multi-repo is the default. Design resolves which repos an effort touches, `classify-change` runs per repo, and `close-out` verifies a merged PR in each. A solo project is the same machinery with one catalog entry.
 
-Three things keep it practical:
-
-- **Three tiers.** `classify-change` sorts every change into *trivial* (history one-liner + tests), *standard* (full pipeline), or *hotfix* (fast lane + mandatory follow-up). The paper trail is proportional to the risk.
-- **An autonomy policy.** `setup-sdlc` interviews you once about which gates should stop for your review and which should auto-proceed. Design approval, feature-request triage, and review findings are always hard stops; everything else is configurable.
-- **Multi-repo by default.** Work happens in a *meta-root* holding the process and the `docs/` trail; a `repos.yml` catalog maps your repositories, and `assemble-env.mjs` checks out just the ones an effort needs under `workspace/`. Design resolves the repo set, `classify-change` runs per repo, and `close-out` verifies a merged PR in each. A solo project is N=1 — same machinery, one entry.
-
-## Layout
-
-| Path | Role |
-|---|---|
-| [`CLAUDE.process.md`](CLAUDE.process.md) | The stack-neutral process contract — lifecycle, tiers, state model, Definition of Done, ADR format, autonomy policy. **This is the deliverable.** |
-| [`CLAUDE.stack.example.md`](CLAUDE.stack.example.md) | Worked example of the stack-conventions half (NestJS/Prisma/React). Adopters replace it. |
-| [`skills/`](skills/) | The nine phase skills. |
-| [`install-sdlc.mjs`](install-sdlc.mjs) | **Start here.** Asks which tool you use, then runs the matching installer — see [Getting started](#getting-started). |
-| [`scripts/install-sdlc.mjs`](scripts/install-sdlc.mjs) | The Claude Code installer: scaffolds the kit into a target project. `scripts/install-sdlc-copilot.mjs` is the Copilot one. |
-| [`scripts/render-status.mjs`](scripts/render-status.mjs) | Derives `docs/STATUS.md` from feature-request frontmatter. Wired to a `Stop` hook. |
-| [`scripts/assemble-env.mjs`](scripts/assemble-env.mjs) / [`clean-env.mjs`](scripts/clean-env.mjs) | Reconstruct / tear down `workspace/` for a multi-repo effort (see the execution-environment feature). |
-| [`scripts/sdlc.mjs`](scripts/sdlc.mjs) | The `sdlc` CLI: the board (`next`, `claim`, `report`, `release`, `inbox`, `answer`, `watch`, `status`) and workers (`sdlc worker …`). Built on [`scripts/lib/board/`](scripts/lib/board/) and [`scripts/lib/worker/`](scripts/lib/worker/). |
-| [`repos.yml`](repos.yml) / [`repos/`](repos/) | The repository catalog — which repo does what. `repos.example.yml` is the annotated template. |
-| [`examples/react-components/`](examples/react-components/) | Optional React admin-console conventions skill. |
-| [`docs/design/STYLE_GUIDE.template.md`](docs/design/STYLE_GUIDE.template.md) | Starting point for a project style guide. |
-| [`docs/kit-open-items.md`](docs/kit-open-items.md) | Unresolved design questions about the kit itself. |
-
-## Skills
+### Skills
 
 | Skill | Phase |
 |---|---|
-| `setup-sdlc` | One-time adoption: map repo, adapt stack doc, build the repository catalog, autonomy interview, optional `docs/design/` bootstrap |
-| `write-feature-request` | Feature Request — product interview → spec → triage (accept/park/reject) |
+| `setup-sdlc` | One-time adoption: map repos, adapt the stack doc, build the repository catalog, autonomy interview, optional `docs/design/` bootstrap |
+| `write-feature-request` | Feature Request: product interview → spec → triage (accept/park/reject) |
 | `classify-change` | Tier decision (trivial / standard / hotfix) before any code |
-| `write-design-doc` | Design — fixed-structure design doc, conditional technical brainstorm, hard-stop approval |
-| `write-execution-plan` | Plan — wraps `superpowers:writing-plans`, enforces location + frontmatter + state |
-| `write-history-entry` | Development — intent-vs-reality execution trace |
-| `select-next-task` | Picks the next task from one unified ranked queue, routes it to the right phase |
-| `gather-open-items` | Reconciles Open Items — scoped (at close-out) and full-sweep (empty queue / on demand) |
+| `write-design-doc` | Design: fixed-structure design doc, conditional technical brainstorm, hard-stop approval |
+| `write-execution-plan` | Plan: wraps `superpowers:writing-plans`, enforces location, frontmatter and state |
+| `write-history-entry` | Development: intent-vs-reality execution trace |
+| `select-next-task` | Picks the next task from one ranked queue (claims it in board mode), routes it to the right phase |
+| `gather-open-items` | Reconciles Open Items: scoped (at close-out) and full sweep (empty queue or on demand) |
 | `close-out` | Definition-of-Done walk, consumer-doc updates, Open Items reconciliation, status flip |
 
-External: `superpowers` plugin (`writing-plans`, `brainstorming`, `executing-plans`, `subagent-driven-development`, `receiving-code-review`, `verification-before-completion`), plus built-in `/code-review` and `/security-review`.
+External: the `superpowers` plugin (`writing-plans`, `brainstorming`, `executing-plans`, `subagent-driven-development`, `receiving-code-review`, `verification-before-completion`), plus built-in `/code-review` and `/security-review`.
 
-## Non-goals
+### Layout
 
-No application code. Process + tooling only, layered onto whatever codebase adopts it. Multi-agent / parallel execution is out of scope for now — see [`docs/kit-open-items.md`](docs/kit-open-items.md).
+| Path | Role |
+|---|---|
+| [`CLAUDE.process.md`](CLAUDE.process.md) | The stack-neutral process contract: lifecycle, tiers, state, Definition of Done, ADR format, autonomy policy, headless mode, workers and the board. **This is the deliverable.** |
+| [`CLAUDE.stack.example.md`](CLAUDE.stack.example.md) | Worked example of the stack-conventions half (NestJS/Prisma/React). Adopters replace it. |
+| [`skills/`](skills/) | The nine phase skills. |
+| [`install-sdlc.mjs`](install-sdlc.mjs) | **Start here.** Asks which tool you use, then runs the matching installer. |
+| [`scripts/install-sdlc.mjs`](scripts/install-sdlc.mjs) | The Claude Code installer. `scripts/install-sdlc-copilot.mjs` is the Copilot one. |
+| [`scripts/render-status.mjs`](scripts/render-status.mjs) | Derives `docs/STATUS.md` from the docs (plus the board view in board mode). Wired to a `Stop` hook. |
+| [`scripts/assemble-env.mjs`](scripts/assemble-env.mjs) / [`clean-env.mjs`](scripts/clean-env.mjs) | Check out / tear down `workspace/` for an effort. |
+| [`scripts/sdlc.mjs`](scripts/sdlc.mjs) | The `sdlc` CLI: the board (`next`, `claim`, `report`, `release`, `inbox`, `answer`, `watch`, `status`) and workers (`sdlc worker …`). Built on [`scripts/lib/board/`](scripts/lib/board/) and [`scripts/lib/worker/`](scripts/lib/worker/). |
+| [`repos.yml`](repos.yml) / [`repos/`](repos/) | The repository catalog: which repo does what. `repos.example.yml` is the annotated template. |
+| [`docs/design/workers.md`](docs/design/workers.md) | How workers and the board work, in full. |
+| [`examples/react-components/`](examples/react-components/) | Optional React admin-console conventions skill. |
+| [`docs/design/STYLE_GUIDE.template.md`](docs/design/STYLE_GUIDE.template.md) | Starting point for a project style guide. |
+| [`docs/kit-open-items.md`](docs/kit-open-items.md) | Deferred decisions about the kit itself. |
+
+### Non-goals
+
+No application code: process and tooling only, layered onto whatever codebase adopts it. No central scheduler: workers pull from the board. No Copilot cloud agent, because the process needs people at its gates.
 
 ## License
 
