@@ -2,9 +2,11 @@
 date: 2026-11-24
 priority: Medium
 severity: Low
-status: DESIGNED
+status: PLANNED
 source: Split from feature-breakdown (original text in commit e765c89)
 split_from: feature-breakdown
+plans:
+  - docs/plans/feature-request-breakdown.md
 ---
 
 # Breakdown at the feature request phase
