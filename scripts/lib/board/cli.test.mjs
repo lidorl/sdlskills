@@ -561,3 +561,17 @@ test('P2-20a: with a local commit ahead, `sdlc claim` (a protocol write) lands b
   assert.equal(git(b.remote, 'rev-parse', 'main'), before, 'nothing pushed');
   assert.ok(!git(b.remote, 'log', '--format=%s', 'main').includes('person work'));
 });
+
+test('claim of a blocked slice exits 1 naming what it waits on', async () => {
+  const b = makeBoard({ featReqs: { a: feat(), b: feat({ after: ['a', 'ghost'] }) } });
+  const r = await cli(b.clone('c'), ['claim', 'b']);
+  assert.equal(r.code, 1);
+  assert.match(r.err, /blocked: b waits on a \(ACCEPTED\), ghost \(missing\)/);
+});
+
+test('next skips a blocked slice', async () => {
+  const b = makeBoard({ featReqs: { a: feat({ priority: 'Low' }), b: feat({ priority: 'High', after: ['a'] }) } });
+  const r = await cli(b.clone('c'), ['next', '--json']);
+  assert.equal(r.code, 0);
+  assert.equal(JSON.parse(r.out).next.slug, 'a');
+});

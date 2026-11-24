@@ -336,3 +336,19 @@ test('a mutate that throws leaves no half-written protocol files: the next renew
   assert.equal((await renew(a, 'bulk-export', { ...base, claimant: 'a-w' })).ok, true);
   assert.equal(fmOnRemote().claimed_by, 'a-w');
 });
+
+test('claim refuses blocked while after is unmet; succeeds once the after effort is IMPLEMENTED on origin/main', async () => {
+  const fx = makeBoard({ featReqs: { a: { status: 'IN_PROGRESS' }, b: { status: 'ACCEPTED', after: ['a'] } } });
+  const c1 = fx.clone('c1'); const c2 = fx.clone('c2');
+  assert.deepEqual(await claim(c1, 'b', { ...base, claimant: 'w-1' }), { ok: false, reason: 'blocked', waitingOn: ['a'] });
+  writeFileSync(join(c2, rel('a')), setFields(readFileSync(join(c2, rel('a')), 'utf8'), { status: 'IMPLEMENTED' }));
+  g(c2, 'commit', '-qam', 'a implemented'); g(c2, 'push', '-q', 'origin', 'main');
+  // c1 never fetched: the claim itself must read origin/main.
+  assert.equal((await claim(c1, 'b', { ...base, claimant: 'w-1' })).ok, true);
+});
+
+test('two slices with no after link are claimed by two workers', async () => {
+  const fx = makeBoard({ featReqs: { c1: { status: 'ACCEPTED', split_from: 'x' }, c2: { status: 'ACCEPTED', split_from: 'x' } } });
+  assert.equal((await claim(fx.clone('a'), 'c1', { ...base, claimant: 'w-1' })).ok, true);
+  assert.equal((await claim(fx.clone('b'), 'c2', { ...base, claimant: 'w-2' })).ok, true);
+});
