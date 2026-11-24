@@ -71,6 +71,8 @@ State which criteria went to which slice, so nothing is dropped or duplicated. W
 
 Write only after the split decision in Step 3 is settled. With no split, or a declined one, write one spec. For a confirmed split, write one file per slice and no file for the original idea.
 
+Before writing each file, confirm its slug is free: no existing `docs/feat-req/<slug>.md`. If it is taken, pick another slug and say so.
+
 `docs/feat-req/<kebab-name>.md`:
 
 ```markdown
@@ -80,8 +82,6 @@ priority: [High/Medium/Low]
 severity: [Critical/High/Medium/Low]
 status: ACCEPTED
 source: [User request / Extracted from <doc> / Hotfix follow-up for <incident>]
-split_from: [original idea's slug; slices only, omit otherwise]
-after: [slugs that must be IMPLEMENTED first; omit when empty]
 ---
 
 # [Clear, actionable title]
@@ -177,10 +177,11 @@ At intake the original was never written, so "Original text" says `split at inta
 1. Load the spec and skip the interview.
 2. **Preconditions.** Stop and tell the user if any fails:
    - the feat-req is `status: ACCEPTED` (nothing downstream refers to it yet);
-   - board mode: `git pull`, then `node scripts/sdlc.mjs status --json`; the effort has no live claim held by someone else and no open `awaiting`.
-3. Run Step 1.5 on what the spec says, then propose and triage exactly as in Step 3.
-4. **Confirmed split:** write the slices, and `git rm docs/feat-req/<slug>.md` in the same change. Before removing it, get the last commit that contains it: `git log -1 --format=%h -- docs/feat-req/<slug>.md`. Each slice's Triage cites it: `- **Original text:** commit <sha>, docs/feat-req/<slug>.md.` Set `split_from: <slug>`; the name is free once the file is removed.
-5. **No split** (or declined): append one line to `## Sizing`, and change nothing else:
+   - board mode: after `git pull`, read the feat-req's `awaiting`. If it is set and `board/requests/<awaiting>.md` exists with `status: open`, stop. Use `node scripts/sdlc.mjs status --json` `inFlight` only for the claim: stop when the entry's `claimant` isn't you and `stale` is false. Your own claim and a stale foreign claim don't block a re-check;
+   - `git log -1 --format=%h -- docs/feat-req/<slug>.md` prints a commit. If it prints nothing, the original was never committed: stop and ask the person to commit the spec first.
+3. Run Step 1.5 on what the spec says, then propose and triage exactly as in Step 3. On a decline or no split, don't rewrite the spec or re-triage it; go to step 5.
+4. **Confirmed split:** write the slices, and `git rm docs/feat-req/<slug>.md` in the same change. Before removing it, take the commit from the precondition above. Each slice's Triage cites it: `- **Original text:** commit <sha>, docs/feat-req/<slug>.md.` Set `split_from: <slug>`; the name is free once the file is removed. If the original itself has `split_from`, the new slices keep that value instead, so they stay in the same Splits group. Then search `docs/feat-req/` for `after` entries naming `<slug>`. In the same change, replace each with the slice(s) that deliver what that effort needs (default: all of them), and list these edits at the split decision.
+5. **No split** (or declined): append one line to `## Sizing`, and change nothing else. If the spec has no `## Sizing` section (written before this check existed), add it after `## Success Metrics` first, then append the line:
 
    ```markdown
    - YYYY-MM-DD: re-checked: <n> criteria, <n> personas, <n> repo(s), ~<n> files; independent parts: <names or none> → <no split | split proposed, declined: <reason>>

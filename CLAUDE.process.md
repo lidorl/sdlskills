@@ -115,7 +115,7 @@ breakdown:
     min_slice_criteria: 3
 ```
 
-The size check always runs; these values only tune it.
+The size check always runs; these values only tune it. A trivial-tier change never splits: it skips `write-feature-request`, and a request under the thresholds isn't split anyway.
 
 ### Headless mode
 
@@ -189,7 +189,7 @@ In board mode (see **Workers and the board**) the feat-req also carries:
 | `renewed_at` | The claim's last renewal; stale after `lease_ttl` |
 | `awaiting` | The id of an open blocking request; the effort waits until it is answered |
 
-Only `sdlc` writes these fields. Applied answers are logged under the feat-req's `## Decisions`, each line citing its request id.
+Only `sdlc` writes the board fields above. Applied answers are logged under the feat-req's `## Decisions`, each line citing its request id.
 
 Split efforts carry these fields in every mode:
 
@@ -197,6 +197,8 @@ Split efforts carry these fields in every mode:
 |---|---|
 | `split_from` | The slug of the original idea this effort was split from. A label, never a file |
 | `after` | Slugs that must be `IMPLEMENTED` before this effort is ranked or claimed. Editing it is the only override |
+
+People edit `split_from` and `after`; `sdlc` doesn't write them.
 
 Design docs carry their own `status: DRAFT | APPROVED`. Plans carry `status: PLANNED | IN_PROGRESS | IMPLEMENTED` plus `feat_req:` and `design:` links. Design docs and plans also carry `repos:` (the effort's repo set, locked at design approval); `select-next-task` runs `assemble-env.mjs` from it before routing a `DESIGNED`-or-later effort.
 
