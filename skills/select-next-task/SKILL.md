@@ -11,7 +11,7 @@ In board mode, run `node scripts/sdlc.mjs next --json`. It returns `{ next, over
 
 Otherwise, collect every candidate from:
 
-- `docs/feat-req/*.md` — read frontmatter. Include `status` in `{ACCEPTED, DESIGNED, PLANNED, IN_PROGRESS}`. Exclude `PARKED`, `REJECTED`, `IMPLEMENTED`.
+- `docs/feat-req/*.md` — read frontmatter. Include `status` in `{ACCEPTED, DESIGNED, PLANNED, IN_PROGRESS}`. Exclude `PARKED`, `REJECTED`, `IMPLEMENTED`. Also exclude a candidate whose `after` list names any slug whose status isn't exactly `IMPLEMENTED` (an unknown slug counts as not done).
 - `docs/plans/*.md` — read frontmatter. Cross-reference to their feat-req; a plan with `status: IN_PROGRESS` marks its feat-req as in-flight.
 
 Read the documents — do not rank on filenames alone.
@@ -26,6 +26,7 @@ Read the documents — do not rank on filenames alone.
 Apply in strict order:
 
 1. **User override** — an explicit instruction in the current prompt wins.
+   - The override doesn't bypass `after`. To start a blocked effort anyway, the user edits its `after` list.
 2. **Security / Critical** — any `severity: Critical` item, or one tagged security, ranks first. This applies across feat-reqs *and* in-flight plans equally.
 3. **In-flight before new** — among non-critical items, an item already past `ACCEPTED` (has a design or plan started) outranks an untouched `ACCEPTED` feat-req. Finish what's open before starting more.
 4. **Priority** — `High > Medium > Low`.
@@ -72,6 +73,7 @@ Board mode, interactive: claim the selection before acting on it: `node scripts/
 - Exit `0`: you hold it. Proceed. When the next action sets a status (e.g. `PLANNED` → `IN_PROGRESS`), end it with `node scripts/sdlc.mjs report <name> --phase <status>`.
 - The output says to run `gh auth login`: stop and tell the user; the claim needs their GitHub login.
 - `not on main`: tell the user to switch the meta-root to `main` and run this skill again.
+- `blocked: <name> waits on …`: tell the user which `after` efforts it waits on and their status, and rank the remaining candidates by hand (Step 1, "Otherwise").
 - Any other refusal (held by someone, awaiting an answer, closed): tell the user and rank the remaining candidates by hand (Step 1, "Otherwise").
 
 ### Constraints
