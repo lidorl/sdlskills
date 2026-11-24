@@ -116,7 +116,7 @@ repos: [sdlskills]
   - Compute `blockedBy` per row with `unmetAfter` over a status map of all feat-reqs.
   - Render `## Splits` after the Active section only when any row has `split_from`. Use one `### <split_from> — <n> of <m> implemented` block per group, sorted by group name, with the table `| Slice | Status | After | Blocked by |` and slices sorted by slug. A missing blocker shows as `missing`.
   - Append ` (blocked)` to the Status cell of blocked rows in the existing tables.
-- [ ] **Step 4: Run the file again and see it pass.** Also run `node scripts/render-status.mjs` in the repo root. Expected: it prints `render-status:` with no error, and `docs/STATUS.md` has no `## Splits` section (this repo has no slices).
+- [ ] **Step 4: Run the file again and see it pass.** Also run `node scripts/render-status.mjs` in the repo root. Expected: it prints `render-status:` with no error, and `docs/STATUS.md` has a `## Splits` section with one block, `### feature-breakdown — 0 of 2 implemented`, listing `feature-request-breakdown` and `plan-breakdown`. This repo's own split.
 - [ ] **Step 5: Commit.** `git commit -m "feat(status): Splits section and blocked marker"`
 
 ### Task 4: Process contract and README
