@@ -16,6 +16,7 @@ import { boardEnabled, loadConfig } from './lib/board/config.mjs';
 import { boardView } from './lib/board/registry.mjs';
 import { parseLog } from './lib/board/events.mjs';
 import { afterList, unmetAfter } from './lib/board/queue.mjs';
+import { parseDoc } from './lib/board/frontmatter.mjs';
 
 /** Minimal YAML-frontmatter parser: flat `key: value` pairs; a `[a, b]` flow list becomes an array. */
 export function parseFrontmatter(text) {
@@ -42,6 +43,17 @@ function readDir(root, sub) {
       const path = join(dir, f);
       const text = readFileSync(path, 'utf8');
       const fm = parseFrontmatter(text);
+      // `split_from` and `after` use the YAML parser the queue and claims use, so STATUS.md agrees with `sdlc next`.
+      try {
+        const { data } = parseDoc(text);
+        if ('after' in data) fm.after = data.after;
+        if ('split_from' in data) {
+          const sf = Array.isArray(data.split_from) ? data.split_from[0] : data.split_from;
+          fm.split_from = sf == null ? '' : String(sf);
+        }
+      } catch {
+        // malformed YAML: keep the flat parse
+      }
       const title = (text.match(/^#\s+(.+)$/m) || [])[1] || basename(f, '.md');
       return { file: `docs/${sub}/${f}`, name: basename(f, '.md'), title, ...fm };
     });

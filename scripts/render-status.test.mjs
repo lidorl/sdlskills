@@ -216,3 +216,32 @@ test('parseFrontmatter reads flow lists', () => {
   assert.deepEqual(parseFrontmatter('---\nafter: [a, "b"]\n---\n').after, ['a', 'b']);
   assert.deepEqual(parseFrontmatter('---\nafter: []\n---\n').after, []);
 });
+
+test('after as a YAML block list agrees with the queue: dependency IMPLEMENTED, not blocked', () => {
+  const root = mkdtempSync(join(tmpdir(), 'render-status-'));
+  frSplit(root, 'a', 'IMPLEMENTED');
+  frSplit(root, 's', 'ACCEPTED', 'after:\n  - a\n');
+  const { md, json } = renderStatus({ root, now: NOW });
+  assert.deepEqual(json.features.find((r) => r.name === 's').after, ['a']);
+  assert.doesNotMatch(md, /missing/);
+  assert.doesNotMatch(md, /ACCEPTED \(blocked\)/);
+});
+
+test('an empty `after:` is no dependency, not blocked', () => {
+  const root = mkdtempSync(join(tmpdir(), 'render-status-'));
+  frSplit(root, 's', 'ACCEPTED', 'after:\n');
+  const { md, json } = renderStatus({ root, now: NOW });
+  assert.deepEqual(json.features.find((r) => r.name === 's').after, []);
+  assert.doesNotMatch(md, /ACCEPTED \(blocked\)/);
+});
+
+test('a trailing comment on `after` is ignored', () => {
+  const root = mkdtempSync(join(tmpdir(), 'render-status-'));
+  frSplit(root, 'a', 'IMPLEMENTED');
+  frSplit(root, 's', 'ACCEPTED', 'split_from: g # grp\nafter: [a] # first\n');
+  const { md, json } = renderStatus({ root, now: NOW });
+  const s = json.features.find((r) => r.name === 's');
+  assert.deepEqual(s.after, ['a']);
+  assert.equal(s.split_from, 'g');
+  assert.doesNotMatch(md, /ACCEPTED \(blocked\)/);
+});
