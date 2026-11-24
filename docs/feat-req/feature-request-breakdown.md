@@ -2,7 +2,7 @@
 date: 2026-11-24
 priority: Medium
 severity: Low
-status: ACCEPTED
+status: DESIGNED
 source: Split from feature-breakdown (original text in commit e765c89)
 split_from: feature-breakdown
 ---
@@ -81,11 +81,11 @@ Much of that size is visible at definition time. An idea often contains parts th
 
 - [ ] For a request over the size thresholds, `write-feature-request` proposes 2–5 slices before writing the spec. After confirmation at triage, it writes them as separate feature requests, each with its own acceptance criteria.
 - [ ] For a request under the thresholds, no split is proposed, and the sizing result is recorded in the spec.
-- [ ] After a split, no file remains for the original request, and every slice has `split_from`, its `after` list, and a `## Triage` section naming the date, the reason, all slices in order and the commit with the original text.
+- [ ] After a split, no file remains for the original request, and every slice has `split_from`, its `after` list, and a `## Triage` section naming the date, the reason and all slices in order. A re-check split also names the commit with the original text; a split at intake says "split at intake" (amended at design approval, 2026-11-24).
 - [ ] A slice with an `after` item that isn't `IMPLEMENTED` is not selected by `select-next-task` and not ranked by `rank()`.
 - [ ] Two slices with no `after` link between them can be claimed by different workers at the same time.
 - [ ] STATUS.md groups slices by `split_from`.
-- [ ] In a headless worker, a proposed split is posted as a triage request with the slices as options, and nothing is written until it is answered.
+- [ ] In a headless run, a proposed split is shown in the triage gate's Context, and nothing is split until a person does it with the explicit re-check (amended at design approval, 2026-11-24).
 - [ ] Sizing thresholds are configurable, and trivial tier never splits.
 - [ ] The sizing check runs for every new feature request, and no setting disables it.
 - [ ] The check never runs on its own on an already-accepted request. When a person invokes it on one, a confirmed split produces the same slices and records as a split at intake.
@@ -128,3 +128,7 @@ with the sizing result recorded as a short `## Sizing` note in the spec.
 - **Reason for the split:** breakdown at the feature request and breakdown at the plan are separate concerns. They change different skills, deliver value independently, and neither depends on the other.
 - **Slices:** `feature-request-breakdown` (this one), `plan-breakdown`. There is no order between them.
 - **Original text:** commit `e765c89`, `docs/feat-req/feature-breakdown.md`.
+
+## Decisions
+
+- 2026-11-24 · design approved (`docs/design/feature-request-breakdown.md`): size thresholds lowered to 12 criteria, 3 personas, 2 repos, 30 files; two acceptance criteria amended (original-text commit applies to re-check splits only; headless shows slices in the triage gate's Context).

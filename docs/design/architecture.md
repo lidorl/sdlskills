@@ -55,6 +55,7 @@ When `board/` exists on the meta repo's main, main becomes a **work board** shar
 ```
 
 - Claims (`claimed_by`, `claimed_at`, `renewed_at`) and `awaiting` live in feature-request frontmatter. A claim counts only once it's on `origin/main` and validated after a fresh pull.
+- Ordering between efforts is `after: [<slug>, …]` in feature-request frontmatter. An effort is neither ranked nor claimable until every `after` slug is `IMPLEMENTED` (`rank()` and the claim write both check). Slices of a split request also carry `split_from` (see `docs/design/feature-request-breakdown.md`).
 - Each worker runs from its own home, `~/.sdlc/workers/<id>/`, with its own clone of the meta repo (`meta/`, and `meta/workspace/` inside it). Workers share no files.
 - Board commits use a fixed subject and trailers (`Worker:`, `Sdlc-Event:`, …). `git log` of main is the event stream that `sdlc watch` and `render-status.mjs` read.
 - `scripts/sdlc.mjs` is the CLI. `scripts/lib/board/` is the protocol, and `scripts/lib/worker/` is the runtime.
