@@ -15,15 +15,20 @@ import { isEntryPoint } from './lib/is-entry-point.mjs';
 import { boardEnabled, loadConfig } from './lib/board/config.mjs';
 import { boardView } from './lib/board/registry.mjs';
 import { parseLog } from './lib/board/events.mjs';
+import { afterList, unmetAfter } from './lib/board/queue.mjs';
 
-/** Minimal YAML-frontmatter parser: flat `key: value` pairs only. */
-function parseFrontmatter(text) {
+/** Minimal YAML-frontmatter parser: flat `key: value` pairs; a `[a, b]` flow list becomes an array. */
+export function parseFrontmatter(text) {
   const m = text.match(/^---\r?\n([\s\S]*?)\r?\n---/);
   if (!m) return {};
   const out = {};
   for (const line of m[1].split(/\r?\n/)) {
     const kv = line.match(/^([A-Za-z0-9_]+):\s*(.*)$/);
-    if (kv) out[kv[1]] = kv[2].trim().replace(/^["']|["']$/g, '');
+    if (!kv) continue;
+    const v = kv[2].trim();
+    const unquote = (x) => x.trim().replace(/^["']|["']$/g, '');
+    const list = v.match(/^\[(.*)\]$/);
+    out[kv[1]] = list ? list[1].split(',').map(unquote).filter(Boolean) : unquote(v);
   }
   return out;
 }
@@ -201,6 +206,8 @@ export function renderStatus({ root, now = new Date(), events } = {}) {
       priority: fr.priority || '-',
       severity: fr.severity || '-',
       date: fr.date || '-',
+      split_from: fr.split_from || null,
+      after: afterList(fr),
       feat_req: fr.file,
       design: designByName[fr.name]?.file || null,
       plan: featPlans.map((p) => p.file),
@@ -208,6 +215,9 @@ export function renderStatus({ root, now = new Date(), events } = {}) {
       pr_progress: prTotal ? `${merged}/${prTotal} merged` : null,
     };
   });
+
+  const statusBySlug = new Map(rows.map((r) => [r.name, r.status]));
+  const blockedBy = new Map(rows.map((r) => [r.name, unmetAfter({ after: r.after }, (s) => statusBySlug.get(s) ?? null)]));
 
   const board = boardEnabled(root) ? loadBoard(root, now, events) : null;
   const claims = new Map((board?.inFlight ?? []).map((c) => [c.slug, c]));
@@ -233,7 +243,7 @@ export function renderStatus({ root, now = new Date(), events } = {}) {
           const claim = withClaims
             ? ` ${c ? `${cell(c.claimant)} | ${humanAge(c.claimAgeMs)} | ${c.stale ? 'yes' : ''}` : '- | - | '} |`
             : '';
-          return `| [${r.title}](${r.feat_req}) | ${r.status} | ${r.priority} | ${r.severity} | ${
+          return `| [${r.title}](${r.feat_req}) | ${r.status}${blockedBy.get(r.name).length ? ' (blocked)' : ''} | ${r.priority} | ${r.severity} | ${
             r.plan_progress || '-'
           } | ${r.pr_progress || '-'} | ${r.date} |${claim}`;
         })
@@ -242,6 +252,20 @@ export function renderStatus({ root, now = new Date(), events } = {}) {
     );
   };
   const byStatus = (s) => active.filter((r) => r.status === s);
+  const splitRows = rows.filter((r) => r.split_from);
+  const splitsSection = () => {
+    const groups = [...new Set(splitRows.map((r) => r.split_from))].sort();
+    const body = groups.map((g) => {
+      const slices = splitRows.filter((r) => r.split_from === g).sort((a, b) => a.name.localeCompare(b.name));
+      const done = slices.filter((r) => r.status === 'IMPLEMENTED').length;
+      const lines = slices.map((r) => {
+        const blockers = blockedBy.get(r.name).map((d) => `${d} (${statusBySlug.get(d) ?? 'missing'})`).join(', ');
+        return `| ${cell(r.name)} | ${cell(r.status)} | ${cell(r.after.join(', '))} | ${cell(blockers)} |`;
+      });
+      return `### ${cell(g)} — ${done} of ${slices.length} implemented\n| Slice | Status | After | Blocked by |\n|---|---|---|---|\n${lines.join('\n')}\n`;
+    });
+    return `## Splits\n\n${body.join('\n')}\n`;
+  };
   const boardSections = board
     ? `## Workers\n${workersSection(board, now)}\n## Inbox\n${inboxSection(board, now)}\n`
     : '';
@@ -260,7 +284,7 @@ ${table(byStatus('PLANNED'), !!board)}
 ${table(byStatus('DESIGNED'), !!board)}
 ### Accepted (queue)
 ${table(byStatus('ACCEPTED'), !!board)}
-
+${splitRows.length ? splitsSection() : ''}
 ## Parked / Rejected
 ${table(parked)}
 
