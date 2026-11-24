@@ -253,3 +253,7 @@ No security-relevant changes. No auth, external endpoints, data-access control o
 - [ ] Contracts shared between slices built in parallel: v1 relies on the slicing guidance and the follow-up-request path. Nothing enforces consistency.
 - [ ] Adopters who tuned `breakdown:` lose their values when the installer replaces `CLAUDE.process.md`. Consider moving tunables to an adopter-owned file if this bites.
 - [x] Amended acceptance criteria folded back into the feat-req on approval (2026-11-24).
+- [ ] A live interactive walk-through of the size check and split proposal. The development walk-throughs were simulated (`docs/history/20261124-100000_feature-request-breakdown.md`). Deferred by the owner at close-out (2026-11-24): they'll run one later. Not promoted, because the code paths are covered by tests and this only checks the conversation's feel.
+- [ ] STATUS.md can disagree with the queue for a feat-req whose frontmatter is malformed YAML (render-status falls back to the flat parse; the queue excludes the file). Deferred: `sdlc check` already reports the file as a problem. Fix by treating malformed rows as unknown status.
+- [ ] Re-check's dependents search sits in step 4, but its edits are listed at the step-3 decision. Deferred: the text is coherent and the person sees the edits before anything is written; a one-line move fixes it.
+- [ ] `queue.mjs` and `claims.mjs` import each other. Safe today (used only at runtime). Deferred: move `afterList` and `unmetAfter` to a neutral module if it ever bites.

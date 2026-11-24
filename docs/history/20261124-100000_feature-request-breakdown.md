@@ -82,6 +82,9 @@ The slice files were written by the scripted agent following the skill's templat
 - This history entry: done.
 
 ## Verification
+
+- Close-out (2026-11-24): `npm test` on merged `main` (93a007b) passes 560/560, with 0 skipped. PRs #23 (design and plan) and #24 (development) are merged.
+- `/code-review` wasn't run as the built-in command. Every task had a spec-and-quality review with fix rounds, and the whole branch had one review on the most capable model, followed by one fix wave (3 Important and 8 minor findings fixed) and a scoped re-review. Remaining minor items are recorded in the design doc's Open Items.
 `npm test`: tests 557, pass 557, fail 0, skipped 0 (exit 0), run in the real repo on the branch.
 
 Acceptance criteria against the walk-throughs, by criterion text. "Observed" means a file or output was produced and inspected; "read" means only the skill or script text was read.
