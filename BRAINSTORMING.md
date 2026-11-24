@@ -206,7 +206,9 @@ Feeds from: the standing concern about artifact overload; ties to §5 (per-repo 
 
 ---
 
-## 12. Worker control app
+## 12. Worker control app — PROMOTED (web app)
+
+**Status (2026-11-24).** The local web app is promoted to [`docs/feat-req/web-control-app.md`](docs/feat-req/web-control-app.md), which answers the first, third and fourth open questions below: GUI first on a shared client core, local only, using the person's own git and `gh` credentials. A k9s-style terminal UI stays an idea here. It could reuse the same core later, but the web app was judged more useful.
 
 **The problem.** The workers feature ([`docs/feat-req/workers.md`](docs/feat-req/workers.md)) ships a command-line client, `sdlc`. Running several detached workers from it means juggling commands, and you only learn something changed when you run `sdlc watch` or `sdlc inbox`.
 
