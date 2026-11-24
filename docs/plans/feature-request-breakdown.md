@@ -1,7 +1,7 @@
 ---
 feat_req: docs/feat-req/feature-request-breakdown.md
 design: docs/design/feature-request-breakdown.md
-status: IN_PROGRESS
+status: IMPLEMENTED
 date: 2026-11-24
 repos: [sdlskills]
 ---
@@ -200,4 +200,4 @@ repos: [sdlskills]
 ## Pull Requests
 | key | branch | PR | state |
 |---|---|---|---|
-| sdlskills | feat/feature-request-breakdown | — | not started |
+| sdlskills | feat/feature-request-breakdown | https://github.com/lidorl/sdlskills/pull/24 | merged |

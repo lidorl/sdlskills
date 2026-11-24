@@ -2,7 +2,7 @@
 date: 2026-11-24
 priority: Medium
 severity: Low
-status: IN_PROGRESS
+status: IMPLEMENTED
 source: Split from feature-breakdown (original text in commit e765c89)
 split_from: feature-breakdown
 plans:
@@ -134,3 +134,4 @@ with the sizing result recorded as a short `## Sizing` note in the spec.
 ## Decisions
 
 - 2026-11-24 · design approved (`docs/design/feature-request-breakdown.md`): size thresholds lowered to 12 criteria, 3 personas, 2 repos, 30 files; two acceptance criteria amended (original-text commit applies to re-check splits only; headless shows slices in the triage gate's Context).
+- 2026-11-24 · close-out: Definition of Done walked; status IMPLEMENTED. The live interactive walk-through is deferred by the owner (see the design doc's Open Items).
