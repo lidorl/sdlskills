@@ -15,6 +15,18 @@ const normDate = (d) => {
   return d == null ? '' : String(d);
 };
 
+// `after: [slug, ...]` orders efforts: blocked until every listed slug is exactly IMPLEMENTED.
+export function afterList(fm) {
+  const a = fm?.after;
+  if (a == null) return [];
+  return (Array.isArray(a) ? a : [a]).map(String);
+}
+
+// The `after` entries not yet IMPLEMENTED. Invalid and unknown slugs (statusOf -> null) count as unmet.
+export function unmetAfter(fm, statusOf) {
+  return afterList(fm).filter((s) => !SLUG_RE.test(s) || statusOf(s) !== 'IMPLEMENTED');
+}
+
 export function loadEfforts(root) {
   const efforts = [];
   const problems = [];
@@ -48,15 +60,47 @@ export function loadEfforts(root) {
       security: fm.security === true || (Array.isArray(fm.tags) && fm.tags.includes('security')),
     });
   }
+  checkAfter(efforts, problems);
   return { efforts, problems };
+}
+
+function checkAfter(efforts, problems) {
+  const known = new Set(efforts.map((x) => x.slug));
+  for (const x of efforts) {
+    for (const s of afterList(x.fm)) {
+      const file = `docs/feat-req/${x.slug}.md`;
+      if (!SLUG_RE.test(s)) problems.push({ file, message: `after: "${s}" is not a valid slug (lowercase letters, digits, dashes)` });
+      else if (!known.has(s)) problems.push({ file, message: `after: "${s}" is not a feature request` });
+    }
+  }
+  // DFS over valid edges; each cycle is reported once, from the first slug (sorted order) that reaches it.
+  const edges = new Map(efforts.map((x) => [x.slug, afterList(x.fm).filter((s) => known.has(s))]));
+  const done = new Set();
+  const stack = [];
+  const visit = (slug) => {
+    const at = stack.indexOf(slug);
+    if (at >= 0) {
+      const cycle = stack.slice(at);
+      problems.push({ file: `docs/feat-req/${cycle[0]}.md`, message: `after cycle: ${[...cycle, slug].join(' -> ')}` });
+      return;
+    }
+    if (done.has(slug)) return;
+    stack.push(slug);
+    for (const next of edges.get(slug)) visit(next);
+    stack.pop();
+    done.add(slug);
+  };
+  for (const x of efforts) visit(x.slug);
 }
 
 const priorityRank = (p) => PRIORITY[String(p ?? '').toLowerCase()] ?? 3;
 const urgent = (e) => e.security || String(e.severity ?? '').toLowerCase() === 'critical';
 
 export function rank(efforts, { now, ttlMs, openRequestIds }) {
+  const statusOf = new Map(efforts.map((e) => [e.slug, e.status]));
   return efforts
     .filter((e) => CANDIDATE.has(e.status)
+      && unmetAfter(e.fm, (s) => statusOf.get(s) ?? null).length === 0
       && claimState(e.fm, now, ttlMs) !== 'live'
       && !(e.fm?.awaiting && openRequestIds.has(e.fm.awaiting)))
     .sort((a, b) =>
