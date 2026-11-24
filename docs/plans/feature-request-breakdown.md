@@ -1,7 +1,7 @@
 ---
 feat_req: docs/feat-req/feature-request-breakdown.md
 design: docs/design/feature-request-breakdown.md
-status: PLANNED
+status: IN_PROGRESS
 date: 2026-11-24
 repos: [sdlskills]
 ---
