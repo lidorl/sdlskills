@@ -73,6 +73,7 @@ With board mode on, the meta repo's `main` branch is the **board**: the one plac
 In a headless run (`SDLC_HEADLESS=1`) the worker claims, reports and releases for the agent: skip the `sdlc` commands below and every skill's **Board mode, interactive** line.
 
 - **Claim before working.** A claim is the feat-req's `claimed_by` / `claimed_at` / `renewed_at`, committed to `main`. It counts only once it is on `origin/main`. Claim with `node scripts/sdlc.mjs claim <slug>`; an interactive session claims as the person's GitHub login.
+- **Blocked efforts.** A claim is refused (`blocked`) while any slug in the feat-req's `after` isn't `IMPLEMENTED`.
 - **Leases.** Every report renews the claim. A claim with no renewal for `lease_ttl` (default 4h, set in `board/config.yml`) is stale, and anyone may take it over. One rule for everyone: workers and interactive sessions alike.
 - **Report each phase.** When a skill changes an effort's `status`, it ends with `node scripts/sdlc.mjs report <slug> --phase <status>`. Exit `3` means someone else now holds the effort: tell the person and stop working on it.
 - **Release at the end.** `/close-out` runs `node scripts/sdlc.mjs release <slug>` after `IMPLEMENTED`.
@@ -99,6 +100,22 @@ autonomy:
 **Always a hard stop, regardless of policy:** design-doc approval, feature-request triage (accept/park/reject), code/security review findings.
 
 When a gate auto-proceeds, the agent records the decision and any assumptions in the relevant doc and stays interruptible.
+
+### Breakdown
+
+`/write-feature-request` checks every spec for size before triage and proposes a split when it is too big. These values set its thresholds. Hand-edit them any time.
+
+```yaml
+breakdown:
+  feature_request:
+    max_criteria: 12
+    max_personas: 3
+    max_repos: 2
+    max_files: 30
+    min_slice_criteria: 3
+```
+
+The size check always runs; these values only tune it.
 
 ### Headless mode
 
@@ -173,6 +190,13 @@ In board mode (see **Workers and the board**) the feat-req also carries:
 | `awaiting` | The id of an open blocking request; the effort waits until it is answered |
 
 Only `sdlc` writes these fields. Applied answers are logged under the feat-req's `## Decisions`, each line citing its request id.
+
+Split efforts carry these fields in every mode:
+
+| Field | Meaning |
+|---|---|
+| `split_from` | The slug of the original idea this effort was split from. A label, never a file |
+| `after` | Slugs that must be `IMPLEMENTED` before this effort is ranked or claimed. Editing it is the only override |
 
 Design docs carry their own `status: DRAFT | APPROVED`. Plans carry `status: PLANNED | IN_PROGRESS | IMPLEMENTED` plus `feat_req:` and `design:` links. Design docs and plans also carry `repos:` (the effort's repo set, locked at design approval); `select-next-task` runs `assemble-env.mjs` from it before routing a `DESIGNED`-or-later effort.
 
