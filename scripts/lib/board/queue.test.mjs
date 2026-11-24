@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { loadEfforts, rank, overlaps } from './queue.mjs';
+import { loadEfforts, rank, overlaps, unmetAfter } from './queue.mjs';
 
 const NOW = new Date('2026-11-20T12:00:00.000Z');
 const TTL = 4 * 3600e3;
@@ -126,4 +126,47 @@ test('loadEfforts refuses a symlinked feat-req (reported, not read)', () => {
   const { efforts, problems } = loadEfforts(root);
   assert.deepEqual(efforts.map((x) => x.slug), ['good']);
   assert.match(problems[0].message, /symlink/);
+});
+
+test('rank drops an effort whose after is not IMPLEMENTED, keeps it once it is', () => {
+  const b = e('b', { fm: { after: ['a'] } });
+  assert.ok(!slugs(rank([b, e('a', { status: 'IN_PROGRESS' })], OPTS)).includes('b'));
+  assert.ok(slugs(rank([b, e('a', { status: 'IMPLEMENTED' })], OPTS)).includes('b'));
+});
+
+test('unknown or invalid after entries block', () => {
+  assert.deepEqual(slugs(rank([e('b', { fm: { after: ['ghost'] } })], OPTS)), []);
+  assert.deepEqual(slugs(rank([e('b', { fm: { after: ['Bad Slug'] } })], OPTS)), []);
+});
+
+test('scalar after is a one-item list; empty list is no ordering', () => {
+  const a = e('a', { status: 'IN_PROGRESS' });
+  assert.ok(!slugs(rank([a, e('b', { fm: { after: 'a' } })], OPTS)).includes('b'));
+  assert.ok(slugs(rank([e('b', { fm: { after: [] } })], OPTS)).includes('b'));
+});
+
+test('two slices with no after link both rank', () => {
+  const list = [e('s1', { fm: { split_from: 'x' } }), e('s2', { fm: { split_from: 'x' } })];
+  assert.deepEqual(slugs(rank(list, OPTS)).sort(), ['s1', 's2']);
+});
+
+test('unmetAfter returns the unmet slugs in order', () => {
+  assert.deepEqual(
+    unmetAfter({ after: ['a', 'b', 'c'] }, (s) => ({ a: 'IMPLEMENTED', b: 'PARKED' })[s] ?? null),
+    ['b', 'c'],
+  );
+});
+
+test('loadEfforts reports invalid, unknown and cyclic after entries', () => {
+  const root = tree({
+    'docs/feat-req/x.md': '---\nstatus: ACCEPTED\nafter: [y]\n---\n# x\n',
+    'docs/feat-req/y.md': '---\nstatus: ACCEPTED\nafter: [x]\n---\n# y\n',
+    'docs/feat-req/z.md': '---\nstatus: ACCEPTED\nafter: [ghost, "Bad Slug"]\n---\n# z\n',
+  });
+  const { problems } = loadEfforts(root);
+  const msgs = problems.map((p) => p.message);
+  assert.ok(msgs.some((m) => /after: "ghost" is not a feature request/.test(m)));
+  assert.ok(msgs.some((m) => /after: "Bad Slug" is not a valid slug/.test(m)));
+  assert.equal(msgs.filter((m) => /after cycle: x -> y -> x/.test(m)).length, 1);
+  assert.equal(msgs.filter((m) => /after cycle/.test(m)).length, 1);
 });

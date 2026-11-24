@@ -178,7 +178,8 @@ async function cmdClaim(root, { positional: [slug] }, deps) {
     const fm = committedFm(root, slug, 'origin/main');
     const why = {
       gone: `no such effort ${slug}`, held: `${slug} is held by ${fm?.claimed_by}`, closed: `${slug} is ${fm?.status}; not claimable`,
-      awaiting: `${slug} is waiting on an open request`, mismatch: `${slug} changed while claiming; try again`,
+      awaiting: `${slug} is waiting on an open request`,
+      blocked: `blocked: ${slug} waits on ${(r.waitingOn ?? []).map((d) => `${d} (${SLUG_RE.test(d) ? committedFm(root, d, 'origin/main')?.status ?? 'missing' : 'missing'})`).join(', ')}`, mismatch: `${slug} changed while claiming; try again`,
     }[r.reason] ?? `could not claim ${slug} (${r.reason})`;
     deps.err(`${why}\n`);
     return 1;

@@ -6,7 +6,7 @@ import { mkdtempSync, cpSync, mkdirSync, writeFileSync, readFileSync, readdirSyn
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { parsePullRequests, renderStatus, humanAge } from './render-status.mjs';
+import { parsePullRequests, renderStatus, humanAge, parseFrontmatter } from './render-status.mjs';
 
 test('parsePullRequests counts merged rows', () => {
   const md = `## Pull Requests
@@ -176,4 +176,72 @@ test('CLI writes docs/STATUS.md, also when run through a symlinked script path',
     assert.ok(existsSync(join(root, 'docs/STATUS.md')), `no STATUS.md via ${path}`);
     assert.ok(existsSync(join(root, 'docs/.status.json')));
   }
+});
+
+const frSplit = (root, slug, status, fm = '') =>
+  put(root, `docs/feat-req/${slug}.md`, `---\nstatus: ${status}\npriority: high\nseverity: minor\ndate: 2026-11-01\n${fm}---\n\n# ${slug}\n`);
+
+test('Splits section groups slices with progress and blockers', () => {
+  const root = mkdtempSync(join(tmpdir(), 'render-status-'));
+  frSplit(root, 'w-reg', 'IMPLEMENTED', 'split_from: w\n');
+  frSplit(root, 'w-claims', 'IN_PROGRESS', 'split_from: w\nafter: [w-reg]\n');
+  frSplit(root, 'w-req', 'ACCEPTED', 'split_from: w\nafter: [w-claims]\n');
+  const { md, json } = renderStatus({ root, now: NOW });
+  assert.match(md, /## Splits/);
+  assert.match(md, /### w — 1 of 3 implemented/);
+  assert.match(md, /\| w-req \| ACCEPTED \| w-claims \| w-claims \(IN_PROGRESS\) \|/);
+  assert.match(md, /\| \[w-req\]\([^)]*\) \| ACCEPTED \(blocked\) \|/);
+  assert.doesNotMatch(md, /w-claims\]\([^)]*\) \| IN_PROGRESS \(blocked\)/);
+  assert.deepEqual(json.features.find((r) => r.name === 'w-req').after, ['w-claims']);
+});
+
+test('a slice after a PARKED effort shows the blocker with its status', () => {
+  const root = mkdtempSync(join(tmpdir(), 'render-status-'));
+  frSplit(root, 'p', 'PARKED');
+  frSplit(root, 's', 'ACCEPTED', 'split_from: g\nafter: [p, ghost]\n');
+  const { md } = renderStatus({ root, now: NOW });
+  assert.match(md, /\| s \| ACCEPTED \| p, ghost \| p \(PARKED\), ghost \(missing\) \|/);
+});
+
+test('no split_from anywhere: no Splits section, output unchanged', () => {
+  const { md, json } = renderStatus({ root: copyFixture(), now: NOW });
+  assert.doesNotMatch(md, /## Splits/);
+  for (const r of json.features) {
+    assert.equal(r.split_from, null);
+    assert.deepEqual(r.after, []);
+  }
+});
+
+test('parseFrontmatter reads flow lists', () => {
+  assert.deepEqual(parseFrontmatter('---\nafter: [a, "b"]\n---\n').after, ['a', 'b']);
+  assert.deepEqual(parseFrontmatter('---\nafter: []\n---\n').after, []);
+});
+
+test('after as a YAML block list agrees with the queue: dependency IMPLEMENTED, not blocked', () => {
+  const root = mkdtempSync(join(tmpdir(), 'render-status-'));
+  frSplit(root, 'a', 'IMPLEMENTED');
+  frSplit(root, 's', 'ACCEPTED', 'after:\n  - a\n');
+  const { md, json } = renderStatus({ root, now: NOW });
+  assert.deepEqual(json.features.find((r) => r.name === 's').after, ['a']);
+  assert.doesNotMatch(md, /missing/);
+  assert.doesNotMatch(md, /ACCEPTED \(blocked\)/);
+});
+
+test('an empty `after:` is no dependency, not blocked', () => {
+  const root = mkdtempSync(join(tmpdir(), 'render-status-'));
+  frSplit(root, 's', 'ACCEPTED', 'after:\n');
+  const { md, json } = renderStatus({ root, now: NOW });
+  assert.deepEqual(json.features.find((r) => r.name === 's').after, []);
+  assert.doesNotMatch(md, /ACCEPTED \(blocked\)/);
+});
+
+test('a trailing comment on `after` is ignored', () => {
+  const root = mkdtempSync(join(tmpdir(), 'render-status-'));
+  frSplit(root, 'a', 'IMPLEMENTED');
+  frSplit(root, 's', 'ACCEPTED', 'split_from: g # grp\nafter: [a] # first\n');
+  const { md, json } = renderStatus({ root, now: NOW });
+  const s = json.features.find((r) => r.name === 's');
+  assert.deepEqual(s.after, ['a']);
+  assert.equal(s.split_from, 'g');
+  assert.doesNotMatch(md, /ACCEPTED \(blocked\)/);
 });

@@ -136,6 +136,8 @@ For scripts and CI, run an installer directly: `node scripts/install-sdlc.mjs <t
 
 Re-run the installer to update the vendored skills and scripts in place. For Claude Code it also creates `CLAUDE.md` importing `CLAUDE.process.md` and `CLAUDE.stack.md`, or adds whichever import an existing `CLAUDE.md` lacks; Copilot loads its instruction files on its own. Re-runs leave your `CLAUDE.md`, `CLAUDE.stack.md`, `package.json`, `.gitignore` and board settings alone.
 
+Re-running also replaces `CLAUDE.process.md`, so re-apply any tuned `breakdown:` values (under Autonomy Policy) afterwards.
+
 The Copilot cloud agent isn't supported, because the process needs a person at its hard stops.
 
 ### After install

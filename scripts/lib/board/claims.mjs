@@ -2,6 +2,7 @@
 // frontmatter. It counts only once it is on origin/main and validated (boardWrite does both).
 import { boardWrite, fetchMain, identityEnv, showFile, BoardError } from './git.mjs';
 import { parseDoc, setFields, appendToSection } from './frontmatter.mjs';
+import { unmetAfter } from './queue.mjs';
 import { dirTree, SLUG_RE, REQUEST_ID_RE } from './safe-path.mjs';
 
 const CLAIM_FIELDS = ['claimed_by', 'claimed_at', 'renewed_at'];
@@ -94,6 +95,7 @@ export async function claim(clone, slug, { claimant, identity, workerId, now, tt
     const old = stale ? peek.claimed_by : null;
     hooks?.afterPeek?.();
     let refusal = null;
+    let waitingOn = null;
     const r = await boardWrite(clone, {
       kind: stale ? 'takeover' : 'claim', subject: slug, body, identity, onReject: 'restart', hooks, commitFromHead: true,
       trailers: trailersFor(slug, workerId, stale ? { replaces: old } : {}),
@@ -102,6 +104,8 @@ export async function claim(clone, slug, { claimant, identity, workerId, now, tt
         if (!cur) { refusal = 'gone'; return; }
         if (NOT_HOLDABLE.has(cur.fm.status)) { refusal = 'closed'; return; }
         if (cur.fm.awaiting && awaitingOpen(tree, cur.fm)) { refusal = 'awaiting'; return; }
+        const unmet = unmetAfter(cur.fm, (dep) => (SLUG_RE.test(dep) ? readFm(tree, dep)?.fm.status ?? null : null));
+        if (unmet.length) { refusal = 'blocked'; waitingOn = unmet; return; }
         const state = claimState(cur.fm, now, ttlMs);
         if (state === 'live') { refusal = cur.fm.claimed_by === claimant ? 'mismatch' : 'held'; return; }
         if ((state === 'stale') !== stale || (stale && cur.fm.claimed_by !== old)) { refusal = 'mismatch'; return; }
@@ -117,7 +121,7 @@ export async function claim(clone, slug, { claimant, identity, workerId, now, tt
     });
     if (r.ok) return { ok: true, takeover: old };
     if (r.reason === 'nothing-to-do' && refusal === 'mismatch') continue;
-    if (r.reason === 'nothing-to-do' && refusal) return { ok: false, reason: refusal };
+    if (r.reason === 'nothing-to-do' && refusal) return { ok: false, reason: refusal, ...(waitingOn ? { waitingOn } : {}) };
     return { ok: false, reason: r.reason };
   }
   return { ok: false, reason: 'lost-race' };
